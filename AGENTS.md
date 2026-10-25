@@ -68,14 +68,14 @@ globs are this repo's paths.
    - `Sync: pending hunk-review-skill <task>`
 
 An improvement that touches no listed path is still checked against hunk-review-skill. Record the
-outcome in the PR's Sync section. New code for a shared surface adds its globs to `self` in the
+outcome in the commit body. New code for a shared surface adds its globs to `self` in the
 same commit.
 
 ## Delivery
 
-- One branch per task, off `main`: `<type>/<task>-<slug>`.
-- Commit only when the owner asks. Push only feature branches, and only when the owner asks.
-- Never push `main` or tags, never force-push, never merge.
+- Until the first release, all work lands directly on `main`. No feature branches, no PRs.
+- Commit only when the owner asks. One logical change per commit.
+- Agents never push. The owner pushes `main`. Never push tags, never force-push.
 
 ## Commits
 
