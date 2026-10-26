@@ -1,0 +1,478 @@
+[
+  {
+    "name": "lines unchanged blob",
+    "surface": "lines",
+    "old": {
+      "newHash": "8a961e703905405fdf8525e60520b6b26587e6c7d4bca4a86836ea99a92fba5f",
+      "newText": "begin();\nplant();\nwater();\nend();\n"
+    },
+    "target": {
+      "kind": "lines",
+      "path": "src/garden.ts",
+      "side": "new",
+      "start": 2,
+      "end": 3,
+      "lines": ["plant();", "water();"],
+      "before": ["begin();"],
+      "after": ["end();"]
+    },
+    "new": {
+      "newHash": "8a961e703905405fdf8525e60520b6b26587e6c7d4bca4a86836ea99a92fba5f",
+      "newText": "begin();\nplant();\nwater();\nend();\n"
+    },
+    "expected": {
+      "status": "placed",
+      "location": {
+        "kind": "lines",
+        "path": "src/garden.ts",
+        "side": "new",
+        "start": 2,
+        "end": 3
+      }
+    }
+  },
+  {
+    "name": "five lines inserted above",
+    "surface": "lines",
+    "old": {
+      "newHash": "8a961e703905405fdf8525e60520b6b26587e6c7d4bca4a86836ea99a92fba5f",
+      "newText": "begin();\nplant();\nwater();\nend();\n"
+    },
+    "target": {
+      "kind": "lines",
+      "path": "src/garden.ts",
+      "side": "new",
+      "start": 2,
+      "end": 3,
+      "lines": ["plant();", "water();"],
+      "before": ["begin();"],
+      "after": ["end();"]
+    },
+    "new": {
+      "newHash": "7628fc35284793a2bf5d5a9d4158d3fbef495fcfe5a9890bd04a131d34d8b4e5",
+      "newText": "a\nb\nc\nd\ne\nbegin();\nplant();\nwater();\nend();\n"
+    },
+    "expected": {
+      "status": "placed",
+      "location": {
+        "kind": "lines",
+        "path": "src/garden.ts",
+        "side": "new",
+        "start": 7,
+        "end": 8
+      }
+    }
+  },
+  {
+    "name": "lines deleted above",
+    "surface": "lines",
+    "old": {
+      "newHash": "00ae939658992b5be99e732fab1479af52a2375b0c36ff87dfad72b98e073dbb",
+      "newText": "a\nb\nbegin();\nplant();\nwater();\nend();\n"
+    },
+    "target": {
+      "kind": "lines",
+      "path": "src/garden.ts",
+      "side": "new",
+      "start": 4,
+      "end": 5,
+      "lines": ["plant();", "water();"],
+      "before": ["a", "b", "begin();"],
+      "after": ["end();"]
+    },
+    "new": {
+      "newHash": "8a961e703905405fdf8525e60520b6b26587e6c7d4bca4a86836ea99a92fba5f",
+      "newText": "begin();\nplant();\nwater();\nend();\n"
+    },
+    "expected": {
+      "status": "placed",
+      "location": {
+        "kind": "lines",
+        "path": "src/garden.ts",
+        "side": "new",
+        "start": 2,
+        "end": 3
+      }
+    }
+  },
+  {
+    "name": "edit inside selected range",
+    "surface": "lines",
+    "old": {
+      "newHash": "8a961e703905405fdf8525e60520b6b26587e6c7d4bca4a86836ea99a92fba5f",
+      "newText": "begin();\nplant();\nwater();\nend();\n"
+    },
+    "target": {
+      "kind": "lines",
+      "path": "src/garden.ts",
+      "side": "new",
+      "start": 2,
+      "end": 3,
+      "lines": ["plant();", "water();"],
+      "before": ["begin();"],
+      "after": ["end();"]
+    },
+    "new": {
+      "newHash": "6b719afa1780d1daad9182802bae2ea89b5e0983747493ebfd40876505840444",
+      "newText": "begin();\nplant();\nweed();\nend();\n"
+    },
+    "expected": {
+      "status": "unplaced",
+      "reason": "lines-gone"
+    }
+  },
+  {
+    "name": "insertion splits selected range",
+    "surface": "lines",
+    "old": {
+      "newHash": "8a961e703905405fdf8525e60520b6b26587e6c7d4bca4a86836ea99a92fba5f",
+      "newText": "begin();\nplant();\nwater();\nend();\n"
+    },
+    "target": {
+      "kind": "lines",
+      "path": "src/garden.ts",
+      "side": "new",
+      "start": 2,
+      "end": 3,
+      "lines": ["plant();", "water();"],
+      "before": ["begin();"],
+      "after": ["end();"]
+    },
+    "new": {
+      "newHash": "152761fc2fc3b050ac6b7df340afbc06630512bc7506fc6e6aef1d54fa744dd7",
+      "newText": "begin();\nplant();\npause();\nwater();\nend();\n"
+    },
+    "expected": {
+      "status": "unplaced",
+      "reason": "lines-gone"
+    }
+  },
+  {
+    "name": "line range moved with unique full context",
+    "surface": "lines",
+    "old": {
+      "newHash": "2b839d8346b0571f412db89749bcce8bffb5e12b1c825c7ab094c301db8abf08",
+      "newText": "begin();\nplant();\nwater();\nend();\nstable-0\nstable-1\nstable-2\nstable-3\nstable-4\nstable-5\nstable-6\nstable-7\nstable-8\nstable-9\nstable-10\nstable-11\n"
+    },
+    "target": {
+      "kind": "lines",
+      "path": "src/garden.ts",
+      "side": "new",
+      "start": 2,
+      "end": 3,
+      "lines": ["plant();", "water();"],
+      "before": ["begin();"],
+      "after": ["end();"]
+    },
+    "new": {
+      "newHash": "fe970eebbd445175111f301b1a4e5920a601142a8de0076178c15cb190942dd5",
+      "newText": "stable-0\nstable-1\nstable-2\nstable-3\nstable-4\nstable-5\nstable-6\nstable-7\nstable-8\nstable-9\nstable-10\nstable-11\nbegin();\nplant();\nwater();\nend();\n"
+    },
+    "expected": {
+      "status": "placed",
+      "location": {
+        "kind": "lines",
+        "path": "src/garden.ts",
+        "side": "new",
+        "start": 14,
+        "end": 15
+      }
+    }
+  },
+  {
+    "name": "line range moved and duplicated with its full context",
+    "surface": "lines",
+    "old": {
+      "newHash": "2b839d8346b0571f412db89749bcce8bffb5e12b1c825c7ab094c301db8abf08",
+      "newText": "begin();\nplant();\nwater();\nend();\nstable-0\nstable-1\nstable-2\nstable-3\nstable-4\nstable-5\nstable-6\nstable-7\nstable-8\nstable-9\nstable-10\nstable-11\n"
+    },
+    "target": {
+      "kind": "lines",
+      "path": "src/garden.ts",
+      "side": "new",
+      "start": 2,
+      "end": 3,
+      "lines": ["plant();", "water();"],
+      "before": ["begin();"],
+      "after": ["end();"]
+    },
+    "new": {
+      "newHash": "007567a72208630221e101a119f38d2d9fd2cabe0da2cecfe14d1ed42cb81c5f",
+      "newText": "stable-0\nstable-1\nstable-2\nstable-3\nstable-4\nstable-5\nstable-6\nstable-7\nstable-8\nstable-9\nstable-10\nstable-11\nbegin();\nplant();\nwater();\nend();\ngap\nbegin();\nplant();\nwater();\nend();\n"
+    },
+    "expected": {
+      "status": "unplaced",
+      "reason": "ambiguous"
+    }
+  },
+  {
+    "name": "file renamed",
+    "surface": "lines",
+    "old": {
+      "newHash": "8a961e703905405fdf8525e60520b6b26587e6c7d4bca4a86836ea99a92fba5f",
+      "newText": "begin();\nplant();\nwater();\nend();\n"
+    },
+    "target": {
+      "kind": "lines",
+      "path": "src/garden.ts",
+      "side": "new",
+      "start": 2,
+      "end": 3,
+      "lines": ["plant();", "water();"],
+      "before": ["begin();"],
+      "after": ["end();"]
+    },
+    "new": {
+      "newHash": "8a961e703905405fdf8525e60520b6b26587e6c7d4bca4a86836ea99a92fba5f",
+      "newText": "begin();\nplant();\nwater();\nend();\n"
+    },
+    "expected": {
+      "status": "placed",
+      "location": {
+        "kind": "lines",
+        "path": "src/planting.ts",
+        "side": "new",
+        "start": 2,
+        "end": 3
+      }
+    },
+    "renamedTo": "src/planting.ts"
+  },
+  {
+    "name": "file deleted",
+    "surface": "lines",
+    "old": {
+      "newHash": "8a961e703905405fdf8525e60520b6b26587e6c7d4bca4a86836ea99a92fba5f",
+      "newText": "begin();\nplant();\nwater();\nend();\n"
+    },
+    "target": {
+      "kind": "lines",
+      "path": "src/garden.ts",
+      "side": "new",
+      "start": 2,
+      "end": 3,
+      "lines": ["plant();", "water();"],
+      "before": ["begin();"],
+      "after": ["end();"]
+    },
+    "new": null,
+    "expected": {
+      "status": "unplaced",
+      "reason": "file-gone"
+    }
+  },
+  {
+    "name": "old side survives a rebase with lines intact",
+    "surface": "lines",
+    "old": {
+      "oldHash": "8a961e703905405fdf8525e60520b6b26587e6c7d4bca4a86836ea99a92fba5f",
+      "oldText": "begin();\nplant();\nwater();\nend();\n",
+      "newText": "unrelated worktree before\n",
+      "newHash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    "target": {
+      "kind": "lines",
+      "path": "src/garden.ts",
+      "side": "old",
+      "start": 2,
+      "end": 3,
+      "lines": ["plant();", "water();"],
+      "before": ["begin();"],
+      "after": ["end();"]
+    },
+    "new": {
+      "oldHash": "cd96617ae4a5041d41444c8c39e1a4e670ff10d34e5a4b5a9afb9654459ca89a",
+      "oldText": "rebased();\nbegin();\nplant();\nwater();\nend();\n",
+      "newText": "unrelated worktree after\n",
+      "newHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    },
+    "expected": {
+      "status": "placed",
+      "location": {
+        "kind": "lines",
+        "path": "src/garden.ts",
+        "side": "old",
+        "start": 3,
+        "end": 4
+      }
+    }
+  },
+  {
+    "name": "old side unchanged while new side changes",
+    "surface": "lines",
+    "old": {
+      "oldHash": "8a961e703905405fdf8525e60520b6b26587e6c7d4bca4a86836ea99a92fba5f",
+      "oldText": "begin();\nplant();\nwater();\nend();\n",
+      "newText": "unrelated worktree before\n",
+      "newHash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    "target": {
+      "kind": "lines",
+      "path": "src/garden.ts",
+      "side": "old",
+      "start": 2,
+      "end": 3,
+      "lines": ["plant();", "water();"],
+      "before": ["begin();"],
+      "after": ["end();"]
+    },
+    "new": {
+      "oldHash": "8a961e703905405fdf8525e60520b6b26587e6c7d4bca4a86836ea99a92fba5f",
+      "oldText": "begin();\nplant();\nwater();\nend();\n",
+      "newText": "unrelated worktree after\n",
+      "newHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    },
+    "expected": {
+      "status": "placed",
+      "location": {
+        "kind": "lines",
+        "path": "src/garden.ts",
+        "side": "old",
+        "start": 2,
+        "end": 3
+      }
+    }
+  },
+  {
+    "name": "CRLF and LF are equal line endings",
+    "surface": "lines",
+    "old": {
+      "newHash": "bfc0836a3e9a6bab7cf342ce5d87d87f01b38ccdacca7191f26e44064a6c37d6",
+      "newText": "begin();\r\nplant();\r\nwater();\r\nend();\r\n"
+    },
+    "target": {
+      "kind": "lines",
+      "path": "src/garden.ts",
+      "side": "new",
+      "start": 2,
+      "end": 3,
+      "lines": ["plant();", "water();"],
+      "before": ["begin();"],
+      "after": ["end();"]
+    },
+    "new": {
+      "newHash": "8a961e703905405fdf8525e60520b6b26587e6c7d4bca4a86836ea99a92fba5f",
+      "newText": "begin();\nplant();\nwater();\nend();\n"
+    },
+    "expected": {
+      "status": "placed",
+      "location": {
+        "kind": "lines",
+        "path": "src/garden.ts",
+        "side": "new",
+        "start": 2,
+        "end": 3
+      }
+    }
+  },
+  {
+    "name": "terminal newline is not part of line text",
+    "surface": "lines",
+    "old": {
+      "newHash": "8a961e703905405fdf8525e60520b6b26587e6c7d4bca4a86836ea99a92fba5f",
+      "newText": "begin();\nplant();\nwater();\nend();\n"
+    },
+    "target": {
+      "kind": "lines",
+      "path": "src/garden.ts",
+      "side": "new",
+      "start": 2,
+      "end": 3,
+      "lines": ["plant();", "water();"],
+      "before": ["begin();"],
+      "after": ["end();"]
+    },
+    "new": {
+      "newHash": "93b24e8350d9e4add281d7cf6a9febfffe742f1e55f9044b62d0cafc1b3c17d8",
+      "newText": "begin();\nplant();\nwater();\nend();"
+    },
+    "expected": {
+      "status": "placed",
+      "location": {
+        "kind": "lines",
+        "path": "src/garden.ts",
+        "side": "new",
+        "start": 2,
+        "end": 3
+      }
+    }
+  },
+  {
+    "name": "line whitespace is significant",
+    "surface": "lines",
+    "old": {
+      "newHash": "8a961e703905405fdf8525e60520b6b26587e6c7d4bca4a86836ea99a92fba5f",
+      "newText": "begin();\nplant();\nwater();\nend();\n"
+    },
+    "target": {
+      "kind": "lines",
+      "path": "src/garden.ts",
+      "side": "new",
+      "start": 2,
+      "end": 3,
+      "lines": ["plant();", "water();"],
+      "before": ["begin();"],
+      "after": ["end();"]
+    },
+    "new": {
+      "newHash": "c8e2f252425275f71427b7f9968a07167e8c3ad23fc52c60d6751df02f51cb85",
+      "newText": "begin();\n plant();\nwater();\nend();\n"
+    },
+    "expected": {
+      "status": "unplaced",
+      "reason": "lines-gone"
+    }
+  },
+  {
+    "name": "range shortened to one line",
+    "surface": "lines",
+    "old": {
+      "newHash": "8a961e703905405fdf8525e60520b6b26587e6c7d4bca4a86836ea99a92fba5f",
+      "newText": "begin();\nplant();\nwater();\nend();\n"
+    },
+    "target": {
+      "kind": "lines",
+      "path": "src/garden.ts",
+      "side": "new",
+      "start": 2,
+      "end": 3,
+      "lines": ["plant();", "water();"],
+      "before": ["begin();"],
+      "after": ["end();"]
+    },
+    "new": {
+      "newHash": "657aeac68d21de553829a5341f73f4f2499e2d0f6439c94f51a01fe0f1772f23",
+      "newText": "begin();\nplant();\nend();\n"
+    },
+    "expected": {
+      "status": "unplaced",
+      "reason": "lines-gone"
+    }
+  },
+  {
+    "name": "empty new side cannot contain the quote",
+    "surface": "lines",
+    "old": {
+      "newHash": "8a961e703905405fdf8525e60520b6b26587e6c7d4bca4a86836ea99a92fba5f",
+      "newText": "begin();\nplant();\nwater();\nend();\n"
+    },
+    "target": {
+      "kind": "lines",
+      "path": "src/garden.ts",
+      "side": "new",
+      "start": 2,
+      "end": 3,
+      "lines": ["plant();", "water();"],
+      "before": ["begin();"],
+      "after": ["end();"]
+    },
+    "new": {
+      "newHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "newText": ""
+    },
+    "expected": {
+      "status": "unplaced",
+      "reason": "lines-gone"
+    }
+  }
+]

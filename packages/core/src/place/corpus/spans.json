@@ -1,0 +1,529 @@
+[
+  {
+    "name": "unchanged writeup",
+    "surface": "writeup",
+    "old": [
+      {
+        "section": "overview",
+        "text": "Sprout keeps dry seeds in a cool drawer."
+      }
+    ],
+    "target": {
+      "kind": "writeup-span",
+      "blockId": "overview-436016ba",
+      "quote": "dry seeds",
+      "prefix": "Sprout keeps ",
+      "suffix": " in a cool drawer."
+    },
+    "new": [
+      {
+        "section": "overview",
+        "text": "Sprout keeps dry seeds in a cool drawer."
+      }
+    ],
+    "expected": {
+      "status": "placed",
+      "location": {
+        "kind": "writeup-span",
+        "blockId": "overview-436016ba",
+        "start": 13,
+        "end": 22
+      }
+    }
+  },
+  {
+    "name": "whitespace-only edits retain block identity",
+    "surface": "writeup",
+    "old": [
+      {
+        "section": "overview",
+        "text": "Sprout keeps dry seeds in a cool drawer."
+      }
+    ],
+    "target": {
+      "kind": "writeup-span",
+      "blockId": "overview-436016ba",
+      "quote": "dry seeds",
+      "prefix": "Sprout keeps ",
+      "suffix": " in a cool drawer."
+    },
+    "new": [
+      {
+        "section": "overview",
+        "text": "Sprout   keeps\tdry  seeds\nin a cool drawer."
+      }
+    ],
+    "expected": {
+      "status": "placed",
+      "location": {
+        "kind": "writeup-span",
+        "blockId": "overview-436016ba",
+        "start": 13,
+        "end": 22
+      }
+    }
+  },
+  {
+    "name": "word changed outside quote context",
+    "surface": "writeup",
+    "old": [
+      {
+        "section": "overview",
+        "text": "Version one: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb dry seeds aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa for spring."
+      }
+    ],
+    "target": {
+      "kind": "writeup-span",
+      "blockId": "overview-3faa903e",
+      "quote": "dry seeds",
+      "prefix": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ",
+      "suffix": " aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "new": [
+      {
+        "section": "overview",
+        "text": "Version two: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb dry seeds aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa for spring."
+      }
+    ],
+    "expected": {
+      "status": "placed",
+      "location": {
+        "kind": "writeup-span",
+        "blockId": "overview-6005bac4",
+        "start": 54,
+        "end": 63
+      }
+    }
+  },
+  {
+    "name": "quote words changed",
+    "surface": "writeup",
+    "old": [
+      {
+        "section": "overview",
+        "text": "Sprout keeps dry seeds in a cool drawer."
+      }
+    ],
+    "target": {
+      "kind": "writeup-span",
+      "blockId": "overview-436016ba",
+      "quote": "dry seeds",
+      "prefix": "Sprout keeps ",
+      "suffix": " in a cool drawer."
+    },
+    "new": [
+      {
+        "section": "overview",
+        "text": "Sprout keeps fresh bulbs in a cool drawer."
+      }
+    ],
+    "expected": {
+      "status": "unplaced",
+      "reason": "block-gone"
+    }
+  },
+  {
+    "name": "quote deleted",
+    "surface": "writeup",
+    "old": [
+      {
+        "section": "overview",
+        "text": "Sprout keeps dry seeds in a cool drawer."
+      }
+    ],
+    "target": {
+      "kind": "writeup-span",
+      "blockId": "overview-436016ba",
+      "quote": "dry seeds",
+      "prefix": "Sprout keeps ",
+      "suffix": " in a cool drawer."
+    },
+    "new": [
+      {
+        "section": "overview",
+        "text": "The drawer is empty."
+      }
+    ],
+    "expected": {
+      "status": "unplaced",
+      "reason": "block-gone"
+    }
+  },
+  {
+    "name": "quote moved to another topic section",
+    "surface": "writeup",
+    "old": [
+      {
+        "section": "overview",
+        "text": "Sprout keeps dry seeds in a cool drawer."
+      }
+    ],
+    "target": {
+      "kind": "writeup-span",
+      "blockId": "overview-436016ba",
+      "quote": "dry seeds",
+      "prefix": "Sprout keeps ",
+      "suffix": " in a cool drawer."
+    },
+    "new": [
+      {
+        "section": "t-storage-body",
+        "text": "Sprout keeps dry seeds in a cool drawer."
+      }
+    ],
+    "expected": {
+      "status": "placed",
+      "location": {
+        "kind": "writeup-span",
+        "blockId": "t-storage-body-436016ba",
+        "start": 13,
+        "end": 22
+      }
+    }
+  },
+  {
+    "name": "paragraph duplicated in two new sections with its full context",
+    "surface": "writeup",
+    "old": [
+      {
+        "section": "overview",
+        "text": "Sprout keeps dry seeds in a cool drawer."
+      }
+    ],
+    "target": {
+      "kind": "writeup-span",
+      "blockId": "overview-436016ba",
+      "quote": "dry seeds",
+      "prefix": "Sprout keeps ",
+      "suffix": " in a cool drawer."
+    },
+    "new": [
+      {
+        "section": "t-storage-body",
+        "text": "Sprout keeps dry seeds in a cool drawer."
+      },
+      {
+        "section": "t-planting-body",
+        "text": "Sprout keeps dry seeds in a cool drawer."
+      }
+    ],
+    "expected": {
+      "status": "unplaced",
+      "reason": "ambiguous"
+    }
+  },
+  {
+    "name": "quote shortened to its prefix",
+    "surface": "writeup",
+    "old": [
+      {
+        "section": "overview",
+        "text": "Sprout keeps dry seeds in a cool drawer."
+      }
+    ],
+    "target": {
+      "kind": "writeup-span",
+      "blockId": "overview-436016ba",
+      "quote": "dry seeds",
+      "prefix": "Sprout keeps ",
+      "suffix": " in a cool drawer."
+    },
+    "new": [
+      {
+        "section": "overview",
+        "text": "Sprout keeps dry in a cool drawer."
+      }
+    ],
+    "expected": {
+      "status": "unplaced",
+      "reason": "block-gone"
+    }
+  },
+  {
+    "name": "new duplicate quote has different context",
+    "surface": "writeup",
+    "old": [
+      {
+        "section": "overview",
+        "text": "Version one: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb dry seeds aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa for spring."
+      }
+    ],
+    "target": {
+      "kind": "writeup-span",
+      "blockId": "overview-3faa903e",
+      "quote": "dry seeds",
+      "prefix": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ",
+      "suffix": " aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "new": [
+      {
+        "section": "overview",
+        "text": "Version two: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb dry seeds aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa for spring."
+      },
+      {
+        "section": "t-packing-body",
+        "text": "Pack dry seeds in bright envelopes."
+      }
+    ],
+    "expected": {
+      "status": "placed",
+      "location": {
+        "kind": "writeup-span",
+        "blockId": "overview-6005bac4",
+        "start": 54,
+        "end": 63
+      }
+    }
+  },
+  {
+    "name": "combining and precomposed characters with emoji",
+    "surface": "writeup",
+    "old": [
+      {
+        "section": "overview",
+        "text": "🪴 Café keeps seeds."
+      }
+    ],
+    "target": {
+      "kind": "writeup-span",
+      "blockId": "overview-2653c64c",
+      "quote": "Café",
+      "prefix": "🪴 ",
+      "suffix": " keeps seeds."
+    },
+    "new": [
+      {
+        "section": "overview",
+        "text": "🪴 Café keeps seeds."
+      }
+    ],
+    "expected": {
+      "status": "placed",
+      "location": {
+        "kind": "writeup-span",
+        "blockId": "overview-2653c64c",
+        "start": 3,
+        "end": 7
+      }
+    }
+  },
+  {
+    "name": "quote at block start with empty prefix",
+    "surface": "writeup",
+    "old": [
+      {
+        "section": "overview",
+        "text": "Sprout keeps dry seeds in a cool drawer."
+      }
+    ],
+    "target": {
+      "kind": "writeup-span",
+      "blockId": "overview-436016ba",
+      "quote": "Sprout",
+      "prefix": "",
+      "suffix": " keeps dry seeds in a cool drawe"
+    },
+    "new": [
+      {
+        "section": "t-storage-body",
+        "text": "Sprout keeps dry seeds in a cool drawer."
+      }
+    ],
+    "expected": {
+      "status": "placed",
+      "location": {
+        "kind": "writeup-span",
+        "blockId": "t-storage-body-436016ba",
+        "start": 0,
+        "end": 6
+      }
+    }
+  },
+  {
+    "name": "quote at block end with empty suffix",
+    "surface": "writeup",
+    "old": [
+      {
+        "section": "overview",
+        "text": "Sprout keeps dry seeds in a cool drawer."
+      }
+    ],
+    "target": {
+      "kind": "writeup-span",
+      "blockId": "overview-436016ba",
+      "quote": "drawer.",
+      "prefix": "prout keeps dry seeds in a cool ",
+      "suffix": ""
+    },
+    "new": [
+      {
+        "section": "t-storage-body",
+        "text": "Sprout keeps dry seeds in a cool drawer."
+      }
+    ],
+    "expected": {
+      "status": "placed",
+      "location": {
+        "kind": "writeup-span",
+        "blockId": "t-storage-body-436016ba",
+        "start": 33,
+        "end": 40
+      }
+    }
+  },
+  {
+    "name": "both context edges empty for whole-block quote",
+    "surface": "writeup",
+    "old": [
+      {
+        "section": "overview",
+        "text": "Seeds"
+      }
+    ],
+    "target": {
+      "kind": "writeup-span",
+      "blockId": "overview-45a19545",
+      "quote": "Seeds",
+      "prefix": "",
+      "suffix": ""
+    },
+    "new": [
+      {
+        "section": "t-storage-body",
+        "text": "Seeds"
+      }
+    ],
+    "expected": {
+      "status": "placed",
+      "location": {
+        "kind": "writeup-span",
+        "blockId": "t-storage-body-45a19545",
+        "start": 0,
+        "end": 5
+      }
+    }
+  },
+  {
+    "name": "changed nearby context cannot justify a new block",
+    "surface": "writeup",
+    "old": [
+      {
+        "section": "overview",
+        "text": "Sprout keeps dry seeds in a cool drawer."
+      }
+    ],
+    "target": {
+      "kind": "writeup-span",
+      "blockId": "overview-436016ba",
+      "quote": "dry seeds",
+      "prefix": "Sprout keeps ",
+      "suffix": " in a cool drawer."
+    },
+    "new": [
+      {
+        "section": "overview",
+        "text": "Sprout keeps dry seeds in a warm drawer."
+      }
+    ],
+    "expected": {
+      "status": "unplaced",
+      "reason": "block-gone"
+    }
+  },
+  {
+    "name": "Markdown doc unchanged",
+    "surface": "markdown",
+    "old": [
+      {
+        "section": "doc-1e47e721",
+        "text": "Sprout keeps dry seeds in a cool drawer."
+      }
+    ],
+    "target": {
+      "kind": "doc-span",
+      "blockId": "doc-1e47e721-436016ba",
+      "quote": "dry seeds",
+      "prefix": "Sprout keeps ",
+      "suffix": " in a cool drawer.",
+      "path": "docs/storage.md"
+    },
+    "new": [
+      {
+        "section": "doc-1e47e721",
+        "text": "Sprout keeps dry seeds in a cool drawer."
+      }
+    ],
+    "expected": {
+      "status": "placed",
+      "location": {
+        "kind": "doc-span",
+        "blockId": "doc-1e47e721-436016ba",
+        "start": 13,
+        "end": 22,
+        "path": "docs/storage.md"
+      }
+    }
+  },
+  {
+    "name": "Markdown doc changed outside context",
+    "surface": "markdown",
+    "old": [
+      {
+        "section": "doc-1e47e721",
+        "text": "Version one: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb dry seeds aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa for spring."
+      }
+    ],
+    "target": {
+      "kind": "doc-span",
+      "blockId": "doc-1e47e721-3faa903e",
+      "quote": "dry seeds",
+      "prefix": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ",
+      "suffix": " aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "path": "docs/storage.md"
+    },
+    "new": [
+      {
+        "section": "doc-1e47e721",
+        "text": "Version two: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb dry seeds aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa for spring."
+      }
+    ],
+    "expected": {
+      "status": "placed",
+      "location": {
+        "kind": "doc-span",
+        "blockId": "doc-1e47e721-6005bac4",
+        "start": 54,
+        "end": 63,
+        "path": "docs/storage.md"
+      }
+    }
+  },
+  {
+    "name": "Markdown doc quote removed",
+    "surface": "markdown",
+    "old": [
+      {
+        "section": "doc-1e47e721",
+        "text": "Sprout keeps dry seeds in a cool drawer."
+      }
+    ],
+    "target": {
+      "kind": "doc-span",
+      "blockId": "doc-1e47e721-436016ba",
+      "quote": "dry seeds",
+      "prefix": "Sprout keeps ",
+      "suffix": " in a cool drawer.",
+      "path": "docs/storage.md"
+    },
+    "new": [
+      {
+        "section": "doc-1e47e721",
+        "text": "The drawer is empty."
+      }
+    ],
+    "expected": {
+      "status": "unplaced",
+      "reason": "block-gone"
+    }
+  }
+]

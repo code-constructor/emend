@@ -1,3 +1,9 @@
+export { docText, placeHtmlSpan } from "./place/html.ts";
+export { lineMap } from "./place/linemap.ts";
+export { type FileSides, placeLines } from "./place/lines.ts";
+export { type PlaceContext, placeThread } from "./place/place.ts";
+export { composeRenames } from "./place/renames.ts";
+export { makeSpan, placeSpan } from "./place/span.ts";
 export { type Block, blockText } from "./render/blocks.ts";
 export { changedBlockIds } from "./render/changed.ts";
 export { blockHash } from "./render/hash.ts";

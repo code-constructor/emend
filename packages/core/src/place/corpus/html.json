@@ -1,0 +1,148 @@
+[
+  {
+    "name": "HTML unchanged",
+    "surface": "html",
+    "old": "<body><p>Sprout keeps dry seeds in a cool drawer.</p></body>",
+    "target": {
+      "kind": "html-span",
+      "path": "docs/storage.html",
+      "quote": "dry seeds",
+      "prefix": "Sprout keeps ",
+      "suffix": " in a cool drawer."
+    },
+    "new": "<body><p>Sprout keeps dry seeds in a cool drawer.</p></body>",
+    "expected": {
+      "status": "placed",
+      "location": {
+        "kind": "html-span",
+        "path": "docs/storage.html",
+        "start": 13,
+        "end": 22
+      }
+    }
+  },
+  {
+    "name": "HTML quote occurs only inside script",
+    "surface": "html",
+    "old": "<body><p>Sprout keeps dry seeds in a cool drawer.</p></body>",
+    "target": {
+      "kind": "html-span",
+      "path": "docs/storage.html",
+      "quote": "dry seeds",
+      "prefix": "Sprout keeps ",
+      "suffix": " in a cool drawer."
+    },
+    "new": "<body><script>Sprout keeps dry seeds in a cool drawer.</script></body>",
+    "expected": {
+      "status": "unplaced",
+      "reason": "block-gone"
+    }
+  },
+  {
+    "name": "HTML quote occurs only inside style",
+    "surface": "html",
+    "old": "<body><p>Sprout keeps dry seeds in a cool drawer.</p></body>",
+    "target": {
+      "kind": "html-span",
+      "path": "docs/storage.html",
+      "quote": "dry seeds",
+      "prefix": "Sprout keeps ",
+      "suffix": " in a cool drawer."
+    },
+    "new": "<body><style>Sprout keeps dry seeds in a cool drawer.</style></body>",
+    "expected": {
+      "status": "unplaced",
+      "reason": "block-gone"
+    }
+  },
+  {
+    "name": "HTML quote occurs only inside template",
+    "surface": "html",
+    "old": "<body><p>Sprout keeps dry seeds in a cool drawer.</p></body>",
+    "target": {
+      "kind": "html-span",
+      "path": "docs/storage.html",
+      "quote": "dry seeds",
+      "prefix": "Sprout keeps ",
+      "suffix": " in a cool drawer."
+    },
+    "new": "<body><template>Sprout keeps dry seeds in a cool drawer.</template></body>",
+    "expected": {
+      "status": "unplaced",
+      "reason": "block-gone"
+    }
+  },
+  {
+    "name": "HTML quote occurs only inside noscript",
+    "surface": "html",
+    "old": "<body><p>Sprout keeps dry seeds in a cool drawer.</p></body>",
+    "target": {
+      "kind": "html-span",
+      "path": "docs/storage.html",
+      "quote": "dry seeds",
+      "prefix": "Sprout keeps ",
+      "suffix": " in a cool drawer."
+    },
+    "new": "<body><noscript>Sprout keeps dry seeds in a cool drawer.</noscript></body>",
+    "expected": {
+      "status": "unplaced",
+      "reason": "block-gone"
+    }
+  },
+  {
+    "name": "HTML quote would only be written by script",
+    "surface": "html",
+    "old": "<body><p>Sprout keeps dry seeds in a cool drawer.</p></body>",
+    "target": {
+      "kind": "html-span",
+      "path": "docs/storage.html",
+      "quote": "dry seeds",
+      "prefix": "Sprout keeps ",
+      "suffix": " in a cool drawer."
+    },
+    "new": "<body><div id=\"garden\"></div><script>document.querySelector(\"#garden\").textContent = \"Sprout keeps dry seeds in a cool drawer.\";</script></body>",
+    "expected": {
+      "status": "unplaced",
+      "reason": "block-gone"
+    }
+  },
+  {
+    "name": "HTML identical paragraphs are ambiguous",
+    "surface": "html",
+    "old": "<body><p>Sprout keeps dry seeds in a cool drawer.</p></body>",
+    "target": {
+      "kind": "html-span",
+      "path": "docs/storage.html",
+      "quote": "dry seeds",
+      "prefix": "Sprout keeps ",
+      "suffix": " in a cool drawer."
+    },
+    "new": "<body><p>Sprout keeps dry seeds in a cool drawer.</p> <p>Sprout keeps dry seeds in a cool drawer.</p></body>",
+    "expected": {
+      "status": "unplaced",
+      "reason": "ambiguous"
+    }
+  },
+  {
+    "name": "HTML ignores a script duplicate of a visible quote",
+    "surface": "html",
+    "old": "<body><p>Sprout keeps dry seeds in a cool drawer.</p></body>",
+    "target": {
+      "kind": "html-span",
+      "path": "docs/storage.html",
+      "quote": "dry seeds",
+      "prefix": "Sprout keeps ",
+      "suffix": " in a cool drawer."
+    },
+    "new": "<body><p>Sprout keeps dry seeds in a cool drawer.</p><script>Sprout keeps dry seeds in a cool drawer.</script></body>",
+    "expected": {
+      "status": "placed",
+      "location": {
+        "kind": "html-span",
+        "path": "docs/storage.html",
+        "start": 13,
+        "end": 22
+      }
+    }
+  }
+]
