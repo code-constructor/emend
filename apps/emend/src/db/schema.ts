@@ -5,6 +5,7 @@ import {
   FileStatus,
   GoMode,
   Outcome,
+  PairingPurpose,
   type PlacementLocation,
   type Target,
   ThreadState,
@@ -415,6 +416,9 @@ export const pairings = sqliteTable(
   {
     id: id(),
     ownerId: ownerId(),
+    purpose: text("purpose", { enum: enumValues(PairingPurpose.options) })
+      .notNull()
+      .default("device"),
     secretHash: text("secret_hash").notNull(),
     codeHash: text("code_hash").notNull(),
     createdBy: text("created_by").notNull(),
@@ -423,6 +427,7 @@ export const pairings = sqliteTable(
   },
   (t) => [
     ...owned("pairings", t),
+    enumCheck("pairings_purpose_check", t.purpose, PairingPurpose.options),
     unique("pairings_secret_hash_unique").on(t.secretHash),
     foreignKey({ columns: [t.ownerId, t.createdBy], foreignColumns: [tokens.ownerId, tokens.id] }),
   ],

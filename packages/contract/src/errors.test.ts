@@ -3,6 +3,7 @@ import { ERROR_STATUS, ErrorBody, ErrorCode } from "./index.ts";
 
 test("maps every error code to its specified HTTP status", () => {
   const expected = {
+    internal: 500,
     unauthorized: 401,
     forbidden: 403,
     bad_host: 403,

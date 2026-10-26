@@ -67,5 +67,21 @@ export const MIGRATIONS: readonly { tag: string; when: number; hash: string; sta
       "CREATE UNIQUE INDEX `writeups_owner_id_unique` ON `writeups` (`owner_id`,`id`);",
       "CREATE UNIQUE INDEX `writeups_revision_unique` ON `writeups` (`revision_id`);"
     ]
+  },
+  {
+    "tag": "0001_pairing_purpose",
+    "when": 1793031038628,
+    "hash": "1701bf429759dfac0fd8878dbcfc5ef987b78d652bb19e2b1812ee9b058866ad",
+    "statements": [
+      "PRAGMA foreign_keys=OFF;",
+      "CREATE TABLE `__new_pairings` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`owner_id` text NOT NULL,\n\t`purpose` text DEFAULT 'device' NOT NULL,\n\t`secret_hash` text NOT NULL,\n\t`code_hash` text NOT NULL,\n\t`created_by` text NOT NULL,\n\t`expires_at` integer NOT NULL,\n\t`used_at` integer,\n\tFOREIGN KEY (`owner_id`) REFERENCES `owners`(`id`) ON UPDATE no action ON DELETE no action,\n\tFOREIGN KEY (`owner_id`,`created_by`) REFERENCES `tokens`(`owner_id`,`id`) ON UPDATE no action ON DELETE no action,\n\tCONSTRAINT \"pairings_purpose_check\" CHECK(\"__new_pairings\".\"purpose\" in ('device', 'machine'))\n);",
+      "INSERT INTO `__new_pairings`(\"id\", \"owner_id\", \"purpose\", \"secret_hash\", \"code_hash\", \"created_by\", \"expires_at\", \"used_at\") SELECT \"id\", \"owner_id\", 'device', \"secret_hash\", \"code_hash\", \"created_by\", \"expires_at\", \"used_at\" FROM `pairings`;",
+      "DROP TABLE `pairings`;",
+      "ALTER TABLE `__new_pairings` RENAME TO `pairings`;",
+      "PRAGMA foreign_keys=ON;",
+      "CREATE INDEX `pairings_owner_idx` ON `pairings` (`owner_id`);",
+      "CREATE UNIQUE INDEX `pairings_owner_id_unique` ON `pairings` (`owner_id`,`id`);",
+      "CREATE UNIQUE INDEX `pairings_secret_hash_unique` ON `pairings` (`secret_hash`);"
+    ]
   }
 ];

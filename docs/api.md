@@ -1,7 +1,8 @@
 # API v1
 
 The versioned API lives under `/api/v1`. `@emend/contract` exports its zod schemas and inferred
-TypeScript types under the same names, with `CONTRACT_VERSION = 1`. Object schemas strip unknown
+TypeScript types under the same names, with `CONTRACT_VERSION = 1`. All API timestamps are
+ISO 8601 UTC strings (for example `2026-01-01T00:10:00.000Z`). Object schemas strip unknown
 keys at every level. Additive fields stay in v1; breaking changes require `/api/v2`.
 
 This is the v1 contract and endpoint inventory. Routes are implemented incrementally. Each later
@@ -15,17 +16,42 @@ here **before** writing the route. This includes `PublishRequest` (plan task 1.6
 - CLI and MCP requests carry `Authorization: Bearer <token>`. Admin and agent tokens have separate
   scopes. A reviewer credential is accepted only from the session cookie, never as a bearer token.
 - The CLI sends `X-Emend-Client: cli/<semver>`. The minimum supported client version is `0.1.0`;
-  older clients receive `426 client_outdated`.
+  older clients receive `426 client_outdated`. Other header values are `400 invalid_request`.
+- Before sending a bearer, the CLI authenticates the discovered server with public
+  `GET /api/v1/capabilities` and `X-Emend-Challenge` (`SERVER_CHALLENGE_HEADER`). `ServerChallenge`
+  is 32 fresh random bytes encoded as canonical unpadded base64url (43 characters). The server
+  answers `X-Emend-Proof` (`SERVER_PROOF_HEADER`, schema `ServerProof`) with HMAC-SHA256 over the
+  challenge's ASCII text, using the decoded 32-byte key stored in private `server.json`, encoded
+  as canonical unpadded base64url. The CLI compares the digest in constant time. A missing,
+  malformed or wrong proof prevents credential transmission. No challenge means no proof;
+  a malformed challenge returns `400 invalid_request`. Capabilities remains public, and its
+  proof reveals nothing about the key. Neither header carries a bearer or the server key.
 - Browsers use `emend_session`, with `HttpOnly`, `SameSite=Strict`, `Path=/`,
   `Max-Age=2592000` (30 days), and `Secure` on HTTPS. Sessions renew at most once daily.
 - JSON bodies use `Content-Type: application/json`. Routes reject bodies over their JSON byte
   limit with `413 too_large` before parsing, then validate with the contract schemas:
-  `POST /api/v1/publish` permits at most `publishJsonBytes` (8388608 bytes); every other JSON route
-  permits at most `requestJsonBytes` (1048576 bytes).
+  `POST /api/v1/publish` permits at most `publishJsonBytes` (8388608 bytes); `POST /session` and
+  `POST /machines` permit `publicJsonBytes` (4096 bytes); other JSON routes permit at most
+  `requestJsonBytes` (1048576 bytes).
 - Every request checks `Host` against `127.0.0.1:<port>`, `localhost:<port>`, `[::1]:<port>`, and
-  the tailnet name only when configured with `--tailscale`. Other hosts receive `403 bad_host`.
-  Every non-GET request carrying a session cookie must carry an allowed `Origin`; a missing or
-  disallowed origin receives `403 bad_origin`.
+  the listener's actual concrete address, and the tailnet name only when configured with
+  `--tailscale`. Other hosts receive `403 bad_host`. Every non-GET/HEAD request with an Origin
+  must name an allowed app origin. A non-GET/HEAD request carrying a session cookie must carry
+  that Origin; a missing or disallowed origin receives `403 bad_origin`.
+
+Guards run in this order: Host, client version, Origin, declared Content-Length limit,
+credential and scope, bounded body streaming, then handler and schema parsing. An unauthorized
+request never reads its body. Every API response carries `Cache-Control: no-store`.
+Unimplemented listed routes still enforce their scope before `404 not_found`. Unlisted API
+paths require a credential before returning `404 not_found`. HEAD inherits the corresponding
+GET route's scope unless it has an explicit endpoint entry. Until content serving is implemented,
+`/content/*` responses carry `X-Content-Type-Options: nosniff` and `Cache-Control: no-store`.
+
+Local discovery and the default pairing URL use the listener's numeric address, with IPv6
+literals in brackets and wildcard listeners represented by their corresponding loopback address.
+An explicit public origin still overrides the pairing URL. The raw HTTP Host guard runs before
+the adapter, so malformed hosts receive the same `403 bad_host` JSON body and headers; adapter
+request-construction failures receive `400 invalid_request` with the same response contract.
 
 All API requests require credentials except capabilities, session creation and machine registration.
 The content path uses its capability key and never reads cookies. The server binds
@@ -52,12 +78,12 @@ a machine token reaches only reviews from its own instance.
 | Method | Path | Who | Purpose |
 | --- | --- | --- | --- |
 | GET | `/api/v1/capabilities` | Anyone | API version, app version and supported features. |
-| POST | `/api/v1/session` | Browser, no existing credential required | Exchange `{secret}` or `{code}` for a reviewer session. |
+| POST | `/api/v1/session` | Browser, no existing credential required | Exchange `SessionRequest` for a reviewer session (204); refuses machine pairings. |
 | DELETE | `/api/v1/session` | Reviewer | End the current browser session. |
-| POST | `/api/v1/pairings` | Admin, reviewer | Create a pairing; return `{url, code, expiresAt}`. |
+| POST | `/api/v1/pairings` | Admin, reviewer | Create from `PairingRequest`; return `PairingCreated` (201). |
 | GET | `/api/v1/devices` | Admin, reviewer | List paired devices. |
 | DELETE | `/api/v1/devices/:id` | Admin, reviewer | Revoke a device. |
-| POST | `/api/v1/machines` | Anyone with a pairing secret or code | Register `{secret, instance: {id, name}}` or `{code, instance: {id, name}}`. |
+| POST | `/api/v1/machines` | Anyone with a pairing secret or code | Register `{secret, instance: {id, name}}` or `{code, instance: {id, name}}`; refuses device pairings (task 1.14). |
 | DELETE | `/api/v1/machines/self` | Agent | Detach the current machine. |
 | HEAD | `/api/v1/blobs/:sha256` | Agent | Check whether the owner's blob exists. |
 | PUT | `/api/v1/blobs/:sha256` | Agent | Upload a blob; verify its size and hash. |
@@ -85,6 +111,18 @@ a machine token reaches only reviews from its own instance.
 
 `Capabilities = { api: 1, version: string, features: string[] }`. The first feature list is
 `["attach", "html-docs", "mcp"]`; clients accept additional feature strings.
+
+`PairingPurpose = "device" | "machine"`. `PairingRequest = { purpose? }` defaults to `"device"`.
+`PairingCreated = { url, code, expiresAt }`: the HTTP(S) URL ends in `/pair#<secret>` with no query,
+the code is eight canonical Crockford characters displayed as `XXXX-XXXX`, and the expiry is UTC.
+`SessionRequest` accepts exactly one of `{ secret }` and `{ code }`. Codes accept lower case and
+an optional middle hyphen, normalizing `I`/`L` to `1` and `O` to `0`. Secrets match
+`^emp_[A-Za-z0-9_-]{43}$`. Unknown, used, expired and wrong-purpose pairings all return the same
+`401 unauthorized`; session redemption accepts only `device`, machine registration only `machine`.
+Redemption creates a browser device and reviewer token atomically. Revoked tokens or devices and
+expired sessions are unauthorized. Session deletion revokes both and clears the cookie.
+If a code matches multiple live device pairings, redemption is unauthorized and consumes none;
+the individual secret links remain usable.
 
 `PublishResponse = { reviewId, revision, url, placed, unplaced }`. The URL is HTTP or HTTPS;
 it is bounded by `pathChars` (4096 characters). `revision` is a positive integer sequence, and
@@ -231,6 +269,7 @@ limit with `413 too_large` before parsing. Upload content also has the role's by
 
 | Constant key | Maximum |
 | --- | ---: |
+| `publicJsonBytes` | 4096 bytes per public session or machine registration JSON request body |
 | `commentBodyChars` | 20000 characters |
 | `instructionChars` | 4000 characters |
 | `quoteChars` | 2000 characters, non-empty |
@@ -277,11 +316,14 @@ Binary and oversized diff sides are listed as not shown; publishing still succee
   within a section append `-2`, `-3`, and so on. Section keys are `overview`, `tldr`, `decisions`,
   `glossary`, `t-<slug>-why`, `t-<slug>-example`, `t-<slug>-body`, and
   `doc-<hash8 of the doc path>`. The complete block id is bounded by `pathChars`.
-- Tokens are `em_` followed by 32 random bytes encoded as unpadded base64url (43 encoded characters).
-  Only their SHA-256 hash is stored. Never log tokens or pairing secrets.
+- Bearer tokens are `em_`, reviewer session secrets `ems_`, and pairing secrets `emp_`, followed
+  by 32 random bytes encoded as unpadded base64url (43 encoded characters). Only SHA-256 hex
+  digests are stored, including for normalized codes. Never log tokens or pairing secrets.
 - Pairings are single-use and expire after 10 minutes. A link carries its secret only in the URL
   fragment, `/pair#<secret>`, never a query. The alternative code is `XXXX-XXXX` in Crockford base32;
-  five wrong codes lock code entry for 10 minutes (`429 rate_limited`).
+  five wrong codes within 10 minutes lock code entry server-wide for 10 minutes
+  (`429 rate_limited`, including the fifth failure). Malformed codes do not count; secret
+  redemption remains available while code entry is locked.
 - A content capability key is random and specific to a revision; it permits access to that
   revision's isolated content path without a session cookie.
 
@@ -297,10 +339,11 @@ All errors use `ErrorBody`, with no stack traces or another owner's ids:
 
 | Error code | HTTP status | When |
 | --- | ---: | --- |
+| `internal` | 500 | An unexpected server error; response and log contain no request or internal details. |
 | `unauthorized` | 401 | A required credential is missing, invalid, revoked or expired. |
 | `forbidden` | 403 | The principal's kind or scopes forbid the operation; decided before any id lookup. |
 | `bad_host` | 403 | The Host header is outside the configured allowlist. |
-| `bad_origin` | 403 | A non-GET request carrying the session cookie has a missing or disallowed Origin. |
+| `bad_origin` | 403 | A non-GET/HEAD request has a disallowed Origin, or carries a session cookie without Origin. |
 | `not_found` | 404 | Any id other than a review id is missing or belongs to another owner. |
 | `unknown_review` | 404 | The review id is missing, belongs to another owner, or belongs to another instance for a machine token; identical in all three cases. |
 | `invalid_request` | 400 | The request is malformed or violates its contract schema. |

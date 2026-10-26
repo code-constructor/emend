@@ -18,6 +18,7 @@ test("exports the v1 API, limits, file vocabulary and reserved fallback", () => 
   expect(API_PREFIX).toBe("/api/v1");
   expect(MIN_CLIENT_VERSION).toBe("0.1.0");
   expect(LIMITS).toEqual({
+    publicJsonBytes: 4096,
     commentBodyChars: 20000,
     instructionChars: 4000,
     quoteChars: 2000,

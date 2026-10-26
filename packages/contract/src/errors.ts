@@ -2,6 +2,7 @@ import { z } from "zod";
 import { LIMITS } from "./limits.ts";
 
 export const ERROR_STATUS = {
+  internal: 500,
   unauthorized: 401,
   forbidden: 403,
   bad_host: 403,

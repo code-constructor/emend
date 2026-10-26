@@ -16,14 +16,17 @@
   },
   "scripts": {
     "build": "node build.ts",
-    "db:generate": "drizzle-kit generate --name init && node embed-migrations.ts"
+    "db:generate": "drizzle-kit generate",
+    "db:embed": "node embed-migrations.ts"
   },
   "devDependencies": {
     "@emend/contract": "workspace:*",
     "@emend/core": "workspace:*",
     "@emend/web": "workspace:*",
+    "@hono/node-server": "2.1.5",
     "drizzle-kit": "0.31.11",
     "drizzle-orm": "0.45.4",
-    "esbuild": "0.28.2"
+    "esbuild": "0.28.2",
+    "hono": "4.13.14"
   }
 }

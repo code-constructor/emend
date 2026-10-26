@@ -1,4 +1,5 @@
 export const LIMITS = {
+  publicJsonBytes: 4096,
   commentBodyChars: 20000,
   instructionChars: 4000,
   quoteChars: 2000,
