@@ -21,7 +21,8 @@ workspace scaffold implements the version command and a minimal browser shell.
 Core has no Node-only or browser-only APIs; WebCrypto is allowed. Both apps can use it without
 introducing a runtime dependency on the other app. Contract and core expose their TypeScript
 sources to workspace consumers. Vite builds the browser app first; esbuild bundles the CLI
-as Node 24 ESM, then copies the browser output into `apps/emend/dist/web`.
+as Node 24 ESM, then copies the browser output into `apps/emend/dist/web`. The runtime requires
+Node >=24.18.0; SQLite warning behavior has been verified on Node 24.18.0 and 26.12.0.
 
 ## One machine
 

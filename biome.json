@@ -11,7 +11,9 @@
       "!!.superpowers",
       "!!.pnpm-store",
       "!!scripts",
-      "!!pnpm-lock.yaml"
+      "!!pnpm-lock.yaml",
+      "!!apps/emend/drizzle",
+      "!!apps/emend/src/db/migrations.gen.ts"
     ]
   },
   "formatter": {
