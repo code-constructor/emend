@@ -1,26 +1,24 @@
-# emend client — working rules
+# emend — working rules
 
-This repository is the public client for an emend server: the `emend` CLI, its installer and the
-v1 API contract. It is open source (MIT). The server is a separate project that implements the
-contract kept here.
+emend is an open-source (MIT), local-first review tool for work done by coding agents: plans, docs
+and code. The reviewer reads the agent's writeup next to its diff, comments on any of it and
+presses Send, and the waiting agent gets the feedback. `VISION.md` says what emend is for and what
+it is not.
 
-emend is a review surface next to Hunk. The owner comments on an agent's review writeup (a span, a
-group or the whole review) and presses one Send. The agent waiting in `hunk-plan wait` gets those
-comments together with the owner's Hunk notes.
+This repository is the emend monorepo: the review skills, the app (the `emend` command with its
+local server, and the web UI) and the API contract.
 
 Status: nothing built yet. The toolchain and `pnpm verify` come with the first scaffold.
 
 ## What will live here
 
-- `cli/`: the `emend` CLI (`publish`, `take`, `reply`). TypeScript on Node 22, bundled into one
-  file with no runtime dependencies.
-- `bin/emend`: a POSIX sh wrapper that runs the bundle.
-- `install.sh`: links the CLI into the user's home. Idempotent. Never replaces a file or a symlink
-  it does not own.
-- `contract/`: zod schemas for the page model, the hand-off and the API. A server pins this repo
-  at a commit and imports them.
-- `docs/api.md`: the v1 HTTP contract, the source of truth for the API.
-- `sync/`: the manifest of surfaces shared with hunk-review-skill, and synthetic fixtures.
+The folder layout is decided together with the tech stack and lands with the first scaffold. It
+will hold:
+
+- the review skills;
+- the app: the `emend` command (CLI, local server, headless mode) and the web UI;
+- the contract: `docs/api.md`, the source of truth for the API, and its zod schemas;
+- `sync/`: the surfaces shared with hunk-review-skill, and synthetic fixtures.
 
 ## Rules
 
@@ -30,8 +28,8 @@ Status: nothing built yet. The toolchain and `pnpm verify` come with the first s
    new endpoint or field changes `contract/` and `docs/api.md` first. Additive fields are fine;
    breaking changes need `/api/v2`.
 3. **The CLI never runs code from the repo under review.** No repo scripts, no package manager,
-   git only for allowlisted read-only lookups. Config comes from `EMEND_URL`, `EMEND_TOKEN` and
-   `git config --local emend.publish`, never from files in that repo.
+   git only for allowlisted read-only lookups. Config comes from the reviewer's own emend
+   configuration and environment, never from files in that repo.
 4. **Keep `hunk-plan` callers working.** A change to a shared surface carries a `Sync:` trailer.
 5. **Fixtures are synthetic.** Real hunk state files and text from reviewed repos never become
    fixtures, tests or commit messages.
@@ -48,16 +46,15 @@ Status: nothing built yet. The toolchain and `pnpm verify` come with the first s
 
 ## Sync with hunk-review-skill
 
-[hunk-review-skill](https://github.com/vendis-ai/hunk-review-skill) writes the review plan, the
-report directory and the hand-off contracts emend reads. It is not being retired: both projects
+[hunk-review-skill](https://github.com/vendis-ai/hunk-review-skill) is the project emend grew out
+of. emend has its own review skill and logic. hunk-review-skill is not being retired: both projects
 stay maintained. Every improvement made here is checked against hunk-review-skill and applied there
 in its own way when it fits, and every improvement there is checked against emend. That covers
 contract and CLI changes, review wording and review insights alike. The local path of its checkout
 is in `.sync-counterpart-path` (gitignored).
 
-`sync/manifest.json` lists the shared surfaces: plan schema, report directory, page model,
-hand-off, wait contract, notes journal, note handling and review wording. Each surface's `self`
-globs are this repo's paths.
+`sync/manifest.json` will list the shared surfaces once they exist, starting with review wording
+and review insights. Each surface's `self` globs are this repo's paths.
 
 1. A commit touches a `self` path or anything under `sync/`.
 2. Open the counterpart in the sibling checkout (`.sync-counterpart-path`).
