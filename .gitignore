@@ -10,3 +10,9 @@ dist
 .sync-counterpart-path
 .claude/settings.local.json
 .claude/worktrees/
+
+# Throwaway spikes (plan tasks 0.3 and 0.4)
+spikes/
+
+# A pnpm store inside the checkout (sandboxed sessions cannot write the global one)
+.pnpm-store/

@@ -1,0 +1,8 @@
+# Codex writes code in emend; Claude Code orchestrates. See AGENTS.md, "Who does what".
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+# No network: Codex cannot push, deploy, reach Cloudflare or install dependencies.
+# The owner approves dependencies, and the main session installs them.
+network_access = false

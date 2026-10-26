@@ -1,0 +1,93 @@
+{
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": true,
+    "allowUnsandboxedCommands": false,
+    "network": {
+      "allowedDomains": [
+        "registry.npmjs.org",
+        "github.com",
+        "api.github.com",
+        "codeload.github.com",
+        "localhost",
+        "127.0.0.1"
+      ],
+      "allowLocalBinding": true
+    },
+    "filesystem": {
+      "denyRead": [
+        ".env",
+        ".env.local",
+        "~/.local/share/emend",
+        "~/Library/Application Support/emend"
+      ],
+      "denyWrite": [
+        ".claude/settings.json",
+        ".claude/settings.local.json",
+        ".claude/hooks",
+        ".codex",
+        ".git/config",
+        ".git/hooks"
+      ]
+    }
+  },
+  "permissions": {
+    "ask": [
+      "Edit(/.claude/settings.json)",
+      "Edit(/.claude/settings.local.json)",
+      "Edit(/.claude/hooks/**)",
+      "Edit(/.codex/**)",
+      "Edit(/.git/config)",
+      "Edit(/.git/hooks/**)",
+      "Edit(~/.config/git/**)",
+      "Edit(~/.gitconfig)",
+      "Edit(/.claude/agents/**)",
+      "Edit(/.claude/rules/**)",
+      "Edit(/.github/workflows/**)"
+    ],
+    "deny": [
+      "Read(/.env)",
+      "Read(/**/.env)",
+      "Read(/**/.env.*)",
+      "Read(~/.local/share/emend/**)",
+      "Read(~/Library/Application Support/emend/**)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Monitor|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v node >/dev/null 2>&1 || { echo 'guard-commands: node is not on PATH, so commands stay blocked' >&2; exit 2; }; node \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard-commands.ts\" || exit 2",
+            "timeout": 10,
+            "onFailure": "block"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__codex__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v node >/dev/null 2>&1 || { echo 'guard-commands: node is not on PATH, so Codex calls stay blocked' >&2; exit 2; }; node \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard-commands.ts\" || exit 2",
+            "timeout": 10,
+            "onFailure": "block"
+          }
+        ]
+      },
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/enforce-subagent-model.sh\" || exit 2",
+            "timeout": 5,
+            "onFailure": "block"
+          }
+        ]
+      }
+    ]
+  }
+}
