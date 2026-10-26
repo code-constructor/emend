@@ -34,7 +34,7 @@ When the owner asks what to do next:
 | 001 | [Port the harness](001-port-harness.md) | agent + your approval | — | done |
 | 002 | [Scaffold the workspace and the gate](002-scaffold.md) | agent + your approval | 001 | open |
 | 003 | [Spike the diff renderer](003-spike-diffs.md) | agent; you name the branch | 002 | open |
-| 004 | [Spike SQLite with Drizzle](004-spike-sqlite.md) | agent | 002 | open |
+| 004 | [Spike SQLite with Drizzle](004-spike-sqlite.md) | agent | 002 | done |
 | 005 | [Build the MVP](005-build-mvp.md) | agent + your approval | 003, 004 | open |
 | 006 | [Brainstorm the layout and the phone menu](006-layout-brainstorm.md) | you, with the agent | — | open |
 | 007 | [Run the success test](007-success-test.md) | you | 005 | open |

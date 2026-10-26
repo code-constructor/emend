@@ -23,3 +23,12 @@ committed). Record numbers only, never paths, file names or code from the branch
 The verdict is recorded. A change of plan goes back to you before slice 1.
 
 ## Notes
+
+- 2026-10-26: Provisional go, on a synthetic branch of 400 files and 29,240 changed lines with a
+  50,000-line file. The library covers full-text input, split and unified views, line selection
+  with sides, React threads under lines, the ten languages and word changes, and virtualization,
+  and the app's CSP needs no change with the `shiki-js` highlighter. Task 1.11 must parse diffs off
+  the main thread and mount only files near the viewport: one lockfile-sized parse took 22 s. The
+  browser checks (first file in 1.5 s, scrolling, memory, 390 px, gutter drag, CSP enforcement)
+  are still open, because the agent sandbox cannot run a browser or a local server. The run on a
+  branch you name is still open too.
