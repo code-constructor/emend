@@ -7,9 +7,19 @@
     "node": ">=24"
   },
   "scripts": {
+    "lint": "biome check .",
+    "typecheck": "tsc -b",
+    "test": "vitest run",
+    "build": "pnpm --dir apps/web build && pnpm --dir apps/emend build",
     "check:budget": "node scripts/check-budget.ts",
     "check:sync": "node scripts/check-sync.ts",
     "test:harness": "node --test scripts/check-budget.test.ts scripts/check-sync.test.ts scripts/enforce-subagent-model.test.ts .claude/hooks/guard-commands.test.ts",
-    "verify": "pnpm check:budget && pnpm check:sync && pnpm test:harness"
+    "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm check:budget && pnpm check:sync && pnpm test:harness"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.3",
+    "@types/node": "26.6.5",
+    "typescript": "7.0.2",
+    "vitest": "5.0.5"
   }
 }

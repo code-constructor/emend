@@ -21,6 +21,9 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      matrix:
+        node: [24, 26]
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
@@ -36,10 +39,10 @@ jobs:
 
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
-          node-version: 26
+          node-version: ${{ matrix.node }}
           package-manager-cache: false
 
-      # Plan task 0.2 adds `pnpm install --frozen-lockfile` here with the first dependency.
+      - run: pnpm install --frozen-lockfile
       - run: pnpm verify
         env:
           # A push checks the commits it brought; a pull request checks the whole branch.

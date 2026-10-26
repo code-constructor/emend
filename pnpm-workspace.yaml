@@ -1,0 +1,7 @@
+packages:
+  - apps/*
+  - packages/*
+
+# Dependency install scripts never run. esbuild works from its platform package without one.
+allowBuilds:
+  esbuild: false

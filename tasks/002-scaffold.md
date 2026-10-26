@@ -14,9 +14,9 @@ Plan task 0.2. pnpm workspaces with `apps/emend`, `apps/web`, `packages/contract
 
 ## Steps
 
-- [ ] You: approve the dependencies the plan lists for this task.
-- [ ] Write the failing tests, install, implement the scaffold.
-- [ ] `pnpm verify` passes, and `node apps/emend/dist/emend.mjs --version` prints `emend 0.1.0`.
+- [x] You: approve the dependencies the plan lists for this task.
+- [x] Write the failing tests, install, implement the scaffold.
+- [x] `pnpm verify` passes, and `node apps/emend/dist/emend.mjs --version` prints `emend 0.1.0`.
 - [ ] You: push, and CI is green on both Node versions.
 
 ## Done when
@@ -24,3 +24,7 @@ Plan task 0.2. pnpm workspaces with `apps/emend`, `apps/web`, `packages/contract
 The full gate is green locally and in CI.
 
 ## Notes
+
+- 2026-10-26: Scaffold implemented with the dependency versions the plan lists. The required
+  tests were red before the implementation and pass now. `pnpm verify` is green locally, and the
+  built CLI prints its version. CI on Node 24 and 26 waits for the owner's push.

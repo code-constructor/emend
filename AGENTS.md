@@ -28,8 +28,11 @@ The work queue is `tasks/`. When asked "what now?", "what's next?" or similar, f
 
 ## Commands
 
-- `pnpm verify`: the completion gate. Today it runs `check:budget`, `check:sync` and
-  `test:harness`. Plan task 0.2 puts lint, typecheck, test and build in front of them.
+- `pnpm verify`: the completion gate: `lint`, `typecheck`, `test`, `build`, `check:budget`,
+  `check:sync` and `test:harness`, in that order.
+- `pnpm lint`: Biome checks formatting and lint. `pnpm typecheck`: TypeScript project references.
+- `pnpm test`: Vitest (Node for packages and CLI, happy-dom for the web app), with temporary state.
+- `pnpm build`: builds the web app, then bundles the CLI and copies the web build into its dist.
 
 ## Non-negotiables
 

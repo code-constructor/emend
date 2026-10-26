@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "./.tsbuild",
+    "tsBuildInfoFile": "./.tsbuild/tsconfig.tsbuildinfo",
+    "types": ["node"]
+  },
+  "include": ["vitest.config.ts", "test/**/*.ts"],
+  "references": [
+    { "path": "./packages/contract" },
+    { "path": "./packages/core" },
+    { "path": "./apps/emend" },
+    { "path": "./apps/web" }
+  ]
+}
