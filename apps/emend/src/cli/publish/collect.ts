@@ -5,7 +5,7 @@ import { FilePath, LIMITS } from "@emend/contract";
 import { escapeReference } from "../escape.ts";
 import { createGitSession, GitFailed, type GitRunner } from "../git.ts";
 import { CliError } from "../http.ts";
-import { leadingFolders } from "./read.ts";
+import { collectionStat } from "./collect-stat.ts";
 import type { ChangedPath } from "./sides.ts";
 import { hashWorktreeFile, statWorktree } from "./worktree.ts";
 
@@ -41,8 +41,9 @@ export async function collectChanges(
     process.stderr.write(line);
   },
   gitDirs = [join(root, ".git")],
+  fs?: Parameters<typeof collectionStat>[2],
 ): Promise<ChangedPath[]> {
-  if (head === "worktree") return collectWorktree(root, base, run, warn, gitDirs);
+  if (head === "worktree") return collectWorktree(root, base, run, warn, gitDirs, fs);
   const bytes = await run(root, ["diff-tree", "-r", "-z", "--raw", "-M", base, head]);
   const parts = split(bytes);
   const files: ChangedPath[] = [];
@@ -127,6 +128,7 @@ async function collectWorktree(
   run: GitRunner,
   warn: (line: string) => void,
   gitDirs: string[],
+  fs?: Parameters<typeof collectionStat>[2],
 ) {
   const before = treeEntries(await run(root, ["ls-tree", "-r", "-l", "-z", "--full-tree", base]));
   const index = indexEntries(await run(root, ["ls-files", "-z", "-t", "--stage"]));
@@ -147,8 +149,8 @@ async function collectWorktree(
     }
     paths.add(decodePath(entry));
   }
-  const changed: ChangedPath[] = [];
-  for (const path of paths) {
+  const metadata = collectionStat(root, gitDirs, fs);
+  const inspect = async (path: string): Promise<ChangedPath | undefined> => {
     const old = before.get(path);
     const staged = index.get(path);
     let next: Entry | undefined;
@@ -156,10 +158,13 @@ async function collectWorktree(
       // Only staged gitlink bumps count. Never inspect the nested worktree or .git.
       next = staged;
     } else if (!(old?.mode === "160000" && !staged) && !hasGitlinkParent(path, index)) {
-      const info = await statWorktree(root, path, gitDirs);
+      const info = await metadata.stat(path);
       if (!info) {
-        if (staged?.skip && (await leadingFolders(root, join(root, path)))) next = staged;
+        if (staged?.skip && (await metadata.leadingFolders(join(root, path)))) next = staged;
       } else if (info.isSymbolicLink()) {
+        // Reading link text also needs fresh parents; the collection cache is not a read guard.
+        if (!(await statWorktree(root, path, gitDirs))?.isSymbolicLink())
+          throw new CliError("file changed while reading");
         const bytes = await readlink(join(root, path), { encoding: "buffer" });
         next = { mode: "120000", oid: createHash(format).update(`blob ${bytes.length}\0`).update(bytes).digest("hex") };
       } else if (info.isFile()) {
@@ -176,10 +181,10 @@ async function collectWorktree(
         throw new CliError("expected a regular file");
       }
     }
-    if (!old && !next) continue;
+    if (!old && !next) return;
     const sameOid = old?.oid !== undefined && old.oid === next?.oid;
-    if (sameOid && old?.mode === next?.mode) continue;
-    changed.push({
+    if (sameOid && old?.mode === next?.mode) return;
+    return {
       path,
       oldPath: null,
       oldOid: old?.oid,
@@ -189,7 +194,17 @@ async function collectWorktree(
       newFromIndex: next?.fromIndex,
       newOversized: next?.oversized,
       status: !old ? "added" : !next ? "deleted" : sameOid ? "mode-changed" : "modified",
-    });
+    };
+  };
+  const changed: ChangedPath[] = [];
+  const ordered = [...paths];
+  for (let start = 0; start < ordered.length; start += 64) {
+    const batch = await Promise.allSettled(ordered.slice(start, start + 64).map(inspect));
+    // Drain each bounded batch, retaining listing order for errors and rename pairing.
+    for (const result of batch) {
+      if (result.status === "rejected") throw result.reason;
+      if (result.value) changed.push(result.value);
+    }
   }
   const deleted = new Map<string, ChangedPath[]>();
   for (const file of changed)

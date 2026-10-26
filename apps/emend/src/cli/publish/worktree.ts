@@ -5,13 +5,19 @@ import { dirname, join } from "node:path";
 import { CliError } from "../http.ts";
 import { inside, leadingFolders, outsideGit } from "./read.ts";
 
-export async function statWorktree(root: string, path: string, gitDirs = [join(root, ".git")]): Promise<Stats | null> {
+const statFs = { lstat, realpath, leadingFolders };
+export async function statWorktree(
+  root: string,
+  path: string,
+  gitDirs = [join(root, ".git")],
+  fs = statFs,
+): Promise<Stats | null> {
   const file = join(root, path);
   try {
-    if (!(await leadingFolders(root, file))) return null;
-    const info = await lstat(file);
-    outsideGit(await realpath(info.isSymbolicLink() ? dirname(file) : file), gitDirs, [root]);
-    if (!inside(root, await realpath(dirname(file)))) throw new CliError("diff path leaves the worktree");
+    if (!(await fs.leadingFolders(root, file))) return null;
+    const info = await fs.lstat(file);
+    outsideGit(await fs.realpath(info.isSymbolicLink() ? dirname(file) : file), gitDirs, [root]);
+    if (!inside(root, await fs.realpath(dirname(file)))) throw new CliError("diff path leaves the worktree");
     return info;
   } catch (error) {
     if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return null;
