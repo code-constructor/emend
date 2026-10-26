@@ -1,0 +1,28 @@
+{
+  "kind": "go",
+  "reviewId": "11111111-1111-4111-8111-111111111111",
+  "deliveryId": "66666666-6666-4666-8666-666666666666",
+  "revision": 3,
+  "sentOn": 2,
+  "mode": "explain",
+  "modeLabel": "Explain only, change nothing",
+  "instructions": ["Explain the updated example before changing it."],
+  "approvalSetAside": true,
+  "comments": [
+    {
+      "id": "77777777-7777-4777-8777-777777777777",
+      "threadId": "88888888-8888-4888-8888-888888888888",
+      "target": {
+        "kind": "doc-span",
+        "path": "docs/guide.md",
+        "blockId": "doc-1234abcd-5678abcd",
+        "quote": "the fallback route",
+        "prefix": "Use ",
+        "suffix": "."
+      },
+      "placement": { "status": "unplaced", "reason": "block-gone" },
+      "body": "Describe why this example was removed.",
+      "history": []
+    }
+  ]
+}
