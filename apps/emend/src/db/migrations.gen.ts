@@ -83,5 +83,13 @@ export const MIGRATIONS: readonly { tag: string; when: number; hash: string; sta
       "CREATE UNIQUE INDEX `pairings_owner_id_unique` ON `pairings` (`owner_id`,`id`);",
       "CREATE UNIQUE INDEX `pairings_secret_hash_unique` ON `pairings` (`secret_hash`);"
     ]
+  },
+  {
+    "tag": "0002_placement_carried",
+    "when": 1793043434470,
+    "hash": "e79f1f366a92698b6119aa060e668bef2e44a4690efbe666a521a4b700e028e4",
+    "statements": [
+      "ALTER TABLE `placements` ADD `carried` text;"
+    ]
   }
 ];

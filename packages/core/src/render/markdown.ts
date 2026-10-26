@@ -21,6 +21,7 @@ import {
   restoreFootnotes,
   sanitizeSchema,
 } from "./sanitize.ts";
+import { limitTables, prepareTables } from "./tables.ts";
 
 function isolateDiagrams() {
   return (tree: HtmlRoot) => {
@@ -67,6 +68,7 @@ async function createProcessor() {
   return unified()
     .use(remarkParse)
     .use(remarkGfm)
+    .use(limitTables)
     .use(remarkRehype, { allowDangerousHtml: true, clobberPrefix: "" })
     .use(markFootnotes)
     .use(rehypeRaw, { passThrough: [FOOTNOTE_NODE] })
@@ -102,7 +104,11 @@ export async function renderMarkdownWithBudget(
     throw error;
   });
   const processor = await processorPromise;
-  const tree = await processor.run(processor.parse(markdown), { data: { highlightBudget } });
+  const { source, tables } = prepareTables(markdown);
+  const tree = await processor.run(processor.parse(source), {
+    value: source,
+    data: { highlightBudget, largeTables: tables },
+  });
   return blocksFromTree(tree, section, (node) =>
     processor.stringify(node.type === "root" ? node : { type: "root", children: [node] }),
   );

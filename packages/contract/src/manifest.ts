@@ -84,10 +84,11 @@ export const PublishManifest = z
     }
     const paths = new Set<string>();
     for (const [index, file] of manifest.files.entries()) {
-      if (paths.has(file.path)) {
+      const key = `${file.role}:${file.path}`;
+      if (paths.has(key)) {
         ctx.addIssue({ code: "custom", path: ["files", index, "path"], message: "duplicate file path" });
       }
-      paths.add(file.path);
+      paths.add(key);
       if (file.topic !== undefined && !topics.has(file.topic)) {
         ctx.addIssue({ code: "custom", path: ["files", index, "topic"], message: "file topic is not declared" });
       }

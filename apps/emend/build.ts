@@ -1,16 +1,27 @@
-import { cp, rm } from "node:fs/promises";
+import { cp, readFile, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 
 await build({
-  entryPoints: [fileURLToPath(new URL("./src/cli.ts", import.meta.url))],
-  outfile: fileURLToPath(new URL("./dist/emend.mjs", import.meta.url)),
+  entryPoints: {
+    emend: fileURLToPath(new URL("./src/cli.ts", import.meta.url)),
+    "publish-worker": fileURLToPath(new URL("./src/server/publish/worker.ts", import.meta.url)),
+  },
+  outdir: fileURLToPath(new URL("./dist", import.meta.url)),
+  outExtension: { ".js": ".mjs" },
   bundle: true,
   platform: "node",
   target: "node24",
   format: "esm",
   external: ["node:*"],
 });
+
+for (const entry of ["emend", "publish-worker"]) {
+  const output = await readFile(new URL(`./dist/${entry}.mjs`, import.meta.url), "utf8");
+  // Prefix of @shikijs/engine-oniguruma's embedded WASM module (not a generic WASM marker).
+  if (output.includes("AGFzbQEAAAABoQEWYAJ/fwF/YAF/AX9gA39/fwF/") || output.includes("onig.wasm"))
+    throw new Error("The CLI must use Shiki's JavaScript engine only");
+}
 
 const webOutput = new URL("./dist/web", import.meta.url);
 await rm(webOutput, { recursive: true, force: true });

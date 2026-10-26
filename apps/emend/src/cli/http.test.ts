@@ -7,6 +7,31 @@ import { apiRequest } from "./http.ts";
 import { provenTestServer } from "./test-support.ts";
 
 afterEach(() => vi.unstubAllGlobals());
+test("a publish timeout reports that nothing was published", async () => {
+  const fixture = await testDb();
+  try {
+    writeSecretFile(join(fixture.dir, "agent.token"), `em_${"a".repeat(43)}`);
+    const proof = provenTestServer(fixture.dir);
+    vi.stubGlobal(
+      "fetch",
+      (url: string | URL, init?: RequestInit) =>
+        proof(url, init) ??
+        new Promise((_, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+        }),
+    );
+    await expect(
+      apiRequest(fixture.dir, "http://127.0.0.1:3636", "/publish", {
+        token: "agent",
+        method: "POST",
+        body: {},
+        timeoutMs: 10,
+      }),
+    ).rejects.toThrow("the server did not answer in time; nothing was published");
+  } finally {
+    await fixture.cleanup();
+  }
+});
 test("HTTP sends state token, version and JSON, refuses redirects and renders fixed API errors", async () => {
   const fixture = await testDb();
   try {
@@ -68,6 +93,86 @@ test("CLI tokens trim trailing CR/LF and reject symlinks before any Authorizatio
     ).rejects.toThrow("Could not read the emend credential.");
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(new Headers(fetcher.mock.calls[0]?.[1]?.headers).has("Authorization")).toBe(false);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test.each([200, 500])(
+  "publish response %i body timeout distinguishes a possibly published revision",
+  async (status) => {
+    const fixture = await testDb();
+    try {
+      writeSecretFile(join(fixture.dir, "agent.token"), `em_${"a".repeat(43)}`);
+      const proof = provenTestServer(fixture.dir);
+      vi.stubGlobal(
+        "fetch",
+        async (url: string | URL, init?: RequestInit) =>
+          proof(url, init) ??
+          new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.enqueue(new TextEncoder().encode('{"partial":'));
+                init?.signal?.addEventListener("abort", () => controller.error(init.signal?.reason), { once: true });
+              },
+            }),
+            { status, headers: { "Content-Type": "application/json" } },
+          ),
+      );
+      await expect(
+        apiRequest(fixture.dir, "http://127.0.0.1:3636", "/publish", {
+          token: "agent",
+          method: "POST",
+          body: {},
+          timeoutMs: 10,
+        }),
+      ).rejects.toThrow(
+        status === 200
+          ? "the server's answer timed out; the revision may have been published"
+          : "The emend server returned an invalid response.",
+      );
+    } finally {
+      await fixture.cleanup();
+    }
+  },
+);
+
+test.each([200, 500])("publish response %i body reset preserves possible publication", async (status) => {
+  const fixture = await testDb();
+  try {
+    writeSecretFile(join(fixture.dir, "agent.token"), `em_${"a".repeat(43)}`);
+    const proof = provenTestServer(fixture.dir);
+    let signal: AbortSignal | null | undefined;
+    vi.stubGlobal("fetch", async (url: string | URL, init?: RequestInit) => {
+      const proven = proof(url, init);
+      if (proven) return proven;
+      signal = init?.signal;
+      let partial = false;
+      return new Response(
+        new ReadableStream({
+          pull(controller) {
+            if (partial) controller.error(new TypeError("connection reset"));
+            else {
+              controller.enqueue(new TextEncoder().encode('{"partial":'));
+              partial = true;
+            }
+          },
+        }),
+        { status, headers: { "Content-Type": "application/json" } },
+      );
+    });
+    await expect(
+      apiRequest(fixture.dir, "http://127.0.0.1:3636", "/publish", {
+        token: "agent",
+        method: "POST",
+        body: {},
+      }),
+    ).rejects.toThrow(
+      status === 200
+        ? "the server's answer was cut off; the revision may have been published"
+        : "The emend server returned an invalid response.",
+    );
+    expect(signal?.aborted).toBe(false);
   } finally {
     await fixture.cleanup();
   }

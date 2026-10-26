@@ -13,6 +13,16 @@ export type Block = {
   source?: string;
 };
 
+const sectionBlockId = (section: string, identity: string) => `${section}-${identity}`;
+/** Keep content identities and duplicate suffixes when a shared render gets its own section. */
+export function resectionBlocks(blocks: Block[], section: string): Block[] {
+  return blocks.map((block) => ({
+    ...block,
+    section,
+    id: sectionBlockId(section, block.id.slice(block.section.length + 1)),
+  }));
+}
+
 export type HtmlRoot = ReturnType<typeof fromHtml>;
 export type HtmlElement = Extract<HtmlRoot["children"][number], { type: "element" }>;
 export type HtmlNode = HtmlRoot | HtmlRoot["children"][number];
@@ -246,7 +256,7 @@ export async function blocksFromTree(
     const count = (occurrences.get(hash) ?? 0) + 1;
     occurrences.set(hash, count);
     blocks.push({
-      id: `${section}-${hash}${count === 1 ? "" : `-${count}`}`,
+      id: sectionBlockId(section, `${hash}${count === 1 ? "" : `-${count}`}`),
       section,
       kind,
       html,

@@ -30,6 +30,9 @@ test("exports the v1 API, limits, file vocabulary and reserved fallback", () => 
     htmlDocBytes: 8388608,
     assetBytes: 8388608,
     htmlDocWithAssetsBytes: 20971520,
+    revisionBytes: 268435456,
+    blocksPerRevision: 100000,
+    renderedBytesPerRevision: 268435456,
     filesPerRevision: 10000,
     pathChars: 4096,
     pathSegmentChars: 255,
@@ -90,6 +93,7 @@ test("validates publish response ids, revision, URL and placement counts", () =>
     url: "http://127.0.0.1:3636/reviews/11111111-1111-4111-8111-111111111111",
     placed: 2,
     unplaced: 0,
+    unrendered: [],
   };
   expect(PublishResponse.parse({ ...response, extra: true })).toEqual(response);
   for (const change of [

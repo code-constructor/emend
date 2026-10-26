@@ -2,7 +2,15 @@ import { randomUUID } from "node:crypto";
 import { expect, test } from "vitest";
 import { repos } from "../schema.ts";
 import { testDb } from "../test-support.ts";
-import { addRevision, createReview, findReviewByKey, getReview, getRevision, listReviews } from "./reviews.ts";
+import {
+  addRevision,
+  createReview,
+  DuplicateReviewKeyError,
+  findReviewByKey,
+  getReview,
+  getRevision,
+  listReviews,
+} from "./reviews.ts";
 
 test("review lookups and revision writes are scoped to the owner", async () => {
   const ctx = await testDb();
@@ -91,6 +99,18 @@ test("createReview treats a foreign or missing repository as missing", async () 
       ).toBeNull();
     }
     expect(await listReviews(ctx.otherOwnerId, ctx.db)).toEqual([]);
+  } finally {
+    await ctx.cleanup();
+  }
+});
+
+test("a duplicate review key raises a typed error and leaves the winner intact", async () => {
+  const ctx = await testDb();
+  try {
+    const input = { originInstanceId: ctx.instanceId, reviewKey: "synthetic-duplicate", title: "Synthetic" };
+    const winner = await createReview(ctx.ownerId, ctx.db, input);
+    await expect(createReview(ctx.ownerId, ctx.db, input)).rejects.toBeInstanceOf(DuplicateReviewKeyError);
+    expect(await findReviewByKey(ctx.ownerId, ctx.db, ctx.instanceId, input.reviewKey)).toEqual(winner);
   } finally {
     await ctx.cleanup();
   }

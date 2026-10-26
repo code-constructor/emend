@@ -75,7 +75,7 @@ export async function verifyBearer(db: Db, header: string | undefined, now: numb
   if (!header?.startsWith("Bearer ")) return null;
   const secret = header.slice(7);
   if (!BEARER_SHAPE.test(secret)) return null;
-  return db.query(async (q) => {
+  return db.read(async (q) => {
     const row = await liveToken(q, secret, now);
     return row && row.kind !== "reviewer" ? principalFromToken(row) : null;
   });

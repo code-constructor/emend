@@ -15,6 +15,13 @@
       "when": 1793031038628,
       "tag": "0001_pairing_purpose",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1793043434470,
+      "tag": "0002_placement_carried",
+      "breakpoints": true
     }
   ]
 }

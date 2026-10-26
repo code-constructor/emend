@@ -137,6 +137,8 @@ test("every documented API endpoint enforces its scope even before its handler e
       if (!(SCOPES_BY_KIND[kind] as readonly string[]).includes(endpoint.scope))
         await error(response, "forbidden", endpoint.method === "HEAD");
       else if (path === "/api/v1/pairings") expect(response.status).toBe(201);
+      else if (path === "/api/v1/publish" || path.startsWith("/api/v1/blobs/"))
+        await error(response, "invalid_request", endpoint.method === "HEAD");
       else await error(response, "not_found", endpoint.method === "HEAD");
     }
   }
@@ -334,7 +336,7 @@ test("body limits run before credentials, parsing runs after scope, and JSON con
   await error(await request("/publish", "POST", { "Content-Length": `${LIMITS.publishJsonBytes + 1}` }), "too_large");
   await error(
     await request("/publish", "POST", { ...bearer(agent), "Content-Length": `${LIMITS.requestJsonBytes + 1}` }, {}),
-    "not_found",
+    "invalid_request",
   );
   await error(await request("/pairings", "POST", bearer(admin)), "invalid_request");
   await error(await request("/pairings", "POST", bearer(admin), { purpose: "wrong" }), "invalid_request");

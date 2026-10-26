@@ -123,6 +123,30 @@ test("a failing transaction rolls back and unrelated statements wait outside it"
   }
 });
 
+test("read-only WAL queries stay responsive, hide uncommitted rows and reject writes", async () => {
+  const ctx = await testDb();
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const id = randomUUID();
+  const transaction = ctx.db.transaction(async (q) => {
+    await q.insert(owners).values({ id });
+    entered.resolve();
+    await release.promise;
+  });
+  try {
+    await entered.promise;
+    expect(await ctx.db.read((q) => q.select().from(owners).where(eq(owners.id, id)).get())).toBeUndefined();
+    await expect(ctx.db.read((q) => q.insert(owners).values({ id: randomUUID() }).run())).rejects.toThrow();
+    release.resolve();
+    await transaction;
+    expect(await ctx.db.read((q) => q.select().from(owners).where(eq(owners.id, id)).get())).toEqual({ id });
+  } finally {
+    release.resolve();
+    await transaction;
+    await ctx.cleanup();
+  }
+});
+
 test("query scopes cannot escape the queue and close drains pending work", async () => {
   const ctx = await testDb();
   let escaped: Queries | undefined;

@@ -19,20 +19,35 @@ const MESSAGES: Record<ErrorCode, string> = {
   comment_frozen: "The comment has already been sent.",
   unsent_comments: "Unsent comments remain.",
   review_moved: "The review has moved.",
+  publish_conflict: "The review changed during publish. Try again.",
   too_large: "The request is too large.",
   client_outdated: "The client needs an update.",
   rate_limited: "Code entry is temporarily locked.",
 };
+const DETAILS = {
+  publish_busy: { code: "rate_limited", message: "The server is busy publishing; try again." },
+  publish_aborted: { code: "invalid_request", message: "The publish was cancelled." },
+  writeup_blocks: { code: "too_large", message: "The writeup has too many blocks." },
+  writeup_failed: { code: "invalid_request", message: "The writeup could not be rendered." },
+  writeup_timeout: { code: "too_large", message: "The writeup rendering timed out." },
+  placement_timeout: { code: "too_large", message: "The placement timed out." },
+  placement_failed: { code: "invalid_request", message: "The comments could not be placed." },
+} as const;
+type Detail = keyof typeof DETAILS;
 export class ApiError extends Error {
   readonly code: ErrorCode;
-  constructor(code: ErrorCode) {
-    super(MESSAGES[code]);
+  readonly detail?: Detail;
+  constructor(code: ErrorCode, detail?: Detail) {
+    super(detail && DETAILS[detail].code === code ? DETAILS[detail].message : MESSAGES[code]);
     this.code = code;
+    this.detail = detail;
   }
 }
-export function errorBody(code: ErrorCode) {
-  return { error: { code, message: MESSAGES[code] } };
+export function errorBody(code: ErrorCode, detail?: Detail) {
+  return {
+    error: { code, message: detail && DETAILS[detail]?.code === code ? DETAILS[detail].message : MESSAGES[code] },
+  };
 }
-export function errorResponse(c: Context, code: ErrorCode) {
-  return c.json(errorBody(code), ERROR_STATUS[code]);
+export function errorResponse(c: Context, code: ErrorCode, detail?: Detail) {
+  return c.json(errorBody(code, detail), ERROR_STATUS[code]);
 }

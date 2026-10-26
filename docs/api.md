@@ -124,11 +124,65 @@ expired sessions are unauthorized. Session deletion revokes both and clears the 
 If a code matches multiple live device pairings, redemption is unauthorized and consumes none;
 the individual secret links remain usable.
 
-`PublishResponse = { reviewId, revision, url, placed, unplaced }`. The URL is HTTP or HTTPS;
+`PublishResponse = { reviewId, revision, url, placed, unplaced, unrendered: FilePath[] }`.
+An omitted `unrendered` field defaults to `[]`.
+HTML doc entries include `assets: FilePath[]`. Each listed path must be an asset in the request
+inside that doc's folder. The HTML source plus its own listed assets must fit
+`htmlDocWithAssetsBytes`; shared assets count for every doc listing them. Asset rows retain
+their first parent, and their blob bytes count once toward the revision byte budget.
+`unrendered` lists Markdown docs whose rendering failed, timed out or exceeded rendered-output budgets
+(at most `filesPerRevision`). Rendered blocks and JSON bytes count every path, including the writeup.
+Docs render in manifest order; once a doc exceeds either budget it and all later Markdown docs
+remain unrendered. A writeup alone exceeding either budget returns 413 `too_large` with
+"The writeup has too many blocks."
+The CLI warns `emend: could not render <path>` for each; the publish still succeeds.
+The URL is `<baseUrl>/r/<reviewId>` (HTTP or HTTPS);
 it is bounded by `pathChars` (4096 characters). `revision` is a positive integer sequence, and
 the placement counts are nonnegative integers.
 
 ### Manifest and topics
+
+`PublishRequest = { reviewId?, reviewKey, repo: { key, name } | null, branch: string | null,
+title, base: commit | null, head: commit | "worktree" | null, topics, writeup, files }`.
+The keys are lowercase 64-character SHA-256 hex; `reviewId` is a UUID. Repo names obey
+`titleChars`, branches `pathChars`, and title, commits and writeup obey the manifest limits.
+There are at most `topicsPerReview` declared topics plus the optional generated Other changes
+topic (importance 100, last); at most `filesPerRevision` files. Base and head are null together.
+`PublishFile = { path, oldPath: FilePath | null, role, status?, topic?, oldBlob: sha256 | null,
+newBlob: sha256 | null, flag: FileFlag | null, parent?: FilePath, assets?: FilePath[] }`. Paths and topic slugs are
+unique within their namespaces (diffs; docs and assets); file and writeup topics must be declared.
+`assets` is required for HTML docs (including an empty array) and must be absent on all other files.
+Assets name a declared HTML doc in `parent`, stay inside its folder and have no hidden or dot
+segments. Allowed extensions are js, mjs, css, png, jpg, jpeg, gif, svg, webp, avif, ico, bmp,
+woff, woff2, ttf, otf, mp4, webm, ogg, mp3, wav and m4a (case insensitive). Shared assets are
+published once, with the first doc as parent. Diff rows always have media type `text/plain`.
+Only assets have parents. Docs and assets have a new blob, no old side and no flag; flagged
+diffs have no blobs. Source filenames never leave the CLI.
+
+`HEAD /api/v1/blobs/:sha256` returns 204 for an owner's blob, otherwise 404 `not_found`.
+`PUT` takes raw bytes with a required nonnegative integer `Content-Length`, at most
+`htmlDocBytes`, and returns 204. Missing/malformed length or hash is 400 `invalid_request`;
+hash or actual length mismatch is 400 `blob_mismatch`; excess size is 413 `too_large`.
+Content-Length is checked first; credentials and scope are checked before reading any body bytes.
+Blob lookups never expose another owner's content.
+
+Publish resolves an explicit id only for the authenticated owner and origin instance, otherwise
+404 `unknown_review`. A moved review returns 409 `review_moved`. Without an id the server
+atomically finds or creates by owner, token instance and review key. Missing referenced blobs
+return 400 `blob_missing`. Each successful publish adds a revision, reopens the review, and
+reports placement counts for that revision. Media types and role size limits are server enforced.
+Rendering and placement run in a worker: failed or timed-out Markdown docs have no rendered
+blocks; failed writeups return 400 `invalid_request` with "The writeup could not be rendered."
+A writeup exceeding 10 seconds returns 413 `too_large` with "The writeup rendering timed out."
+At most two publishes compute at once per server process. Further publishes wait up to 30 seconds,
+then receive 429 `rate_limited`, "The server is busy publishing; try again." Conflicting attempts
+reuse rendered results and retry snapshot/placement at most three times. A disconnected request
+is abandoned before commit and its workers are stopped. The CLI publish deadline is 30 seconds
+for a slot, plus 15 seconds, plus 10 seconds per writeup/Markdown doc, plus three 30-second
+placement attempts. A timeout reports "the server did not answer in time; nothing was published".
+Placement exceeding 30 seconds returns 413 `too_large` with "The placement timed out."
+Other placement failures return 400 `invalid_request` with "The comments could not be placed."
+These failures never leave a partial revision.
 
 `PublishManifest = { version: 1, title, base?, head?, topics: TopicMeta[], files, writeup }`.
 `base` and `head` appear together or neither appears. Commits are fully resolved lowercase hex
@@ -146,6 +200,8 @@ Plan task 1.6 implements and tests these checks. Assets are collected during pub
 
 The general `FileRole` vocabulary is `diff`, `doc`, `asset`; `FileStatus` is `added`, `modified`,
 `deleted`, `renamed`, `mode-changed`; `FileFlag` is `binary` or `oversized`.
+`FilePath` also rejects a segment equal to `.git` or `git~1` after lowercasing and removing
+trailing dots/spaces, and rejects HFS-ignorable code points U+206A–U+206F.
 
 `TopicMeta = { slug, title, importance, summary, door?, blastRadius? }`. A slug matches
 `^[a-z0-9][a-z0-9-]{0,63}$`. Importance is a number from 0 through 100; lower sorts first.
@@ -154,7 +210,7 @@ and note must contain non-whitespace text. The fallback is `{ slug: "other", tit
 declaring that slug in a manifest fails with `topic slug other is reserved`. It remains a valid
 target for automatically grouped changes.
 
-Topic slugs and file paths must be unique within a manifest. A file's topic and every writeup topic
+Topic slugs and file paths within each role must be unique within a manifest. A file's topic and every writeup topic
 key must name a declared topic. A topic may omit its writeup entry. Titles must contain non-whitespace
 text. There are at most `topicsPerReview` declared topics and writeup topic keys. Summaries,
 blast-radius scopes and notes obey `summaryChars`, `blastScopeChars` and `blastNoteChars`.
@@ -193,7 +249,9 @@ No text is truncated: placement on later revisions requires the exact original t
 
 Published and target paths are relative, slash-separated paths. Empty components, `.` and `..`
 components, absolute paths (including drive prefixes), backslashes, NUL, ASCII controls and DEL
-are rejected. Paths must be well-formed UTF-16, with at most `pathChars` characters overall and
+are rejected, as are C1 controls U+0080–U+009F, bidi controls U+061C, U+200E–U+200F,
+U+202A–U+202E, U+2066–U+2069 and zero-width U+200B–U+200D, U+2060, U+FEFF.
+Paths must be well-formed UTF-16, with at most `pathChars` characters overall and
 `pathSegmentChars` characters per slash-separated segment. These schemas do not perform
 filesystem access.
 
@@ -281,6 +339,9 @@ limit with `413 too_large` before parsing. Upload content also has the role's by
 | `htmlDocBytes` | 8388608 bytes |
 | `assetBytes` | 8388608 bytes per asset |
 | `htmlDocWithAssetsBytes` | 20971520 bytes combined |
+| `revisionBytes` | 268435456 bytes for writeup source JSON and unique referenced blobs; checked before reading content |
+| `blocksPerRevision` | 100000 rendered blocks across every path, including the writeup |
+| `renderedBytesPerRevision` | 268435456 rendered JSON bytes across every path, including the writeup |
 | `filesPerRevision` | 10000 files |
 | `pathChars` | 4096 characters per path or source; also per publish URL or block id |
 | `pathSegmentChars` | 255 characters per published path segment |
@@ -303,7 +364,9 @@ limit with `413 too_large` before parsing. Upload content also has the role's by
 | `publishJsonBytes` | 8388608 bytes per publish JSON request body |
 | `requestJsonBytes` | 1048576 bytes per other JSON request body |
 
-Binary and oversized diff sides are listed as not shown; publishing still succeeds.
+Binary and oversized diff sides are listed as not shown; publishing still succeeds. The CLI
+allocates the revision budget in topic importance order, with Other changes last. Diff sides
+that exceed the remaining budget are listed as oversized without uploading their blobs.
 
 ## Identifiers and secrets
 
@@ -356,6 +419,7 @@ All errors use `ErrorBody`, with no stack traces or another owner's ids:
 | `comment_frozen` | 409 | An edit or deletion targets a user comment already bound to a Send. |
 | `unsent_comments` | 409 | An Approve is attempted while unsent comments remain. |
 | `review_moved` | 409 | A mutation targets a local review moved to a hub. |
+| `publish_conflict` | 409 | The revision or thread set changed during publish computation on three attempts; retry publishing. |
 | `too_large` | 413 | A JSON request body or uploaded content exceeds its byte limit; reject before parsing. |
 | `client_outdated` | 426 | The CLI version is below the minimum supported version. |
 | `rate_limited` | 429 | Pairing code entry is locked for 10 minutes after five wrong attempts. |

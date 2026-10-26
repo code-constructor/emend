@@ -7,6 +7,7 @@ export type NewReview = Pick<
   "originInstanceId" | "reviewKey" | "repoId" | "branch" | "title"
 >;
 export type NewRevision = Pick<typeof revisions.$inferInsert, "base" | "head" | "contentKey">;
+export class DuplicateReviewKeyError extends Error {}
 
 export function findReviewByKey(ownerId: string, db: Db, originInstanceId: string, reviewKey: string) {
   return db.query(
@@ -46,8 +47,10 @@ export function createReview(ownerId: string, db: Db, input: NewReview) {
         branch: input.branch,
         title: input.title,
       })
+      .onConflictDoNothing({ target: [reviews.ownerId, reviews.originInstanceId, reviews.reviewKey] })
       .returning();
-    return review ?? null;
+    if (!review) throw new DuplicateReviewKeyError();
+    return review;
   });
 }
 

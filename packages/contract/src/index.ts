@@ -6,6 +6,7 @@ export * from "./errors.ts";
 export * from "./limits.ts";
 export * from "./manifest.ts";
 export * from "./placement.ts";
+export * from "./publish.ts";
 export * from "./review.ts";
 export * from "./send.ts";
 export * from "./target.ts";

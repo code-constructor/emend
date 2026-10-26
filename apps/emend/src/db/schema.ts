@@ -273,6 +273,7 @@ export const placements = sqliteTable(
     revisionId: text("revision_id").notNull(),
     status: text("status", { enum: ["placed", "unplaced"] }).notNull(),
     location: text("location", { mode: "json" }).$type<PlacementLocation>(),
+    carried: text("carried", { mode: "json" }).$type<{ path: string | null; side?: "old" | "new" }>(),
     reason: text("reason", { enum: enumValues(UnplacedReason.options) }),
   },
   (t) => [

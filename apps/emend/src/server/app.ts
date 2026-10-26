@@ -13,8 +13,11 @@ import { isApiPath, responseHeaders } from "./http/headers.ts";
 import { hostGuard } from "./http/host-guard.ts";
 import { originGuard } from "./http/origin-guard.ts";
 import { appPage } from "./http/pages.ts";
+import type { Executor } from "./publish/work.ts";
+import { blobRoutes } from "./routes/blobs.ts";
 import { capabilitiesRoutes } from "./routes/capabilities.ts";
 import { pairingRoutes } from "./routes/pairings.ts";
+import { publishRoutes } from "./routes/publish.ts";
 import { sessionRoutes } from "./routes/session.ts";
 
 export interface AppDeps {
@@ -22,6 +25,7 @@ export interface AppDeps {
   blobs: BlobStore;
   instance: Instance;
   now: () => number;
+  publishExecutor?: Executor;
   config: {
     serverKey: string;
     allowedHosts: string[];
@@ -71,7 +75,7 @@ export function createApp(deps: AppDeps) {
   const app = new Hono<AppEnv>({ strict: true });
   app.onError((error, c) => {
     responseHeaders(c);
-    if (error instanceof ApiError) return errorResponse(c, error.code);
+    if (error instanceof ApiError) return errorResponse(c, error.code, error.detail);
     console.error("emend: internal server error");
     return errorResponse(c, "internal");
   });
@@ -96,6 +100,7 @@ export function createApp(deps: AppDeps) {
           ? LIMITS.publicJsonBytes
           : LIMITS.requestJsonBytes;
     if (json) checkContentLength(c, limit);
+    if (c.req.method === "PUT" && c.req.path.startsWith("/api/v1/blobs/")) checkContentLength(c, LIMITS.htmlDocBytes);
     if (endpoint?.scope !== "public") {
       const authorization = c.req.header("Authorization");
       let principal = authorization !== undefined ? await verifyBearer(deps.db, authorization, deps.now()) : null;
@@ -118,6 +123,8 @@ export function createApp(deps: AppDeps) {
   capabilitiesRoutes(app, deps.config.serverKey);
   pairingRoutes(app, deps);
   sessionRoutes(app, deps);
+  blobRoutes(app, deps);
+  publishRoutes(app, deps);
   app.get("*", (c) => {
     if (isApiPath(c.req.path) || c.req.path.startsWith("/content/")) throw new ApiError("not_found");
     return appPage(c, deps.config.webRoot);

@@ -48,6 +48,12 @@ const go = {
 };
 
 describe("path ceilings and encoding", () => {
+  test.each([".git/config", ".GIT/x", ".git./x", "git~1/x", ".g\u206ait/x", "a/.GiT. /x", "GIT~1. /x"])(
+    "rejects repository metadata path %j",
+    (path) => {
+      expect(FilePath.safeParse(path).success).toBe(false);
+    },
+  );
   test.each([
     { length: 4096, accepted: true },
     { length: 4097, accepted: false },
@@ -257,6 +263,17 @@ describe("handoff budgets", () => {
 });
 
 describe("response text budgets", () => {
+  test("publish defaults an omitted unrendered list", () => {
+    expect(
+      PublishResponse.parse({
+        reviewId: go.reviewId,
+        revision: 1,
+        url: "http://127.0.0.1:3636/r/synthetic",
+        placed: 0,
+        unplaced: 0,
+      }).unrendered,
+    ).toEqual([]);
+  });
   test.each([
     { field: "version", size: 64, accepted: true },
     { field: "version", size: 65, accepted: false },
@@ -291,9 +308,10 @@ describe("response text budgets", () => {
   ])("bounds remaining URL and block-id strings at $length characters (accepts=$accepted)", ({ length, accepted }) => {
     const prefix = "http://127.0.0.1:3636/";
     const url = prefix + "a".repeat(length - prefix.length);
-    expect(PublishResponse.safeParse({ reviewId: go.reviewId, revision: 1, url, placed: 0, unplaced: 0 }).success).toBe(
-      accepted,
-    );
+    expect(
+      PublishResponse.safeParse({ reviewId: go.reviewId, revision: 1, url, placed: 0, unplaced: 0, unrendered: [] })
+        .success,
+    ).toBe(accepted);
     const blockPrefix = "overview-1234abcd-";
     expect(BlockId.safeParse(blockPrefix + "2".repeat(length - blockPrefix.length)).success).toBe(accepted);
   });

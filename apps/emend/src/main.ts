@@ -12,6 +12,19 @@ export async function run(argv: string[], io: Io): Promise<number> {
     io.stdout(`emend ${VERSION}\n`);
     return 0;
   }
+  if (argv[0] === "publish") {
+    const { publishCommand } = await import("./cli/commands/publish.ts");
+    const { CliError, CliApiError } = await import("./cli/http.ts");
+    try {
+      await publishCommand(defaultStateDir(io.env), argv.slice(1), io);
+      return 0;
+    } catch (error) {
+      io.stderr(
+        `emend: ${error instanceof CliApiError ? error.code : error instanceof CliError ? error.message : "Could not publish the review."}\n`,
+      );
+      return 1;
+    }
+  }
   if (argv.length && argv[0] !== "serve") {
     const command = /^[a-z][a-z0-9-]{0,40}$/i.test(argv[0] ?? "") ? argv[0] : "(invalid)";
     io.stderr(`emend: unknown command ${command}\n`);

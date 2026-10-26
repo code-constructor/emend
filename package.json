@@ -9,7 +9,7 @@
   "scripts": {
     "lint": "biome check .",
     "typecheck": "tsc -b",
-    "test": "vitest run",
+    "test": "vitest run && EMEND_TIMING_STRICT=1 vitest run --project apps/emend apps/emend/src/server/publish/commit.test.ts",
     "build": "pnpm --dir apps/web build && pnpm --dir apps/emend build",
     "check:budget": "node scripts/check-budget.ts",
     "check:sync": "node scripts/check-sync.ts",

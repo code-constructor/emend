@@ -25,7 +25,16 @@ export const FilePath = z
       !/^[a-z]:/i.test(path) &&
       !path.includes("\\") &&
       !Array.from(path).some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127) &&
-      path.split("/").every((part) => part !== "" && part !== "." && part !== ".."),
+      !/[\u0080-\u009f\u061c\u200b-\u200f\u202a-\u202e\u2060\u2066-\u206f\ufeff]/u.test(path) &&
+      path
+        .split("/")
+        .every(
+          (part) =>
+            part !== "" &&
+            part !== "." &&
+            part !== ".." &&
+            ![".git", "git~1"].includes(part.toLowerCase().replace(/[. ]+$/, "")),
+        ),
     "expected a relative path without traversal or control characters",
   );
 export type FilePath = z.infer<typeof FilePath>;

@@ -1,0 +1,254 @@
+import { createHash } from "node:crypto";
+import { join } from "node:path";
+import { LIMITS } from "@emend/contract";
+import { afterEach, beforeEach, expect, test } from "vitest";
+import { testDb } from "../../db/test-support.ts";
+import { BlobStore } from "../../store/blobs.ts";
+import { createApp } from "../app.ts";
+import { createToken } from "../auth/tokens.ts";
+import { executeWork } from "../publish/work.ts";
+
+let f: Awaited<ReturnType<typeof testDb>>;
+let app: ReturnType<typeof createApp>;
+let agent: string;
+let foreign: string;
+const origin = "http://127.0.0.1:3636";
+const sha = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+beforeEach(async () => {
+  f = await testDb();
+  agent = (await createToken(f.db, f.ownerId, "agent", { instanceId: f.instanceId })).secret;
+  foreign = (await createToken(f.db, f.otherOwnerId, "agent", { instanceId: f.instanceId })).secret;
+  app = createApp({
+    db: f.db,
+    blobs: new BlobStore(f.db, join(f.dir, "state")),
+    instance: { id: f.instanceId, name: "Synthetic" },
+    now: Date.now,
+    publishExecutor: executeWork,
+    config: {
+      baseUrl: origin,
+      allowedHosts: ["127.0.0.1:3636"],
+      appOrigins: [origin],
+      secureCookies: false,
+      webRoot: f.dir,
+      serverKey: "A".repeat(43),
+    },
+  });
+});
+afterEach(async () => {
+  await f.cleanup();
+});
+function request(
+  path: string,
+  method: string,
+  body?: RequestInit["body"],
+  headers: Record<string, string> = {},
+  token = agent,
+) {
+  return app.request(`${origin}/api/v1${path}`, {
+    method,
+    headers: { Host: "127.0.0.1:3636", Authorization: `Bearer ${token}`, ...headers },
+    body,
+  });
+}
+test("blob upload checks hash and actual size; HEAD is owner scoped; publish uses the stored blob", async () => {
+  const bytes = new TextEncoder().encode("# Plan");
+  const hash = sha(bytes);
+  const path = `/blobs/${hash}`;
+  expect((await request(path, "HEAD")).status).toBe(404);
+  expect((await request(path, "PUT", bytes, { "Content-Length": String(bytes.length) })).status).toBe(204);
+  expect((await request(path, "HEAD")).status).toBe(204);
+  expect((await request(path, "HEAD", undefined, {}, foreign)).status).toBe(404);
+  for (const [body, length] of [
+    [new Uint8Array([1, 2]), "2"],
+    [bytes, "99"],
+    [bytes, "1"],
+  ] as const) {
+    const response = await request(`/blobs/${"a".repeat(64)}`, "PUT", body, { "Content-Length": length });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: { code: "blob_mismatch" } });
+  }
+  const input = {
+    reviewKey: "b".repeat(64),
+    repo: null,
+    branch: null,
+    title: "Synthetic",
+    base: null,
+    head: null,
+    topics: [],
+    writeup: { overview: "hello", tldr: "summary", decisions: null, topics: {} },
+    files: [{ path: "plan.md", role: "doc", oldPath: null, oldBlob: null, newBlob: hash, flag: null }],
+  };
+  const response = await request("/publish", "POST", JSON.stringify(input), { "Content-Type": "application/json" });
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ revision: 1, placed: 0, unplaced: 0 });
+});
+test("raw upload validates length and hash and authenticates before pulling bytes", async () => {
+  for (const length of [undefined, "-1", "1.5", "bad"]) {
+    const response = await request(
+      `/blobs/${"a".repeat(64)}`,
+      "PUT",
+      undefined,
+      length === undefined ? {} : { "Content-Length": length },
+    );
+    expect(response.status).toBe(400);
+  }
+  expect((await request("/blobs/bad", "HEAD")).status).toBe(400);
+  expect(
+    (
+      await request(
+        `/blobs/${"a".repeat(64)}`,
+        "PUT",
+        undefined,
+        { "Content-Length": String(LIMITS.htmlDocBytes + 1) },
+        "invalid",
+      )
+    ).status,
+  ).toBe(413);
+  let pulled = false;
+  const body = new ReadableStream(
+    {
+      pull(controller) {
+        pulled = true;
+        controller.enqueue(new Uint8Array([0]));
+        controller.close();
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  const raw = new Request(`${origin}/api/v1/blobs/${"a".repeat(64)}`, {
+    method: "PUT",
+    headers: { Host: "127.0.0.1:3636", "Content-Length": "1" },
+    body,
+    duplex: "half",
+  } as RequestInit);
+  expect((await app.request(raw)).status).toBe(401);
+  expect(pulled).toBe(false);
+});
+
+test("shared assets count against each HTML doc's bundle limit", async () => {
+  const store = new BlobStore(f.db, join(f.dir, "state"));
+  const small = await store.put(f.ownerId, Buffer.alloc(1024, 32), "text/html");
+  const large = await store.put(f.ownerId, Buffer.alloc(8 * 1024 ** 2, 32), "text/html");
+  const a = await store.put(f.ownerId, Buffer.alloc(8 * 1024 ** 2, 65), "image/png");
+  const b = await store.put(f.ownerId, Buffer.alloc(8 * 1024 ** 2, 66), "image/png");
+  const base = { oldPath: null, oldBlob: null, flag: null };
+  const response = await request(
+    "/publish",
+    "POST",
+    JSON.stringify({
+      reviewKey: "a".repeat(64),
+      repo: null,
+      branch: null,
+      title: "Synthetic",
+      base: null,
+      head: null,
+      topics: [],
+      writeup: { overview: "", tldr: "", decisions: null, topics: {} },
+      files: [
+        { ...base, path: "a.html", role: "doc", newBlob: small, assets: ["a.png", "b.png"] },
+        { ...base, path: "b.html", role: "doc", newBlob: large, assets: ["a.png", "b.png"] },
+        { ...base, path: "a.png", role: "asset", newBlob: a, parent: "a.html" },
+        { ...base, path: "b.png", role: "asset", newBlob: b, parent: "a.html" },
+      ],
+    }),
+    { "Content-Type": "application/json" },
+  );
+  expect(response.status).toBe(413);
+  expect(await response.json()).toMatchObject({ error: { code: "too_large" } });
+});
+
+test("slow doc computation leaves capabilities and authenticated blob requests responsive", async () => {
+  const started = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const store = new BlobStore(f.db, join(f.dir, "slow-state"));
+  const hash = await store.put(f.ownerId, Buffer.from("# Slow"), "text/markdown");
+  app = createApp({
+    db: f.db,
+    blobs: store,
+    instance: { id: f.instanceId, name: "Synthetic" },
+    now: Date.now,
+    publishExecutor: async (work) => {
+      if (work.kind === "doc") {
+        started.resolve();
+        await release.promise;
+      }
+      return executeWork(work);
+    },
+    config: {
+      baseUrl: origin,
+      allowedHosts: ["127.0.0.1:3636"],
+      appOrigins: [origin],
+      secureCookies: false,
+      webRoot: f.dir,
+      serverKey: "A".repeat(43),
+    },
+  });
+  const body = {
+    reviewKey: "d".repeat(64),
+    repo: null,
+    branch: null,
+    title: "Slow",
+    base: null,
+    head: null,
+    topics: [],
+    writeup: { overview: "", tldr: "", decisions: null, topics: {} },
+    files: [{ path: "slow.md", role: "doc", oldPath: null, oldBlob: null, newBlob: hash, flag: null }],
+  };
+  const publishing = request("/publish", "POST", JSON.stringify(body), { "Content-Type": "application/json" });
+  await started.promise;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("database blocked")), 200);
+    });
+    const responses = await Promise.race([
+      Promise.all([request("/capabilities", "GET"), request(`/blobs/${hash}`, "HEAD")]),
+      deadline,
+    ]);
+    expect(responses.map((r) => r.status)).toEqual([200, 204]);
+  } finally {
+    clearTimeout(timer);
+    release.resolve();
+    expect((await publishing).status).toBe(200);
+  }
+});
+
+test.each([false, true])("writeup failure responses use fixed public stage messages (timeout=%s)", async (timeout) => {
+  const { WorkTimeout } = await import("../publish/executor.ts");
+  app = createApp({
+    db: f.db,
+    blobs: new BlobStore(f.db, join(f.dir, "error-state")),
+    instance: { id: f.instanceId, name: "Synthetic" },
+    now: Date.now,
+    publishExecutor: async () => {
+      throw timeout ? new WorkTimeout() : new Error("private renderer details");
+    },
+    config: {
+      baseUrl: origin,
+      allowedHosts: ["127.0.0.1:3636"],
+      appOrigins: [origin],
+      secureCookies: false,
+      webRoot: f.dir,
+      serverKey: "A".repeat(43),
+    },
+  });
+  const body = {
+    reviewKey: "e".repeat(64),
+    repo: null,
+    branch: null,
+    title: "Synthetic",
+    base: null,
+    head: null,
+    topics: [],
+    files: [],
+    writeup: { overview: "", tldr: "", decisions: null, topics: {} },
+  };
+  const response = await request("/publish", "POST", JSON.stringify(body), { "Content-Type": "application/json" });
+  expect(response.status).toBe(timeout ? 413 : 400);
+  expect(await response.json()).toEqual({
+    error: {
+      code: timeout ? "too_large" : "invalid_request",
+      message: timeout ? "The writeup rendering timed out." : "The writeup could not be rendered.",
+    },
+  });
+});

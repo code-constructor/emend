@@ -19,6 +19,7 @@ export const ERROR_STATUS = {
   comment_frozen: 409,
   unsent_comments: 409,
   review_moved: 409,
+  publish_conflict: 409,
   too_large: 413,
   client_outdated: 426,
   rate_limited: 429,
