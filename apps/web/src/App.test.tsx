@@ -66,6 +66,9 @@ function resize(widthPx: number) {
   }
 }
 let newest = 1;
+const initialUrl = window.location.href;
+const signInInstructions =
+  "Run emend in a terminal on the machine that runs emend. It opens this page signed in, or prints a one-time link you can open here.";
 let fetchMock: ReturnType<typeof vi.fn<(path: string, init?: RequestInit) => Promise<Response>>>;
 let client: QueryClient;
 function mount(path = "/") {
@@ -74,6 +77,7 @@ function mount(path = "/") {
   return { ...result, history };
 }
 beforeEach(() => {
+  (window as unknown as Window).happyDOM.setURL(initialUrl);
   width = 1280;
   mediaQueries.clear();
   newest = 1;
@@ -118,27 +122,87 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-test("pair consumes the startup secret once, clears it, and lands on the inbox", async () => {
-  const secret = `emp_${"a".repeat(43)}`;
-  rememberPairingSecret(secret);
-  fetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
-    expect(location.hash).toBe("");
-    if (path === "/api/v1/session") {
-      expect(JSON.parse(String(init?.body))).toEqual({ secret });
-      return new Response(null, { status: 204 });
-    }
-    return Response.json({ items: [] });
-  });
-  const { history } = mount("/pair");
-  await screen.findByRole("heading", { name: "Inbox" });
-  expect(takePairingSecret()).toBeUndefined();
-  expect(history.location.pathname).toBe("/");
-  expect(fetchMock.mock.calls.filter(([path]) => path === "/api/v1/session")).toHaveLength(1);
-});
+test.each(["127.0.0.1", "localhost", "[::1]", "::1"])(
+  "loopback %s shows sign-in instructions without a code form",
+  async (host) => {
+    (window as unknown as Window).happyDOM.setURL(`http://${host === "::1" ? "[::1]" : host}:3636/pair`);
+    if (host === "::1") vi.spyOn(window.location, "hostname", "get").mockReturnValue(host);
+    mount("/pair");
+    await screen.findByRole("heading", { level: 1, name: "Sign in" });
+    const instructions = screen.getByText(
+      (_, element) => element?.tagName === "P" && element.textContent === signInInstructions,
+    );
+    expect(instructions.querySelector("code")?.textContent).toBe("emend");
+    expect(screen.getByText("emend", { selector: "p" })).toBeTruthy();
+    expect(screen.queryByLabelText("Pairing code")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Pair" })).toBeNull();
+    expect(screen.queryByText(/The app on your home screen/)).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  },
+);
+
+test.each(["100.64.0.1", "127.0.0.2", "localhost.example"])(
+  "remote host %s keeps the pairing code form",
+  async (host) => {
+    (window as unknown as Window).happyDOM.setURL(`http://${host}:3636/pair`);
+    mount("/pair");
+    await screen.findByRole("heading", { level: 1, name: "Pair a device" });
+    expect(screen.getByLabelText("Pairing code")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Pair" })).toBeTruthy();
+    expect(
+      screen.getByText("The app on your home screen pairs once more with a code, even after Safari has paired."),
+    ).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Sign in" })).toBeNull();
+  },
+);
+
+test.each(["127.0.0.1", "localhost", "[::1]"])(
+  "pair on %s consumes the startup secret once, clears it, and lands on the inbox",
+  async (host) => {
+    (window as unknown as Window).happyDOM.setURL(`http://${host}:3636/pair`);
+    const secret = `emp_${"a".repeat(43)}`;
+    rememberPairingSecret(secret);
+    fetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      expect(location.hash).toBe("");
+      if (path === "/api/v1/session") {
+        expect(JSON.parse(String(init?.body))).toEqual({ secret });
+        return new Response(null, { status: 204 });
+      }
+      return Response.json({ items: [] });
+    });
+    const { history } = mount("/pair");
+    await screen.findByRole("heading", { name: "Inbox" });
+    expect(takePairingSecret()).toBeUndefined();
+    expect(history.location.pathname).toBe("/");
+    expect(fetchMock.mock.calls.filter(([path]) => path === "/api/v1/session")).toHaveLength(1);
+  },
+);
+test.each([
+  [401, "That code did not work. Check it on the hub and try again."],
+  [429, "Too many wrong codes. Wait 10 minutes, then try again."],
+  [500, "Could not pair. Check your connection and try again."],
+])(
+  "loopback redemption failure %s keeps the error and sign-in instructions without a code form",
+  async (status, message) => {
+    (window as unknown as Window).happyDOM.setURL("http://127.0.0.1:3636/pair");
+    rememberPairingSecret(`emp_${"f".repeat(43)}`);
+    fetchMock.mockResolvedValue(Response.json({ error: { code: "failed", message: "Failed" } }, { status }));
+    mount("/pair");
+    expect((await screen.findByRole("alert")).textContent).toBe(message);
+    expect(screen.getByRole("heading", { name: "Sign in" })).toBeTruthy();
+    expect(
+      screen.getByText((_, element) => element?.tagName === "P" && element.textContent === signInInstructions),
+    ).toBeTruthy();
+    expect(screen.queryByLabelText("Pairing code")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Pair" })).toBeNull();
+    expect(screen.queryByText(/The app on your home screen/)).toBeNull();
+  },
+);
 test.each([
   [401, "That code did not work. Check it on the hub and try again."],
   [429, "Too many wrong codes. Wait 10 minutes, then try again."],
 ])("pair shows the exact error for status %s", async (status, message) => {
+  (window as unknown as Window).happyDOM.setURL("http://100.64.0.1:3636/pair");
   fetchMock.mockResolvedValue(
     Response.json({ error: { code: status === 401 ? "unauthorized" : "rate_limited", message: "Failed" } }, { status }),
   );

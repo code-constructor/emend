@@ -6,6 +6,7 @@ import { Button } from "../components/ui/Button.tsx";
 import { subscribePairingSecret, takePairingSecret } from "../lib/pairing-secret.ts";
 
 export function PairPage() {
+  const loopback = ["127.0.0.1", "localhost", "[::1]", "::1"].includes(window.location.hostname);
   const navigate = useNavigate();
   const client = useQueryClient();
   const [code, setCode] = useState("");
@@ -48,47 +49,69 @@ export function PairPage() {
   return (
     <main className="mx-auto flex min-h-dvh max-w-md flex-col justify-center px-6 py-12">
       <p className="mb-8 text-lg font-semibold tracking-tight">emend</p>
-      <h1 className="text-2xl font-semibold tracking-tight">Pair a device</h1>
-      <p className="mt-3 text-sm leading-6 text-neutral-600 dark:text-neutral-400">
-        The app on your home screen pairs once more with a code, even after Safari has paired.
-      </p>
-      <form
-        className="mt-6 space-y-4"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (!busy) void redeem({ code: code.trim() });
-        }}
-      >
-        <label className="block text-sm font-medium" htmlFor="pairing-code">
-          Pairing code
-        </label>
-        <input
-          id="pairing-code"
-          value={code}
-          onChange={(event) => setCode(event.target.value)}
-          autoComplete="one-time-code"
-          autoCapitalize="characters"
-          spellCheck={false}
-          required
-          maxLength={9}
-          disabled={busy}
-          placeholder="XXXX-XXXX"
-          className="min-h-12 w-full rounded-md border border-neutral-300 bg-transparent px-3 font-mono text-lg focus-visible:outline-blue-600 dark:border-neutral-700"
-        />
-        <Button
-          type="submit"
-          disabled={busy}
-          className="w-full border-blue-600 bg-blue-600 text-white hover:bg-blue-700 dark:border-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700"
-        >
-          Pair
-        </Button>
-        {busy && <p role="status">Pairing…</p>}
-        {error && (
-          <p role="alert" className="text-sm">
-            {error}
+      <h1 className="text-2xl font-semibold tracking-tight">{loopback ? "Sign in" : "Pair a device"}</h1>
+      {loopback ? (
+        <>
+          {busy ? (
+            <p role="status" className="mt-6">
+              Pairing…
+            </p>
+          ) : (
+            <p className="mt-3 text-sm leading-6 text-neutral-600 dark:text-neutral-400">
+              Run <code>emend</code> in a terminal on the machine that runs emend. It opens this page signed in, or
+              prints a one-time link you can open here.
+            </p>
+          )}
+          {error && (
+            <p role="alert" className="mt-6 text-sm">
+              {error}
+            </p>
+          )}
+        </>
+      ) : (
+        <>
+          <p className="mt-3 text-sm leading-6 text-neutral-600 dark:text-neutral-400">
+            The app on your home screen pairs once more with a code, even after Safari has paired.
           </p>
-        )}
-      </form>
+          <form
+            className="mt-6 space-y-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!busy) void redeem({ code: code.trim() });
+            }}
+          >
+            <label className="block text-sm font-medium" htmlFor="pairing-code">
+              Pairing code
+            </label>
+            <input
+              id="pairing-code"
+              value={code}
+              onChange={(event) => setCode(event.target.value)}
+              autoComplete="one-time-code"
+              autoCapitalize="characters"
+              spellCheck={false}
+              required
+              maxLength={9}
+              disabled={busy}
+              placeholder="XXXX-XXXX"
+              className="min-h-12 w-full rounded-md border border-neutral-300 bg-transparent px-3 font-mono text-lg focus-visible:outline-blue-600 dark:border-neutral-700"
+            />
+            <Button
+              type="submit"
+              disabled={busy}
+              className="w-full border-blue-600 bg-blue-600 text-white hover:bg-blue-700 dark:border-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700"
+            >
+              Pair
+            </Button>
+            {busy && <p role="status">Pairing…</p>}
+            {error && (
+              <p role="alert" className="text-sm">
+                {error}
+              </p>
+            )}
+          </form>
+        </>
+      )}
     </main>
   );
 }

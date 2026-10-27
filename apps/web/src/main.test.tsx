@@ -101,6 +101,7 @@ test.each(["/pair", "/pair/", "/Pair"])(
     await boot();
     expect(location.href).not.toContain(secret);
     await screen.findByRole("heading", { name: "Inbox" });
+    expect(location.pathname).toBe("/");
     expect(routers.initialHashes.length).toBeGreaterThan(0);
     expectRouterHasNoSecret(secret);
     expect(replaced).toHaveBeenCalledWith(null, "", "/pair");
@@ -140,12 +141,15 @@ test.each([
   });
   vi.stubGlobal("fetch", fetch);
   await boot();
-  await screen.findByRole("heading", { name: "Pair a device" });
+  await screen.findByRole("heading", { name: "Sign in" });
   await fragment(`${path}#${secret}`, event);
   expect(location.hash).toBe("");
   expect(replaced).toHaveBeenCalledWith(null, "", "/pair");
   expectRouterHasNoSecret(secret);
   await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+  expect(screen.getByRole("status").textContent).toBe("Pairing…");
+  expect(screen.queryByLabelText("Pairing code")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Pair" })).toBeNull();
   const { takePairingSecret } = await import("./lib/pairing-secret.ts");
   expect(takePairingSecret()).toBeUndefined();
   // A repeated arrival while redemption is pending must also be stripped without another POST.
@@ -178,7 +182,7 @@ test("a failed secret is not posted again, and a different arriving secret can p
   });
   vi.stubGlobal("fetch", fetch);
   await boot();
-  await screen.findByRole("heading", { name: "Pair a device" });
+  await screen.findByRole("heading", { name: "Sign in" });
   await fragment(`/pair#${first}`, "hashchange");
   await screen.findByRole("alert");
   await fragment(`/pair#${first}`, "popstate");
