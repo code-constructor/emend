@@ -109,6 +109,18 @@ a machine token reaches only reviews from its own instance.
 
 ## Schemas
 
+### Diff file sides
+
+`GET /api/v1/files/:fileId/old` and `/new` return `200` with the stored bytes
+unchanged, `Content-Type: text/plain; charset=utf-8`, the app response headers
+(including `X-Content-Type-Options: nosniff`), `Cache-Control: no-store`, and
+`Cross-Origin-Resource-Policy: same-origin`. Only role-`diff` files are served.
+An unknown or foreign file, a doc or asset, a flagged file, or an absent side
+(`hasOld`/`hasNew` false) returns `404 not_found`. A missing stored blob also
+returns `404 not_found`. `HEAD` applies the same authorization and headers, with
+no response body. File and blob lookups filter the authenticated owner's id;
+the number of queries is bounded independently of revision size.
+
 ### Review read views
 
 `ReviewState = "open" | "approved" | "settled"`.

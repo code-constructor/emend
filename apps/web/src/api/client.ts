@@ -38,3 +38,7 @@ export async function pair(input: SessionRequest) {
     false,
   );
 }
+
+export async function getText(path: string, signal?: AbortSignal): Promise<string> {
+  return (await request(path, { signal })).text();
+}

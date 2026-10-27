@@ -4,6 +4,8 @@ import { useLocation, useNavigate, useParams, useSearch } from "@tanstack/react-
 import { type MouseEvent, useEffect, useRef, useState } from "react";
 import { placeSpan } from "../../../../packages/core/src/place/span.ts";
 import { reviewQuery, revisionQuery } from "../api/queries.ts";
+import { LazyDiffPane } from "../components/diff/LazyDiffPane.tsx";
+import { isDiffTarget } from "../components/diff/targets.ts";
 import { OriginBadge } from "../components/inbox/OriginBadge.tsx";
 import { AgentStatus } from "../components/inbox/ReviewRow.tsx";
 import { AppFrame } from "../components/layout/AppFrame.tsx";
@@ -15,7 +17,8 @@ import { SendBar } from "../components/send/SendBar.tsx";
 import { Composer } from "../components/threads/Composer.tsx";
 import { ThreadList } from "../components/threads/ThreadList.tsx";
 import { Button } from "../components/ui/Button.tsx";
-import type { SavedDraft } from "../lib/drafts.ts";
+import { claimDraft } from "../lib/composer-owner.ts";
+import { draftKey, type SavedDraft } from "../lib/drafts.ts";
 import { useReviewEvents } from "../lib/events.ts";
 import { useInboxCollapsed, useLayout } from "../lib/layout.ts";
 import { type ReviewSearch, validateReviewSearch } from "../router.tsx";
@@ -88,37 +91,6 @@ function readingIntent(search: ReviewSearch, hash: string, seq: number) {
     reply,
   };
 }
-function Diff({ revision }: { revision: RevisionView }) {
-  const files = revision.files.filter((file) => file.role === "diff").toSorted((a, b) => a.order - b.order);
-  const topics = revision.topics.map((topic) => ({ slug: topic.slug, title: topic.title }));
-  if (files.some((file) => file.topic === null)) topics.push({ slug: "", title: "Other changes" });
-  return (
-    <div className="p-5">
-      <h2 className="mb-5 font-semibold">Diff</h2>
-      {files.length === 0 && <p className="text-sm text-neutral-500 dark:text-neutral-400">No changed files.</p>}
-      {topics.map((topic) => {
-        const group = files.filter((file) => (file.topic ?? "") === topic.slug);
-        return (
-          group.length > 0 && (
-            <section key={topic.slug} className="mb-6">
-              <h3 className="mb-3 text-sm font-semibold">{topic.title}</h3>
-              <ul className="space-y-3 text-sm">
-                {group.map((file) => (
-                  <li key={file.id}>
-                    <p className="break-words font-mono">{file.path}</p>
-                    <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
-                      {[file.status, file.flag].filter(Boolean).join(" · ")}
-                    </p>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )
-        );
-      })}
-    </div>
-  );
-}
 function LoadedReview({ review, search, published }: { review: ReviewView; search: ReviewSearch; published: number }) {
   const [initialRevision] = useState(review.newestRevision);
   const seq = search.rev ?? initialRevision;
@@ -163,13 +135,31 @@ function LoadedReview({ review, search, published }: { review: ReviewView; searc
   };
   const [resumed, setResumed] = useState<SavedDraft | null>(null);
   const resume = (draft: SavedDraft) => {
+    if (draft.commentId && revision) {
+      const thread = revision.threads.find((thread) =>
+        thread.comments.some((comment) => comment.id === draft.commentId),
+      );
+      if (thread) {
+        setResumed(null);
+        claimDraft(draft.key, "comments");
+        navigateReading({ ...search, tab: "comments", thread: undefined });
+      }
+      return;
+    }
     if (!draft.target || !revision) return;
     if (draft.threadId && revision.threads.some((thread) => thread.id === draft.threadId)) {
       setResumed(null);
       navigateReading({ ...search, tab: "comments", thread: draft.threadId });
       return;
     }
-    setResumed(draft);
+    if (isDiffTarget(draft.target)) {
+      claimDraft(draft.key, "diff");
+      setResumed({ ...draft });
+      navigateReading({ ...search, tab: "diff", thread: undefined });
+      return;
+    }
+    claimDraft(draft.key, "resumed");
+    setResumed({ ...draft });
     const placement = draftPlacement(draft, revision);
     if (placement?.status === "placed" && "blockId" in placement.location)
       navigateReading(
@@ -190,12 +180,17 @@ function LoadedReview({ review, search, published }: { review: ReviewView; searc
       pending.current = null;
       return;
     }
+    if (intent.reply) {
+      const thread = revision.threads.find((thread) => thread.id === search.thread);
+      if (!thread) return;
+      pending.current = null;
+      claimDraft(draftKey(review.id, thread.target, thread.id), "comments");
+      return;
+    }
     const element = document.getElementById(intent.elementId);
-    const reply = intent.reply ? element?.querySelector<HTMLTextAreaElement>("[data-reply-composer]") : null;
-    if (!element || (intent.reply && !reply)) return;
+    if (!element) return;
     pending.current = null;
     element.scrollIntoView?.({ block: "center" });
-    reply?.focus({ preventScroll: true });
   });
   const hasDocs = (revision?.docs.length ?? 0) > 0;
   const tab = search.tab === "docs" && !hasDocs ? "writeup" : search.tab;
@@ -273,32 +268,42 @@ function LoadedReview({ review, search, published }: { review: ReviewView; searc
             {revision && (
               <Reading key={`${seq}:${tab}`} reviewId={review.id} revision={revision} tab={tab} onResume={resume} />
             )}
-            {resumed?.target && (
-              <section
-                aria-label="Resumed comment"
-                className="sticky bottom-0 space-y-3 border-t border-neutral-300 bg-white p-3 dark:border-neutral-700 dark:bg-neutral-950"
-              >
-                {"quote" in resumed.target && (
-                  <blockquote className="max-h-24 overflow-auto border-l-2 pl-2 text-sm">
-                    {resumed.target.quote}
-                  </blockquote>
+            {resumed?.target && !isDiffTarget(resumed.target) && (
+              <Composer
+                surface="resumed"
+                placeholder={false}
+                reviewId={review.id}
+                revision={seq}
+                target={resumed.target}
+                threadId={resumed.threadId}
+                storageKey={resumed.key}
+                onSaved={() => setResumed(null)}
+                onCancel={() => setResumed(null)}
+                wrap={(editor) => (
+                  <section
+                    aria-label="Resumed comment"
+                    className="sticky bottom-0 space-y-3 border-t border-neutral-300 bg-white p-3 dark:border-neutral-700 dark:bg-neutral-950"
+                  >
+                    {resumed.target && "quote" in resumed.target && (
+                      <blockquote className="max-h-24 overflow-auto border-l-2 pl-2 text-sm">
+                        {resumed.target.quote}
+                      </blockquote>
+                    )}
+                    {editor}
+                  </section>
                 )}
-                <Composer
-                  reviewId={review.id}
-                  revision={seq}
-                  target={resumed.target}
-                  threadId={resumed.threadId}
-                  storageKey={resumed.key}
-                  onSaved={() => setResumed(null)}
-                  onCancel={() => setResumed(null)}
-                />
-              </section>
+              />
             )}
           </div>
         }
         diff={
           revision ? (
-            <Diff revision={revision} />
+            <LazyDiffPane
+              key={seq}
+              reviewId={review.id}
+              revision={revision}
+              resume={resumed?.target && isDiffTarget(resumed.target) ? resumed : undefined}
+            />
           ) : (
             <p role={query.isError ? "alert" : "status"} className="p-5">
               {query.isError ? "Could not load this revision." : "Loading revision…"}

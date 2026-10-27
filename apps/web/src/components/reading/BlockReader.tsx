@@ -1,5 +1,7 @@
 import type { RenderedBlock, RevisionView, Target } from "@emend/contract";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { claimDraft } from "../../lib/composer-owner.ts";
+import { draftKey } from "../../lib/drafts.ts";
 import { diagramAnchor, selectionToAnchor } from "../../lib/selection.ts";
 import { Composer } from "../threads/Composer.tsx";
 import { ThreadCard } from "../threads/ThreadCard.tsx";
@@ -23,6 +25,12 @@ export function BlockReader({
   const [target, setTarget] = useState<Target | null>(null);
   const [composing, setComposing] = useState(false);
   const [error, setError] = useState("");
+  const openComposer = (next: Target) => {
+    claimDraft(draftKey(reviewId, next), "reading");
+    setTarget(next);
+    setComposing(true);
+    setError("");
+  };
   const changes = new Map(changedBlocks.map((block) => [block.blockId, block.revision]));
   const targets = useMemo(
     () => new Map(groups.flatMap((group) => group.blocks.map((block) => [block.id, group.path] as const))),
@@ -84,13 +92,11 @@ export function BlockReader({
                 <Button
                   onClick={() => {
                     const anchor = diagramAnchor(block);
-                    setTarget(
+                    openComposer(
                       group.path === undefined
                         ? { kind: "writeup-span", ...anchor }
                         : { kind: "doc-span", path: group.path, ...anchor },
                     );
-                    setComposing(true);
-                    setError("");
                   }}
                 >
                   Comment on diagram
@@ -133,7 +139,7 @@ export function BlockReader({
                 />
               </>
             ) : (
-              <Button onClick={() => setComposing(true)}>Comment on selection</Button>
+              <Button onClick={() => openComposer(target)}>Comment on selection</Button>
             ))}
         </div>
       )}

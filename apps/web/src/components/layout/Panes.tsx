@@ -44,6 +44,7 @@ export function Panes({
             <section
               aria-label="Diff"
               data-testid="diff-pane"
+              data-diff-scroll
               className="min-w-0 flex-1 overflow-y-auto border-neutral-200 md:border-l dark:border-neutral-800"
             >
               {diff}

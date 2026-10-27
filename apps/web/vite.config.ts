@@ -2,6 +2,7 @@ import { fileURLToPath } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { build, defineConfig, type Plugin } from "vite";
+import { diffBuildPruning } from "./diff-build.ts";
 
 // A sandbox with an opaque origin cannot fetch ESM without CORS permission.
 // Bundle this HTML entry's script as one classic asset so the exact frame CSP
@@ -48,7 +49,8 @@ function mermaidFrame(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [react(), tailwindcss(), mermaidFrame()],
+  plugins: [react(), tailwindcss(), mermaidFrame(), diffBuildPruning()],
+  worker: { format: "es", plugins: () => [diffBuildPruning(true)] },
   build: {
     rolldownOptions: {
       input: {

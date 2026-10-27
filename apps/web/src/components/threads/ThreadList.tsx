@@ -17,7 +17,7 @@ export function ThreadList({
   changedBlocks: RevisionView["changedBlocks"];
   onResume: (draft: SavedDraft) => void;
 }) {
-  const props = { reviewId, revision, changedBlocks };
+  const props = { reviewId, revision, changedBlocks, surface: "comments" as const };
   return (
     <div className="space-y-6 p-5">
       <DraftList reviewId={reviewId} onResume={onResume} />

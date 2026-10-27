@@ -1,17 +1,129 @@
 // @vitest-environment node
-import { fileURLToPath } from "node:url";
-import { runInNewContext } from "node:vm";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { constants, runInNewContext } from "node:vm";
 import { Window } from "happy-dom";
 import { build } from "vite";
 import { expect, test, vi } from "vitest";
 
 test("built frame rejects diagram theme overrides without dynamic code generation", async () => {
+  const workerModules = new Map<string, string[]>();
   const result = await build({
     root: fileURLToPath(new URL("../", import.meta.url)),
     logLevel: "silent",
     build: { write: false },
+    plugins: [
+      {
+        name: "audit-emitted-worker-modules",
+        config(config) {
+          const original = config.worker?.plugins;
+          config.worker = {
+            ...config.worker,
+            plugins: () => [
+              ...(original?.() ?? []),
+              {
+                name: "capture-worker-modules",
+                generateBundle(_options, bundle) {
+                  for (const file of Object.values(bundle)) {
+                    if (file.type === "chunk") workerModules.set(file.fileName, Object.keys(file.modules));
+                  }
+                },
+              },
+            ],
+          };
+        },
+      },
+    ],
   });
   if (Array.isArray(result) || !("output" in result)) throw new Error("Expected a single web build");
+  expect(workerModules.size).toBeGreaterThan(0);
+  expect([...workerModules.keys()].some((name) => /\/worker-/.test(name))).toBe(true);
+  for (const [name, modules] of workerModules) {
+    // Vite wraps nested worker output in assets, losing module metadata here.
+    expect(result.output.some((file) => file.fileName === name)).toBe(true);
+    expect(
+      modules.filter((id) =>
+        /\/(?:@shikijs\/(?:langs|themes)\/|shiki\/dist\/(?:langs|themes)|@pierre\/theming\/(?:dist\/)?themes)/.test(id),
+      ),
+    ).toEqual([]);
+  }
+  const stubs = result.output.filter((file) => file.fileName.includes("unused-diff-backend-"));
+  expect(stubs.length).toBeGreaterThan(0);
+  expect(
+    stubs.some(
+      (file) => file.type === "chunk" && Object.keys(file.modules).some((id) => id.endsWith("/unused-diff-backend.ts")),
+    ),
+  ).toBe(true);
+  const workerStubs = [...workerModules].filter(([, modules]) =>
+    modules.some((id) => id.endsWith("/unused-diff-backend.ts")),
+  );
+  expect(workerStubs.length).toBeGreaterThan(0);
+  for (const [name] of workerStubs) expect(stubs.some((file) => file.fileName === name)).toBe(true);
+  // Identical main/worker copies may share a filename after Vite deduplicates them.
+  const directory = await mkdtemp(join(tmpdir(), "emend-built-stubs-"));
+  try {
+    for (const [index, stub] of stubs.entries()) {
+      const path = join(directory, `stub-${index}.mjs`);
+      await writeFile(path, stub.type === "chunk" ? stub.code : stub.source);
+      // Use Node's native loader: the test runner's module transform can repair invalid exports.
+      const imported = runInNewContext(
+        "import(url)",
+        { url: pathToFileURL(path).href },
+        {
+          importModuleDynamically: constants.USE_MAIN_CONTEXT_DEFAULT_LOADER,
+        },
+      );
+      await expect.soft(imported).rejects.toThrow("This diff backend is disabled. emend uses shiki-js.");
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+  const index = result.output.find((file) => file.fileName === "index.html");
+  if (index?.type !== "asset") throw new Error("Missing app HTML");
+  const initial = [...String(index.source).matchAll(/(?:src|href)="\/(assets\/[^" ]+\.js)"/g)].map((match) => match[1]);
+  expect(initial.length).toBeGreaterThan(0);
+  const visited = new Set<string>();
+  const visit = (name: string | undefined) => {
+    if (!name || visited.has(name)) return;
+    visited.add(name);
+    const chunk = result.output.find((file) => file.fileName === name);
+    if (chunk?.type !== "chunk") throw new Error(`Missing entry chunk ${name}`);
+    expect(
+      Object.keys(chunk.modules).filter((id) =>
+        /node_modules\/(?:\.pnpm\/[^/]+\/node_modules\/)?(?:shiki|@shikijs|diff|@pierre)\//.test(id),
+      ),
+    ).toEqual([]);
+    for (const dependency of chunk.imports) visit(dependency);
+  };
+  initial.forEach(visit);
+  expect(
+    result.output.some(
+      (file) => file.type === "chunk" && Object.keys(file.modules).some((id) => id.includes("@pierre/diffs")),
+    ),
+  ).toBe(true);
+  // The WebAssembly text grammar is still a supported language, not a WASM engine.
+  const wasmGrammar = result.output.find(
+    (file) =>
+      file.type === "chunk" &&
+      Object.keys(file.modules).length > 0 &&
+      Object.keys(file.modules).every((id) => /\/(?:@shikijs\/langs|shiki)\/dist\/(?:langs\/)?wasm\.mjs$/.test(id)),
+  );
+  expect(wasmGrammar).toBeDefined();
+  expect(
+    result.output
+      .filter((file) => file !== wasmGrammar && /(?:wasm|oniguruma)/i.test(file.fileName))
+      .map((file) => file.fileName),
+  ).toEqual([]);
+  for (const file of result.output) {
+    if (file.type !== "chunk") continue;
+    expect(
+      Object.keys(file.modules).filter((id) =>
+        /\/(?:@shikijs\/engine-oniguruma|@pierre\/highlights)\/|\/shiki\/dist\/wasm\.mjs$/.test(id),
+      ),
+    ).toEqual([]);
+  }
   const frame = result.output.find((file) => file.fileName === "mermaid-frame.html");
   if (frame?.type !== "asset") throw new Error("Missing frame HTML");
   const html = String(frame.source);

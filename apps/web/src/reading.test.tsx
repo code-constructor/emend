@@ -12,7 +12,8 @@ import { Composer } from "./components/threads/Composer.tsx";
 import { DraftList } from "./components/threads/DraftList.tsx";
 import { ThreadCard } from "./components/threads/ThreadCard.tsx";
 import { ThreadList } from "./components/threads/ThreadList.tsx";
-import { draftKey } from "./lib/drafts.ts";
+import { claimDraft } from "./lib/composer-owner.ts";
+import { clearDraftIfUnchanged, draftKey, hasDraft, isDraftSaving, loadDraft, saveDraft } from "./lib/drafts.ts";
 
 const id = "11111111-1111-4111-8111-111111111111";
 const target: Target = { kind: "writeup-span", blockId: "overview-12345678", quote: "seed", prefix: "", suffix: "" };
@@ -88,6 +89,110 @@ test("composer works when every localStorage operation throws", async () => {
   await waitFor(() => expect((screen.getByLabelText("Comment") as HTMLTextAreaElement).value).toBe(""));
   expect(fetchMock).toHaveBeenCalledTimes(1);
 });
+test.each(["Second", ""])(
+  "save preserves another tab's persisted text %j before its storage event arrives",
+  async (persisted) => {
+    let finish = () => {};
+    fetchMock.mockImplementationOnce(
+      () =>
+        new Promise<Response>((resolve) => {
+          finish = () => resolve(Response.json({}));
+        }),
+    );
+    const saved = vi.fn();
+    mount(<Composer reviewId={id} revision={2} target={target} onSaved={saved} />);
+    const key = draftKey(id, target);
+    fireEvent.change(screen.getByLabelText("Comment"), { target: { value: "First" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save comment" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    // Tab B writes, but tab A has not received the corresponding storage event.
+    localStorage.setItem(key, persisted);
+    expect(loadDraft(key)).toBe("First");
+    await act(async () => finish());
+    await waitFor(() => expect(isDraftSaving(key)).toBe(false));
+    expect(localStorage.getItem(key)).toBe(persisted);
+    expect(loadDraft(key)).toBe(persisted);
+    expect(hasDraft(key)).toBe(true);
+    expect((screen.getByLabelText("Comment") as HTMLTextAreaElement).value).toBe(persisted);
+    expect(saved).not.toHaveBeenCalled();
+    act(() =>
+      window.dispatchEvent(new StorageEvent("storage", { key, newValue: persisted, storageArea: localStorage })),
+    );
+    expect((screen.getByLabelText("Comment") as HTMLTextAreaElement).value).toBe(persisted);
+  },
+);
+test.each([false, true])(
+  "save preserves newer text after a quota failure and retries persistence once (recovers=%s)",
+  async (recovers) => {
+    let finish = () => {};
+    fetchMock.mockImplementationOnce(
+      () =>
+        new Promise<Response>((resolve) => {
+          finish = () => resolve(Response.json({}));
+        }),
+    );
+    const saved = vi.fn();
+    mount(<Composer reviewId={id} revision={2} target={target} onSaved={saved} />);
+    const key = draftKey(id, target);
+    const input = screen.getByLabelText("Comment") as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: "First" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save comment" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    const storage = localStorage;
+    const setItem = vi.fn(storage.setItem.bind(storage));
+    vi.spyOn(window, "localStorage", "get").mockReturnValue(
+      new Proxy(storage, {
+        get: (value, property) => (property === "setItem" ? setItem : Reflect.get(value, property)),
+      }),
+    );
+    const quotaExceeded = () => {
+      throw new DOMException("Storage full", "QuotaExceededError");
+    };
+    if (recovers) setItem.mockImplementationOnce(quotaExceeded);
+    else setItem.mockImplementation(quotaExceeded);
+    fireEvent.change(input, { target: { value: "Second" } });
+    expect(localStorage.getItem(key)).toBe("First");
+    expect(loadDraft(key)).toBe("Second");
+    setItem.mockClear();
+    await act(async () => finish());
+    await waitFor(() => expect(isDraftSaving(key)).toBe(false));
+    expect(loadDraft(key)).toBe("Second");
+    expect(input.value).toBe("Second");
+    expect(saved).not.toHaveBeenCalled();
+    expect(setItem).toHaveBeenCalledExactlyOnceWith(key, "Second");
+    expect(localStorage.getItem(key)).toBe(recovers ? "Second" : "First");
+    expect((screen.getByRole("button", { name: "Save comment" }) as HTMLButtonElement).disabled).toBe(false);
+  },
+);
+test.each([
+  [false, false],
+  [false, true],
+  [true, false],
+  [true, true],
+])("matching save clears matching or absent copies (memory=%s, storage=%s)", (memory, stored) => {
+  const key = draftKey(id, target);
+  if (memory) saveDraft(key, "First");
+  if (stored) localStorage.setItem(key, "First");
+  else localStorage.removeItem(key);
+  expect(clearDraftIfUnchanged(key, "First")).toBe(true);
+  expect(localStorage.getItem(key)).toBeNull();
+  expect(hasDraft(key)).toBe(false);
+  expect(loadDraft(key)).toBe("");
+});
+test("compare and clear uses memory when the storage read throws", () => {
+  const key = draftKey(id, target);
+  saveDraft(key, "First");
+  const storage = localStorage;
+  const getItem = vi.fn(() => {
+    throw new Error("Storage unavailable");
+  });
+  vi.spyOn(window, "localStorage", "get").mockReturnValue(
+    new Proxy(storage, { get: (value, property) => (property === "getItem" ? getItem : Reflect.get(value, property)) }),
+  );
+  expect(clearDraftIfUnchanged(key, "First")).toBe(true);
+  expect(getItem).toHaveBeenCalledWith(key);
+  expect(loadDraft(key)).toBe("");
+});
 test("failed save keeps the draft and comment text", async () => {
   fetchMock.mockResolvedValue(
     Response.json({ error: { code: "too_large", message: "Synthetic limit" } }, { status: 413 }),
@@ -97,6 +202,55 @@ test("failed save keeps the draft and comment text", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Save comment" }));
   expect((await screen.findByRole("alert")).textContent).toBe("Synthetic limit");
   expect(localStorage.getItem(draftKey(id, target))).toBe("Keep me");
+});
+test.each([false, true])("pending save preserves newer text and remains usable (remount=%s)", async (remount) => {
+  let finish = () => {};
+  fetchMock.mockImplementationOnce(
+    () =>
+      new Promise<Response>((resolve) => {
+        finish = () => resolve(Response.json({}));
+      }),
+  );
+  const saved = vi.fn();
+  let view = mount(<Composer reviewId={id} revision={2} target={target} onSaved={saved} />);
+  fireEvent.change(screen.getByLabelText("Comment"), { target: { value: "First reply" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save comment" }));
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+  if (remount) {
+    view.unmount();
+    // Rehydrate from persisted text, as a page reload does, rather than the tab's text cache.
+    window.dispatchEvent(new StorageEvent("storage", { key: null, storageArea: localStorage }));
+    view = mount(<Composer reviewId={id} revision={2} target={target} onSaved={saved} />);
+  }
+  const input = screen.getByLabelText("Comment") as HTMLTextAreaElement;
+  expect(input.value).toBe("First reply");
+  expect(localStorage.getItem(draftKey(id, target))).toBe("First reply");
+  expect((screen.getByRole("button", { name: "Save comment" }) as HTMLButtonElement).disabled).toBe(true);
+  expect(input.disabled).toBe(false);
+  fireEvent.change(input, { target: { value: "Second unsent reply" } });
+  await act(async () => finish());
+  await waitFor(() =>
+    expect((screen.getByRole("button", { name: "Save comment" }) as HTMLButtonElement).disabled).toBe(false),
+  );
+  expect(input.value).toBe("Second unsent reply");
+  expect(localStorage.getItem(draftKey(id, target))).toBe("Second unsent reply");
+  expect(saved).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Save comment" }));
+  await waitFor(() => expect(localStorage.getItem(draftKey(id, target))).toBeNull());
+  expect(fetchMock.mock.calls.at(-1)?.[1]?.body).toContain("Second unsent reply");
+  view.unmount();
+});
+test("an unsent edit, including empty text, survives a remount", () => {
+  let view = mount(<ThreadCard reviewId={id} revision={2} thread={thread} changedBlocks={[]} />);
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  fireEvent.change(screen.getByLabelText("Edit comment"), { target: { value: "Unsaved replacement" } });
+  view.unmount();
+  view = mount(<ThreadCard reviewId={id} revision={2} thread={thread} changedBlocks={[]} />);
+  expect((screen.getByLabelText("Edit comment") as HTMLTextAreaElement).value).toBe("Unsaved replacement");
+  fireEvent.change(screen.getByLabelText("Edit comment"), { target: { value: "" } });
+  view.unmount();
+  mount(<ThreadCard reviewId={id} revision={2} thread={thread} changedBlocks={[]} />);
+  expect((screen.getByLabelText("Edit comment") as HTMLTextAreaElement).value).toBe("");
 });
 test("thread edits and deletes only unsent comments, replies, resolves and reopens", async () => {
   fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
@@ -354,24 +508,73 @@ test("empty diagrams have no comment control and long selections explain the lim
   selection.removeAllRanges();
 });
 
-test("two composers share edits and both empty after either saves their draft", async () => {
+test("duplicate composer requests share one editor and saving empties its draft", async () => {
   mount(
     <>
       <Composer reviewId={id} revision={2} target={target} />
       <Composer reviewId={id} revision={2} target={target} />
     </>,
   );
+  fireEvent.click(screen.getAllByRole("button", { name: "Comment" })[0] as HTMLElement);
   const fields = screen.getAllByLabelText("Comment") as HTMLTextAreaElement[];
   fireEvent.change(required(fields[0]), { target: { value: "Follow-up" } });
-  expect(fields.map((field) => field.value)).toEqual(["Follow-up", "Follow-up"]);
-  fireEvent.change(required(fields[1]), { target: { value: "Shared edit" } });
-  expect(fields.map((field) => field.value)).toEqual(["Shared edit", "Shared edit"]);
-  fireEvent.click(required(screen.getAllByRole("button", { name: "Save comment" })[1]));
-  await waitFor(() => expect(fields.map((field) => field.value)).toEqual(["", ""]));
+  expect(fields.map((field) => field.value)).toEqual(["Follow-up"]);
+  fireEvent.change(required(fields[0]), { target: { value: "Shared edit" } });
+  expect(fields.map((field) => field.value)).toEqual(["Shared edit"]);
+  fireEvent.click(required(screen.getAllByRole("button", { name: "Save comment" })[0]));
+  await waitFor(() => expect(fields.map((field) => field.value)).toEqual([""]));
   expect(localStorage.getItem(draftKey(id, target))).toBeNull();
   expect(
     screen.getAllByRole("button", { name: "Save comment" }).every((button) => (button as HTMLButtonElement).disabled),
   ).toBe(true);
+});
+test.each(["paragraph", "diagram"] as const)("opening a %s composer claims its resumed draft", (kind) => {
+  const value: RenderedBlock = kind === "diagram" ? { ...block, kind, source: "seed", html: "" } : block;
+  const view = mount(
+    <>
+      <section aria-label="Reading content">
+        <Writeup
+          reviewId={id}
+          revision={2}
+          threads={[]}
+          changedBlocks={[]}
+          writeup={{ sections: [{ key: "overview", label: "Overview", topic: null, blocks: [value] }] }}
+        />
+      </section>
+      <Composer
+        reviewId={id}
+        revision={2}
+        target={target}
+        surface="resumed"
+        placeholder={false}
+        wrap={(editor) => <section aria-label="Resumed comment">{editor}</section>}
+      />
+    </>,
+  );
+  const resumed = screen.getByLabelText("Comment");
+  fireEvent.focus(resumed);
+  fireEvent.change(resumed, { target: { value: "Resumed text" } });
+  const reader = screen.getByRole("region", { name: "Reading content" });
+  if (kind === "paragraph") {
+    const node = required(reader.querySelector("[data-block-id] p")?.firstChild);
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    const selection = required(window.getSelection());
+    selection.removeAllRanges();
+    selection.addRange(range);
+    fireEvent.mouseUp(required(node.parentElement));
+    selection.removeAllRanges();
+  }
+  fireEvent.click(
+    within(reader).getByRole("button", { name: kind === "diagram" ? "Comment on diagram" : "Comment on selection" }),
+  );
+  const editor = within(reader).getByLabelText("Comment");
+  expect(document.activeElement).toBe(editor);
+  expect((editor as HTMLTextAreaElement).value).toBe("Resumed text");
+  expect(screen.queryByRole("region", { name: "Resumed comment" })).toBeNull();
+  view.unmount();
+  mount(<Composer reviewId={id} revision={2} target={target} surface="resumed" />);
+  expect((screen.getByLabelText("Comment") as HTMLTextAreaElement).value).toBe("Resumed text");
 });
 test("Discard empties every open composer for its draft", () => {
   localStorage.setItem(draftKey(id, target), "Discard this text");
@@ -419,6 +622,7 @@ test("unavailable storage keeps shared draft text through rerender and remount",
     throw new Error("Storage unavailable");
   });
   const first = mount(<Composer reviewId={id} revision={2} target={target} />);
+  fireEvent.focus(screen.getByLabelText("Comment"));
   fireEvent.change(screen.getByLabelText("Comment"), { target: { value: "In memory" } });
   first.rerender(
     <QueryClientProvider client={client}>
@@ -429,10 +633,46 @@ test("unavailable storage keeps shared draft text through rerender and remount",
   );
   expect(screen.getAllByLabelText("Comment").map((field) => (field as HTMLTextAreaElement).value)).toEqual([
     "In memory",
-    "In memory",
   ]);
   expect(screen.getByRole("button", { name: "Resume" })).toBeTruthy();
   first.unmount();
   mount(<Composer reviewId={id} revision={3} target={target} />);
   expect((screen.getByLabelText("Comment") as HTMLTextAreaElement).value).toBe("In memory");
+});
+
+test("one composer owns each draft key and a remaining copy takes over on unmount", async () => {
+  const first = mount(<Composer reviewId={id} revision={2} target={target} />);
+  fireEvent.focus(screen.getByLabelText("Comment"));
+  const second = mount(<Composer reviewId={id} revision={2} target={target} />);
+  expect(screen.getAllByLabelText("Comment")).toHaveLength(1);
+  fireEvent.change(screen.getByLabelText("Comment"), { target: { value: "Shared draft" } });
+  first.unmount();
+  await waitFor(() => expect(screen.getAllByLabelText("Comment")).toHaveLength(1));
+  expect((screen.getByLabelText("Comment") as HTMLTextAreaElement).value).toBe("Shared draft");
+  second.unmount();
+});
+test("refocusing an existing owner cancels another key's kept handoff", () => {
+  const other: Target = { ...target, blockId: "overview-87654321" };
+  const first = mount(<Composer reviewId={id} revision={2} target={target} />);
+  const second = mount(<Composer reviewId={id} revision={2} target={other} />);
+  const a = within(first.container).getByLabelText("Comment");
+  const b = within(second.container).getByLabelText("Comment");
+  act(() => b.focus());
+  act(() => a.focus());
+  first.unmount();
+  act(() => b.focus());
+  // Remount A synchronously, before its handoff timer has fired.
+  mount(<Composer reviewId={id} revision={2} target={target} />);
+  expect(document.activeElement).toBe(b);
+});
+test("a pending Resume or open intent cancels another key's kept handoff", () => {
+  const other: Target = { ...target, blockId: "overview-87654321" };
+  const first = mount(<Composer reviewId={id} revision={2} target={target} />);
+  act(() => within(first.container).getByLabelText("Comment").focus());
+  first.unmount();
+  act(() => claimDraft(draftKey(id, other), "reading"));
+  const replacement = mount(<Composer reviewId={id} revision={2} target={target} />);
+  expect(document.activeElement).not.toBe(within(replacement.container).getByLabelText("Comment"));
+  const second = mount(<Composer reviewId={id} revision={2} target={other} />);
+  expect(document.activeElement).toBe(within(second.container).getByLabelText("Comment"));
 });

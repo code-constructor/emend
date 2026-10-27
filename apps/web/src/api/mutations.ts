@@ -1,5 +1,12 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { clearDraft } from "../lib/drafts.ts";
+import { useSyncExternalStore } from "react";
+import {
+  beginDraftSave,
+  clearDraftIfUnchanged,
+  finishDraftSave,
+  isDraftSaving,
+  subscribeDrafts,
+} from "../lib/drafts.ts";
 import { ApiError, change } from "./client.ts";
 
 export function mutationMessage(error: Error) {
@@ -9,23 +16,29 @@ export function mutationMessage(error: Error) {
       ? error.message
       : "The request failed. Try again.";
 }
-export function useReviewMutation(reviewId: string) {
+export function useReviewMutation(reviewId: string, key?: string) {
   const client = useQueryClient();
-  return useMutation({
+  const pending = useSyncExternalStore(subscribeDrafts, () => (key ? isDraftSaving(key) : false));
+  const mutation = useMutation({
     mutationFn: async ({
       path,
       method = "POST",
       body,
-      draftKey,
+      draft,
     }: {
       path: string;
       method?: "POST" | "PATCH" | "DELETE";
       body?: unknown;
-      draftKey?: string;
+      draft?: { key: string; text: string };
     }) => {
-      const result = await change(path, method, body);
-      if (draftKey) clearDraft(draftKey);
-      return result;
+      if (draft && !beginDraftSave(draft.key)) throw new Error("This draft is already saving.");
+      try {
+        const result = await change(path, method, body);
+        if (draft) clearDraftIfUnchanged(draft.key, draft.text);
+        return result;
+      } finally {
+        if (draft) finishDraftSave(draft.key);
+      }
     },
     onSuccess: async () => {
       await Promise.all([
@@ -35,4 +48,5 @@ export function useReviewMutation(reviewId: string) {
       ]);
     },
   });
+  return { ...mutation, isPending: pending || mutation.isPending };
 }

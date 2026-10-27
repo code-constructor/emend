@@ -10,6 +10,6 @@
     "tsBuildInfoFile": ".tsbuild/tsconfig.tsbuildinfo",
     "types": ["node", "vite/client"]
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "mermaid-frame.ts", "vite.config.ts"],
+  "include": ["src/**/*.ts", "src/**/*.tsx", "mermaid-frame.ts", "vite.config.ts", "diff-build.ts", "build/*.ts"],
   "references": [{ "path": "../../packages/contract" }, { "path": "../../packages/core" }]
 }

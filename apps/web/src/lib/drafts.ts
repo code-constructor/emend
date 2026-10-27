@@ -1,9 +1,10 @@
 import { Target } from "@emend/contract";
 
 const prefix = "emend.draft.";
-const texts = new Map<string, string>();
+const texts = new Map<string, string | null>();
+const saving = new Set<string>();
 const listeners = new Set<() => void>();
-export type SavedDraft = { key: string; target: Target | null; threadId?: string };
+export type SavedDraft = { key: string; target: Target | null; threadId?: string; commentId?: string };
 
 function notify() {
   for (const listener of listeners) listener();
@@ -16,14 +17,18 @@ window.addEventListener("storage", (event) => {
     // A localStorage event still supplies its value when storage access is denied.
   }
   if (event.key === null) texts.clear();
-  else if (event.key.startsWith(prefix)) texts.set(event.key, event.newValue ?? "");
-  else return;
+  else if (event.key.startsWith(prefix)) {
+    texts.set(event.key, event.newValue);
+  } else return;
   notify();
 });
 
 export function draftKey(reviewId: string, target: Target, threadId?: string) {
   const stable = Object.fromEntries(Object.entries(target).sort(([left], [right]) => left.localeCompare(right)));
   return `emend.draft.${reviewId}.${JSON.stringify(stable)}${threadId ? `.reply.${threadId}` : ""}`;
+}
+export function editDraftKey(reviewId: string, commentId: string) {
+  return `${prefix}${reviewId}.edit.${commentId}`;
 }
 export function listDrafts(reviewId: string): SavedDraft[] {
   const drafts: SavedDraft[] = [];
@@ -37,8 +42,14 @@ export function listDrafts(reviewId: string): SavedDraft[] {
     /* Storage is optional. */
   }
   for (const [key, body] of texts) {
-    if (!key.startsWith(reviewPrefix) || !body) continue;
+    if (!key.startsWith(reviewPrefix) || body === null) continue;
     const serialized = key.slice(reviewPrefix.length);
+    const edit = /^edit\.([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})$/i.exec(serialized);
+    if (edit) {
+      drafts.push({ key, target: null, commentId: edit[1] });
+      continue;
+    }
+    if (!body) continue;
     const reply = /\.reply\.([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})$/i.exec(serialized);
     try {
       const target = Target.parse(JSON.parse(reply ? serialized.slice(0, reply.index) : serialized));
@@ -57,26 +68,67 @@ export function subscribeDrafts(listener: () => void) {
 }
 export function loadDraft(key: string) {
   if (!texts.has(key)) {
-    let body = "";
     try {
-      body = localStorage.getItem(key) ?? "";
+      const body = localStorage.getItem(key);
+      texts.set(key, body);
     } catch {
       /* The in-memory copy remains available without storage. */
     }
-    texts.set(key, body);
   }
   return texts.get(key) ?? "";
+}
+export function hasDraft(key: string) {
+  loadDraft(key);
+  return texts.get(key) != null;
 }
 export function saveDraft(key: string, body: string) {
   texts.set(key, body);
   try {
-    if (body) localStorage.setItem(key, body);
-    else localStorage.removeItem(key);
+    localStorage.setItem(key, body);
   } catch {
     /* Storage is optional. */
   }
   notify();
 }
 export function clearDraft(key: string) {
-  saveDraft(key, "");
+  texts.set(key, null);
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    /* Storage is optional. */
+  }
+  notify();
+}
+export function clearDraftIfUnchanged(key: string, submitted: string) {
+  const current = texts.get(key);
+  let stored: string | null = null;
+  try {
+    stored = localStorage.getItem(key);
+  } catch {
+    /* The in-memory copy remains available without storage. */
+  }
+  if (current != null && current !== submitted) {
+    saveDraft(key, current);
+    return false;
+  }
+  if (stored != null && stored !== submitted) {
+    texts.set(key, stored);
+    notify();
+    return false;
+  }
+  clearDraft(key);
+  return true;
+}
+export function isDraftSaving(key: string) {
+  return saving.has(key);
+}
+export function beginDraftSave(key: string) {
+  if (saving.has(key)) return false;
+  saving.add(key);
+  notify();
+  return true;
+}
+export function finishDraftSave(key: string) {
+  saving.delete(key);
+  notify();
 }

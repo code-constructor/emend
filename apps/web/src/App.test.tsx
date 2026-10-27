@@ -1,10 +1,10 @@
-import type { RenderedBlock, Target, ThreadView } from "@emend/contract";
+import type { FileView, RenderedBlock, Target, ThreadView } from "@emend/contract";
 import { QueryClient } from "@tanstack/react-query";
 import { createMemoryHistory } from "@tanstack/react-router";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { App } from "./App.tsx";
-import { draftKey } from "./lib/drafts.ts";
+import { draftKey, editDraftKey } from "./lib/drafts.ts";
 import { rememberPairingSecret, takePairingSecret } from "./lib/pairing-secret.ts";
 
 const id = "11111111-1111-4111-8111-111111111111";
@@ -871,4 +871,185 @@ test("Inbox to Devices and Back keeps the router's default uncached scrolling", 
   await act(async () => history.back());
   await screen.findByRole("heading", { name: "Inbox" });
   await waitFor(() => expect(scroll).toHaveBeenCalledExactlyOnceWith({ top: 0, left: 0, behavior: undefined }));
+});
+
+const diffFile = {
+  id: "33333333-3333-4333-8333-333333333333",
+  path: "new.txt",
+  oldPath: null,
+  role: "diff",
+  status: "modified",
+  topic: "topic",
+  order: 0,
+  mediaType: "text/plain",
+  flag: "binary",
+  hasOld: false,
+  hasNew: false,
+};
+const diffTarget: Target = { kind: "file", path: "new.txt" };
+const diffThread: ThreadView = {
+  id,
+  target: diffTarget,
+  createdOn: 1,
+  state: "open",
+  placement: { status: "placed", location: diffTarget },
+  comments: [{ id, author: "user", body: "Diff thread", sent: false, sentOn: null }],
+};
+function withDiff(threads: ThreadView[] = [diffThread], file: Partial<FileView> = {}) {
+  const fallback = fetchMock.getMockImplementation();
+  fetchMock.mockImplementation(async (path, init) =>
+    path.includes("/revisions/")
+      ? Response.json({
+          ...revision,
+          files: [{ ...diffFile, ...file }],
+          topics: [{ slug: "topic", title: "Topic", summary: "", importance: 1 }],
+          threads,
+        })
+      : (fallback?.(path, init) as Promise<Response>),
+  );
+}
+test("Resume claims the Comments reply from the diff, focuses it and keeps thread ids unique", async () => {
+  withDiff();
+  mount(`/r/${id}`);
+  const diff = within(await screen.findByTestId("diff-pane"));
+  const input = await diff.findByLabelText("Reply");
+  input.focus();
+  fireEvent.change(input, { target: { value: "Follow-up" } });
+  fireEvent.click(screen.getByRole("link", { name: /Comments/ }));
+  const drafts = within(await screen.findByRole("region", { name: "Unsaved comments" }));
+  fireEvent.click(drafts.getByRole("button", { name: "Resume" }));
+  const reading = within(screen.getByTestId("reading-pane"));
+  const reply = await reading.findByLabelText("Reply");
+  await waitFor(() => expect(document.activeElement).toBe(reply));
+  expect((reply as HTMLTextAreaElement).value).toBe("Follow-up");
+  expect(diff.queryByLabelText("Reply")).toBeNull();
+  expect(diff.getByRole("button", { name: "Reply" })).toBeTruthy();
+  expect(document.getElementById(`thread-${id}`)).toBeTruthy();
+  expect(document.getElementById(`diff-thread-${id}`)).toBeTruthy();
+  const ids = [...document.querySelectorAll("[id]")].map((node) => node.id);
+  expect(new Set(ids).size).toBe(ids.length);
+  fireEvent.focus(diff.getByRole("button", { name: "Reply" }));
+  const reclaimed = await diff.findByLabelText("Reply");
+  await waitFor(() => expect(document.activeElement).toBe(reclaimed));
+  expect((reclaimed as HTMLTextAreaElement).value).toBe("Follow-up");
+  expect(reading.queryByLabelText("Reply")).toBeNull();
+  expect(reading.getByRole("button", { name: "Reply" })).toBeTruthy();
+});
+test("Resume of a lines draft opens the phone Diff tab and focuses its file composer", async () => {
+  width = 390;
+  withDiff([], { flag: null, hasNew: true });
+  const fallback = fetchMock.getMockImplementation();
+  fetchMock.mockImplementation((path, init) =>
+    path.startsWith("/api/v1/files/") ? new Promise<Response>(() => {}) : (fallback?.(path, init) as Promise<Response>),
+  );
+  const target: Target = {
+    kind: "lines",
+    path: "new.txt",
+    side: "new",
+    start: 10,
+    end: 12,
+    lines: ["a", "b", "c"],
+    before: [],
+    after: [],
+  };
+  localStorage.setItem(draftKey(id, target), "Line draft");
+  const scroll = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => {});
+  const { history } = mount(`/r/${id}?tab=comments`);
+  const drafts = within(await screen.findByRole("region", { name: "Unsaved comments" }));
+  fireEvent.click(drafts.getByRole("button", { name: "Resume" }));
+  await waitFor(() => expect(history.location.search).toContain("tab=diff"));
+  const section = await screen.findByRole("region", { name: "File new.txt" });
+  const input = await within(section).findByLabelText("Comment");
+  expect((input as HTMLTextAreaElement).value).toBe("Line draft");
+  await waitFor(() => expect(document.activeElement).toBe(input));
+  expect(scroll.mock.instances).toContain(section);
+  expect(screen.queryByRole("region", { name: "Resumed comment" })).toBeNull();
+});
+test("a delayed diff reply save cannot clear newer text after Comments claims the key", async () => {
+  withDiff();
+  const fallback = fetchMock.getMockImplementation();
+  let finish = () => {};
+  const submitted: string[] = [];
+  fetchMock.mockImplementation((path, init) => {
+    if (path === `/api/v1/threads/${id}/comments` && init?.method === "POST") {
+      submitted.push(String(init.body));
+      if (submitted.length === 1)
+        return new Promise<Response>((resolve) => {
+          finish = () => resolve(Response.json({}));
+        });
+      return Promise.resolve(Response.json({}));
+    }
+    return fallback?.(path, init) as Promise<Response>;
+  });
+  mount(`/r/${id}`);
+  const diff = within(await screen.findByTestId("diff-pane"));
+  const input = await diff.findByLabelText("Reply");
+  act(() => input.focus());
+  fireEvent.change(input, { target: { value: "First reply" } });
+  fireEvent.click(diff.getByRole("button", { name: "Add reply" }));
+  await waitFor(() => expect(submitted).toHaveLength(1));
+  fireEvent.click(screen.getByRole("link", { name: /Comments/ }));
+  fireEvent.click(
+    within(await screen.findByRole("region", { name: "Unsaved comments" })).getByRole("button", { name: "Resume" }),
+  );
+  const reading = within(screen.getByTestId("reading-pane"));
+  const editor = (await reading.findByLabelText("Reply")) as HTMLTextAreaElement;
+  expect((reading.getByRole("button", { name: "Add reply" }) as HTMLButtonElement).disabled).toBe(true);
+  expect(editor.disabled).toBe(false);
+  fireEvent.change(editor, { target: { value: "Second unsent reply" } });
+  await act(async () => finish());
+  await waitFor(() =>
+    expect((reading.getByRole("button", { name: "Add reply" }) as HTMLButtonElement).disabled).toBe(false),
+  );
+  expect(editor.value).toBe("Second unsent reply");
+  expect(localStorage.getItem(draftKey(id, diffTarget, id))).toBe("Second unsent reply");
+  fireEvent.click(reading.getByRole("button", { name: "Add reply" }));
+  await waitFor(() =>
+    expect(submitted).toEqual([
+      JSON.stringify({ body: "First reply" }),
+      JSON.stringify({ body: "Second unsent reply" }),
+    ]),
+  );
+  await waitFor(() => expect(editor.value).toBe(""));
+});
+test("a pending edit resumes in Comments and a completed PATCH preserves newer edit text", async () => {
+  withDiff();
+  const fallback = fetchMock.getMockImplementation();
+  let finish = () => {};
+  const submitted: string[] = [];
+  fetchMock.mockImplementation((path, init) => {
+    if (path === `/api/v1/comments/${id}` && init?.method === "PATCH") {
+      submitted.push(String(init.body));
+      if (submitted.length === 1)
+        return new Promise<Response>((resolve) => {
+          finish = () => resolve(Response.json({}));
+        });
+      return Promise.resolve(Response.json({}));
+    }
+    return fallback?.(path, init) as Promise<Response>;
+  });
+  mount(`/r/${id}`);
+  const diff = within(await screen.findByTestId("diff-pane"));
+  fireEvent.click(await diff.findByRole("button", { name: "Edit" }));
+  fireEvent.change(diff.getByLabelText("Edit comment"), { target: { value: "First edit" } });
+  fireEvent.click(diff.getByRole("button", { name: "Save edit" }));
+  await waitFor(() => expect(submitted).toHaveLength(1));
+  fireEvent.click(screen.getByRole("link", { name: /Comments/ }));
+  const drafts = within(await screen.findByRole("region", { name: "Unsaved comments" }));
+  expect(drafts.getByText("Unsaved edit")).toBeTruthy();
+  fireEvent.click(drafts.getByRole("button", { name: "Resume" }));
+  const reading = within(screen.getByTestId("reading-pane"));
+  const input = (await reading.findByLabelText("Edit comment")) as HTMLTextAreaElement;
+  expect(document.activeElement).toBe(input);
+  expect((reading.getByRole("button", { name: "Save edit" }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.change(input, { target: { value: "Second unsent edit" } });
+  await act(async () => finish());
+  await waitFor(() =>
+    expect((reading.getByRole("button", { name: "Save edit" }) as HTMLButtonElement).disabled).toBe(false),
+  );
+  expect(input.value).toBe("Second unsent edit");
+  expect(localStorage.getItem(editDraftKey(id, id))).toBe("Second unsent edit");
+  fireEvent.click(reading.getByRole("button", { name: "Save edit" }));
+  await waitFor(() => expect(localStorage.getItem(editDraftKey(id, id))).toBeNull());
+  expect(submitted).toEqual([JSON.stringify({ body: "First edit" }), JSON.stringify({ body: "Second unsent edit" })]);
 });

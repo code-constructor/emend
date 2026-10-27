@@ -20,6 +20,7 @@ import { capabilitiesRoutes } from "./routes/capabilities.ts";
 import { commentRoutes } from "./routes/comments.ts";
 import { deliveryRoutes } from "./routes/deliveries.ts";
 import { eventRoutes } from "./routes/events.ts";
+import { fileRoutes } from "./routes/files.ts";
 import { pairingRoutes } from "./routes/pairings.ts";
 import { publishRoutes } from "./routes/publish.ts";
 import { reviewRoutes } from "./routes/reviews.ts";
@@ -135,6 +136,7 @@ export function createApp(deps: AppDeps) {
   blobRoutes(app, deps);
   publishRoutes(app, deps);
   reviewRoutes(app, deps);
+  fileRoutes(app, deps);
   threadRoutes(app, deps);
   commentRoutes(app, deps);
   sendRoutes(app, deps);

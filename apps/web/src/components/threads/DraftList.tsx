@@ -15,16 +15,18 @@ export function DraftList({ reviewId, onResume }: { reviewId: string; onResume: 
       {drafts.map((draft) => (
         <article key={draft.key} className="space-y-2 rounded-lg border border-neutral-200 p-3 dark:border-neutral-800">
           <blockquote className="max-h-24 overflow-auto whitespace-pre-wrap break-words border-l-2 pl-2 text-sm">
-            {draft.target
-              ? "quote" in draft.target
-                ? draft.target.quote
-                : "lines" in draft.target
-                  ? draft.target.lines.join("\n")
-                  : "Unsaved comment"
-              : "Unreadable target"}
+            {draft.commentId
+              ? "Unsaved edit"
+              : draft.target
+                ? "quote" in draft.target
+                  ? draft.target.quote
+                  : "lines" in draft.target
+                    ? draft.target.lines.join("\n")
+                    : "Unsaved comment"
+                : "Unreadable target"}
           </blockquote>
           <div className="flex gap-2">
-            {draft.target && <Button onClick={() => onResume(draft)}>Resume</Button>}
+            {(draft.target || draft.commentId) && <Button onClick={() => onResume(draft)}>Resume</Button>}
             <Button onClick={() => clearDraft(draft.key)}>Discard</Button>
           </div>
         </article>

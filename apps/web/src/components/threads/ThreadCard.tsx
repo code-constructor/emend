@@ -1,11 +1,13 @@
-import { LIMITS, type RevisionView, type ThreadView } from "@emend/contract";
-import { useId, useState } from "react";
+import type { RevisionView, ThreadView } from "@emend/contract";
+import { useSyncExternalStore } from "react";
 import { mutationMessage, useReviewMutation } from "../../api/mutations.ts";
-import { clipText } from "../../lib/selection.ts";
+import { claimDraft } from "../../lib/composer-owner.ts";
+import { clearDraft, editDraftKey, hasDraft, saveDraft, subscribeDrafts } from "../../lib/drafts.ts";
 import { Button } from "../ui/Button.tsx";
 import { Composer } from "./Composer.tsx";
 
 export type ThreadProps = {
+  surface?: "reading" | "comments" | "diff";
   reviewId: string;
   revision: number;
   thread: ThreadView;
@@ -23,17 +25,15 @@ function answeredBefore(thread: ThreadView, revision: number) {
   }
   return answeredOn > 0 && answeredOn < revision;
 }
-export function ThreadCard({ reviewId, revision, thread, changedBlocks }: ThreadProps) {
+export function ThreadCard({ reviewId, revision, thread, changedBlocks, surface = "reading" }: ThreadProps) {
   const mutation = useReviewMutation(reviewId);
-  const [editing, setEditing] = useState<string | null>(null);
-  const [body, setBody] = useState("");
-  const field = useId();
   const location = thread.placement.status === "placed" ? thread.placement.location : null;
   const changed =
     location && "blockId" in location ? changedBlocks.find((change) => change.blockId === location.blockId) : undefined;
   return (
     <article
-      id={`thread-${thread.id}`}
+      data-thread-card
+      id={`${surface === "diff" ? "diff-thread" : "thread"}-${thread.id}`}
       className="space-y-3 rounded-lg border border-neutral-200 p-3 text-sm dark:border-neutral-800"
     >
       {"quote" in thread.target && (
@@ -57,57 +57,16 @@ export function ThreadCard({ reviewId, revision, thread, changedBlocks }: Thread
               {comment.author === "user" && comment.sent && <span>Sent</span>}
               {comment.author === "agent" && comment.outcome && <span>{comment.outcome}</span>}
             </p>
-            {editing === comment.id && comment.author === "user" && !comment.sent ? (
-              <form
-                className="space-y-2"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  if (!body.trim() || mutation.isPending) return;
-                  mutation.mutate(
-                    { path: `/api/v1/comments/${encodeURIComponent(comment.id)}`, method: "PATCH", body: { body } },
-                    { onSuccess: () => setEditing(null) },
-                  );
-                }}
-              >
-                <label htmlFor={field}>Edit comment</label>
-                <textarea
-                  id={field}
-                  className="review-input"
-                  maxLength={LIMITS.commentBodyChars}
-                  disabled={mutation.isPending}
-                  value={body}
-                  onChange={(event) => setBody(clipText(event.target.value, LIMITS.commentBodyChars))}
-                />
-                <Button type="submit" disabled={!body.trim() || mutation.isPending}>
-                  Save edit
-                </Button>{" "}
-                <Button disabled={mutation.isPending} onClick={() => setEditing(null)}>
-                  Cancel
-                </Button>
-              </form>
+            {comment.author === "user" && !comment.sent ? (
+              <UnsentComment
+                comment={comment}
+                reviewId={reviewId}
+                revision={revision}
+                thread={thread}
+                surface={surface}
+              />
             ) : (
               <p className="whitespace-pre-wrap break-words">{comment.body}</p>
-            )}
-            {comment.author === "user" && !comment.sent && (
-              <div className="flex gap-2">
-                <Button
-                  disabled={mutation.isPending}
-                  onClick={() => {
-                    setEditing(comment.id);
-                    setBody(comment.body);
-                  }}
-                >
-                  Edit
-                </Button>
-                <Button
-                  disabled={mutation.isPending}
-                  onClick={() =>
-                    mutation.mutate({ path: `/api/v1/comments/${encodeURIComponent(comment.id)}`, method: "DELETE" })
-                  }
-                >
-                  Delete
-                </Button>
-              </div>
             )}
           </li>
         ))}
@@ -123,7 +82,65 @@ export function ThreadCard({ reviewId, revision, thread, changedBlocks }: Thread
       >
         {thread.state === "resolved" ? "Reopen" : "Resolve"}
       </Button>
-      <Composer reviewId={reviewId} revision={revision} target={thread.target} threadId={thread.id} />
+      <Composer surface={surface} reviewId={reviewId} revision={revision} target={thread.target} threadId={thread.id} />
     </article>
+  );
+}
+
+function UnsentComment({
+  comment,
+  reviewId,
+  revision,
+  thread,
+  surface = "reading",
+}: {
+  comment: ThreadView["comments"][number];
+} & Pick<ThreadProps, "reviewId" | "revision" | "thread" | "surface">) {
+  const key = editDraftKey(reviewId, comment.id);
+  const editing = useSyncExternalStore(subscribeDrafts, () => hasDraft(key));
+  const mutation = useReviewMutation(reviewId, key);
+  return (
+    <>
+      {editing ? (
+        <Composer
+          surface={surface}
+          reviewId={reviewId}
+          revision={revision}
+          target={thread.target}
+          commentId={comment.id}
+          onCancel={() => clearDraft(key)}
+        />
+      ) : (
+        <p className="whitespace-pre-wrap break-words">{comment.body}</p>
+      )}
+      <div className="flex gap-2">
+        {!editing && (
+          <Button
+            disabled={mutation.isPending}
+            onClick={() => {
+              saveDraft(key, comment.body);
+              claimDraft(key, surface);
+            }}
+          >
+            Edit
+          </Button>
+        )}
+        <Button
+          disabled={mutation.isPending}
+          onClick={() =>
+            mutation.mutate(
+              {
+                path: `/api/v1/comments/${encodeURIComponent(comment.id)}`,
+                method: "DELETE",
+              },
+              { onSuccess: () => clearDraft(key) },
+            )
+          }
+        >
+          Delete
+        </Button>
+      </div>
+      {mutation.error && <p role="alert">{mutationMessage(mutation.error)}</p>}
+    </>
   );
 }
