@@ -3,6 +3,7 @@ paths:
   - "packages/core/src/render/**"
   - "apps/web/src/**"
   - "apps/web/public/**"
+  - "apps/web/mermaid-frame.*"
   - "apps/emend/src/server/content/**"
   - "apps/emend/src/server/http/headers.ts"
 ---
@@ -22,17 +23,25 @@ instructions to the waiting agent in the reviewer's name.
 - `dangerouslySetInnerHTML` takes only server-rendered blocks, and only in `BlockView.tsx`. Client
   code never sets `innerHTML`, `outerHTML` or `insertAdjacentHTML`.
 - Never serve agent-written HTML, JS or CSS on the app origin. HTML docs and their assets load
-  only from `/content/<key>/…` with `Content-Security-Policy: sandbox allow-scripts; …` (plan,
+  only from `/content/<doc key>/…` with `Content-Security-Policy: sandbox allow-scripts; …` (plan,
   Global Constraints), in an iframe with `sandbox="allow-scripts"` and nothing else. Never add
   `allow-same-origin`, `allow-top-navigation`, `allow-popups` or `allow-forms`.
-- The content path never reads cookies and answers only for its capability key.
+- The content path never reads cookies. Its key names one HTML doc of one revision, and it serves
+  only that doc and the assets that doc lists.
 - Frame messages: the parent accepts a message only when `event.source` is that frame's
   `contentWindow` and it parses with the contract's limits. A proposed anchor is shown to the
   reviewer and saved only by the reviewer. The parent posts only that doc's quotes into the
-  frame, never comment bodies.
+  frame, never comment bodies. A link to another doc arrives as `emend:navigate`; the parent opens
+  only a doc of the same revision, in that doc's own section. No doc script runs, so only emend's
+  own code can send. After a load the parent did not cause, the parent accepts nothing from the
+  frame until it reloads it.
+- A doc's own scripts never run: no inline script, event handler, `javascript:` URL or script
+  file. Only emend's bridge runs, allowed by its hash. WebRTC reaches the network and no CSP stops
+  it, so never allow a doc's own script.
 - Links: only `http:`, `https:` and `mailto:`, with `rel="noopener noreferrer nofollow"`. Relative
   links in Markdown keep no `href`.
-- Mermaid: one frame per diagram from `public/mermaid-frame.html`, `sandbox="allow-scripts"`
+- Mermaid: one frame per diagram from `/mermaid-frame.html` (built from
+  `apps/web/mermaid-frame.html` and `mermaid-frame.ts`), `sandbox="allow-scripts"`
   without `allow-same-origin`, a bundled and pinned Mermaid (never a CDN), `securityLevel:
   "strict"`, `startOnLoad: false`. The frame accepts messages only from its parent. A diagram is
   commented on as a whole block.
@@ -44,13 +53,17 @@ instructions to the waiting agent in the reviewer's name.
   'self'; frame-ancestors 'none'`, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`,
   `Referrer-Policy: no-referrer`, `Cross-Origin-Opener-Policy: same-origin`.
 - Content path: `Content-Security-Policy: sandbox allow-scripts; default-src 'none'; script-src
-  'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src
-  'self' data:; media-src 'self'; connect-src 'none'; form-action 'none'; frame-src 'none';
-  frame-ancestors <app origins>`, plus `X-Content-Type-Options: nosniff`, `Referrer-Policy:
-  no-referrer`, `Cross-Origin-Resource-Policy: same-origin`. `sandbox allow-scripts` alone is not
-  enough: `connect-src 'none'` keeps a doc off the network.
+  'sha256-<bridge>'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'
+  data:; media-src 'self'; connect-src 'none'; form-action 'none'; frame-src 'none';
+  frame-ancestors 'self'` on the doc, where `<bridge>` is the hash of the injected bridge script;
+  asset and error responses use `script-src 'none'`. Plus `X-Content-Type-Options: nosniff`,
+  `Referrer-Policy: no-referrer` and `Cache-Control: no-store`. The doc and error responses send
+  `Cross-Origin-Resource-Policy: same-origin`; asset responses send `cross-origin` and
+  `Access-Control-Allow-Origin: *`, because the frame's opaque origin makes every asset load
+  cross-origin and every font a CORS request. `sandbox allow-scripts` is there for the bridge
+  alone; `connect-src 'none'` keeps the bridge off the network.
 - Mermaid frame: `default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src
-  data:`.
+  data:`, plus `X-Frame-Options: SAMEORIGIN` on that path only, so the app page can frame it.
 - Never weaken the app CSP, `X-Frame-Options: DENY`, the content path's CSP or the frame
   sandbox. Any change to headers, sandbox attributes, the bridge or the sanitize schema needs
   `emend-security-reviewer`.
