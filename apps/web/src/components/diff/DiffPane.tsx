@@ -19,7 +19,7 @@ export function DiffPane({ reviewId, revision, parser, resume }: DiffPaneProps) 
     if (resume?.target && isDiffTarget(resume.target)) setActive(resume.target);
   }, [resume]);
   const groups = new Map<string, { topic: TopicMeta; files: FileView[] }>();
-  for (const topic of revision.topics.toSorted((a, b) => b.importance - a.importance))
+  for (const topic of revision.topics.toSorted((a, b) => a.importance - b.importance))
     groups.set(topic.slug, { topic, files: [] });
   const other = groups.get(OTHER_TOPIC.slug) ?? { topic: { ...OTHER_TOPIC, importance: 0, summary: "" }, files: [] };
   other.topic = { ...other.topic, title: OTHER_TOPIC.title };

@@ -135,7 +135,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
-test("topics sort descending stably, Other last, files by order, empty headers and metadata are text", async () => {
+test("topics sort ascending stably, Other last, files by order, empty headers and metadata are text", async () => {
   const files = [
     file("later.ts", { order: 8 }),
     file("earlier.ts", { order: 1 }),
@@ -162,9 +162,9 @@ test("topics sort descending stably, Other last, files by order, empty headers a
     }),
   );
   expect(screen.getAllByRole("heading", { level: 3 }).map((e) => e.textContent)).toEqual([
+    "Low",
     "First",
     "Tie",
-    "Low",
     "Other changes",
   ]);
   expect(screen.getAllByRole("heading", { level: 4 }).map((e) => e.textContent)).toEqual([
