@@ -15,19 +15,23 @@ export async function gitFolders(root: string, run: GitRunner): Promise<string[]
   return [...new Set(await Promise.all([realpath(resolve(root, target)), realpath(resolve(root, common))]))];
 }
 
+export async function isWorktreeRoot(directory: string): Promise<boolean> {
+  const entry = join(directory, ".git");
+  try {
+    const info = await lstat(entry);
+    if (info.isDirectory()) return true;
+    if (info.isFile() && /^gitdir: [^\r\n\0]+\r?\n?$/.test((await readRegular(entry, 16384)).toString())) return true;
+    throw new CliError("invalid repository entry");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    return false;
+  }
+}
+
 export async function worktreeRoot(cwd: string): Promise<string | null> {
   let directory = await realpath(cwd);
   for (;;) {
-    const entry = join(directory, ".git");
-    try {
-      const info = await lstat(entry);
-      if (info.isDirectory()) return directory;
-      if (info.isFile() && /^gitdir: [^\r\n\0]+\r?\n?$/.test((await readRegular(entry, 16384)).toString()))
-        return directory;
-      throw new CliError("invalid repository entry");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
+    if (await isWorktreeRoot(directory)) return directory;
     const parent = dirname(directory);
     if (parent === directory) return null;
     directory = parent;

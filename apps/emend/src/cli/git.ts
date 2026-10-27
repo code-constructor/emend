@@ -1,9 +1,7 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { constants } from "node:fs";
-import { access, stat } from "node:fs/promises";
-import { delimiter, isAbsolute, join } from "node:path";
 import { LIMITS } from "@emend/contract";
+import { findExecutable } from "./executable.ts";
 import { CliError } from "./http.ts";
 
 export type GitCall =
@@ -77,20 +75,7 @@ const fences = [
 ];
 let executable: Promise<{ file: string; path: string }> | undefined;
 function gitExecutable() {
-  executable ??= (async () => {
-    const entries = (process.env.PATH ?? "").split(delimiter).filter(isAbsolute);
-    for (const entry of entries) {
-      const file = join(entry, "git");
-      try {
-        if (!(await stat(file)).isFile()) continue;
-        await access(file, constants.X_OK);
-        return { file, path: entries.join(delimiter) };
-      } catch {
-        /* Try the next absolute PATH entry. */
-      }
-    }
-    throw new CliError("git was not found on PATH");
-  })();
+  executable ??= findExecutable("git");
   return executable;
 }
 async function execute(cwd: string, args: string[], listing = false): Promise<Buffer> {

@@ -1,3 +1,4 @@
+import type { ServiceOptions } from "./cli/service/common.ts";
 import { defaultStateDir } from "./state/paths.ts";
 import { VERSION } from "./version.ts";
 
@@ -8,13 +9,14 @@ export interface Io {
   stderr: (s: string) => void;
   env: Record<string, string | undefined>;
   openUrl?: (url: string) => Promise<boolean>;
+  service?: ServiceOptions;
 }
 export async function run(argv: string[], io: Io): Promise<number> {
   if (argv.length === 1 && argv[0] === "--version") {
     io.stdout(`emend ${VERSION}\n`);
     return 0;
   }
-  if (["wait", "feedback", "reply", "mcp"].includes(argv[0] ?? "")) {
+  if (["wait", "feedback", "reply", "mcp", "service"].includes(argv[0] ?? "")) {
     const { CliUsageError, errorLine } = await import("./cli/http.ts");
     try {
       const commands = {
@@ -22,6 +24,7 @@ export async function run(argv: string[], io: Io): Promise<number> {
         feedback: () => import("./cli/commands/feedback.ts").then((m) => m.feedbackCommand),
         reply: () => import("./cli/commands/reply.ts").then((m) => m.replyCommand),
         mcp: () => import("./cli/commands/mcp.ts").then((m) => m.mcpCommand),
+        service: () => import("./cli/commands/service.ts").then((m) => m.serviceCommand),
       };
       const command = await commands[argv[0] as keyof typeof commands]();
       await command(defaultStateDir(io.env), argv.slice(1), io);

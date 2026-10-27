@@ -4,7 +4,6 @@ import { readFile } from "node:fs/promises";
 import { isIP } from "node:net";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { fileURLToPath } from "node:url";
 import {
   Capabilities,
   SERVER_CHALLENGE_HEADER,
@@ -15,6 +14,7 @@ import {
 import { serverProof } from "../server/auth/server-proof.ts";
 import { ensureStateDir } from "../state/files.ts";
 import { VERSION } from "../version.ts";
+import { cliRuntime } from "./runtime.ts";
 
 export async function discover(
   stateDir: string,
@@ -72,22 +72,17 @@ export async function discover(
 }
 export async function ensureServer(
   stateDir: string,
-  opts: { entry?: string; timeoutMs?: number } = {},
+  opts: { node?: string; entry?: string; timeoutMs?: number } = {},
 ): Promise<{ url: string }> {
   ensureStateDir(stateDir);
   const timeoutMs = opts.timeoutMs ?? 5000;
   const existing = await discover(stateDir, Math.min(500, timeoutMs));
   if (existing) return existing;
-  // In the bundle import.meta.url is the entry; source execution uses cli.ts.
-  const entry =
-    opts.entry ??
-    (import.meta.url.endsWith(".ts")
-      ? fileURLToPath(new URL("../cli.ts", import.meta.url))
-      : fileURLToPath(import.meta.url));
+  const { node, entry } = cliRuntime(opts);
   const failure = () => new Error("Could not start the emend server.");
   let spawnError = false;
   try {
-    const child = spawn(process.execPath, [entry, "serve"], {
+    const child = spawn(node, [entry, "serve"], {
       detached: true,
       cwd: stateDir,
       stdio: "ignore",
