@@ -3,6 +3,7 @@ import { PairingCreated } from "@emend/contract";
 import type { Io } from "../../main.ts";
 import { apiRequest, CliError } from "../http.ts";
 import { ensureServer } from "../server-client.ts";
+import { localTarget } from "../target.ts";
 
 export async function openBrowser(url: string): Promise<boolean> {
   const command = process.platform === "darwin" ? "open" : process.platform === "linux" ? "xdg-open" : null;
@@ -28,7 +29,10 @@ export async function openCommand(stateDir: string, io: Io) {
     throw new CliError("Could not start the emend server.");
   }
   const response = PairingCreated.safeParse(
-    await apiRequest(stateDir, url, "/pairings", { token: "admin", method: "POST", body: { purpose: "device" } }),
+    await apiRequest(stateDir, await localTarget(stateDir, url, "admin"), "/pairings", {
+      method: "POST",
+      body: { purpose: "device" },
+    }),
   );
   if (!response.success) throw new CliError("The emend server returned an invalid response.");
   let opened = false;

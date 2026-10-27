@@ -24,6 +24,7 @@
     "@emend/core": "workspace:*",
     "@emend/web": "workspace:*",
     "@hono/node-server": "2.1.5",
+    "@modelcontextprotocol/sdk": "1.32.2",
     "drizzle-kit": "0.31.11",
     "drizzle-orm": "0.45.4",
     "esbuild": "0.28.2",

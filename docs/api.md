@@ -102,7 +102,7 @@ a machine token reaches only reviews from its own instance.
 | POST | `/api/v1/threads/:id/resolve` | Reviewer | Resolve a thread. |
 | POST | `/api/v1/threads/:id/reopen` | Reviewer | Reopen a thread. |
 | POST | `/api/v1/reviews/:id/sends` | Reviewer | Send feedback or approve the revision on screen. |
-| POST | `/api/v1/reviews/:id/take` | Agent | Claim a delivery, waiting up to `{waitSeconds: 0..25}`. |
+| POST | `/api/v1/reviews/:id/take` | Agent | Claim a delivery with `{waitSeconds?: 0..25, maxBytes?: 65536..16777216}`. |
 | POST | `/api/v1/deliveries/:id/confirm` | Agent | Confirm receipt of a claimed delivery. |
 | POST | `/api/v1/comments/:id/reply` | Agent | Answer a comment with an outcome. |
 | GET | `/content/:contentKey/*` | Holder of the key | Read isolated HTML docs and assets from a revision. |
@@ -284,9 +284,16 @@ delivery, which remains available so receipt can be recorded. Foreign or missing
 comment and delivery ids return `404 not_found`,
 including ids from another origin instance for an agent.
 
-`TakeRequest = { waitSeconds }` defaults to 0; finite values from 0 through
-`MAX_TAKE_WAIT_SECONDS` (25), including fractions, are accepted. On this route only, a missing
-or zero-length body means `{}` even without Content-Type. A nonempty body must be JSON.
+`TakeRequest = { waitSeconds?, maxBytes? }`: `waitSeconds` defaults to 0; finite values from 0 through
+`MAX_TAKE_WAIT_SECONDS` (25), including fractions, are accepted. Optional `maxBytes` is an integer
+from 65536 through `handoffBytes` (16777216); out-of-range or non-integer values return
+`400 invalid_request`. It narrows both the claim's byte window and history trimming to
+`min(maxBytes, handoffBytes)`. Omitting it keeps the full handoff budget. Leading approvals and
+the first queued Go form one unit: if that unit cannot fit, the take returns `413 too_large`
+and claims nothing. An approval without a queued Go remains deliverable. A window already
+containing a Go still sets aside included approvals and leaves later oversized Sends queued.
+On this route only, a missing or zero-length body means `{}` even without Content-Type.
+A nonempty body must be JSON.
 A take returns 200 `WaitResult`. Each owner may have `waitingTakesPerOwner` (32) waiting takes;
 additional waits receive `429 rate_limited`. Before a waiting take retries and before returning,
 its token is rechecked through the committed-read connection. Revoked or expired credentials
@@ -366,16 +373,23 @@ replies and sent user comments in that thread. Drafts and every comment delivere
 handoff are excluded, regardless of clock changes. `historyTrimmed: true` means "some history
 was left out, by the per-comment cap or the byte budget"; it is absent when all history is kept.
 Sends and delivered comments also use insertion order. The serialized UTF-8 `WaitResult`
-must fit `handoffBytes` (16777216 bytes).
+must fit `handoffBytes` (16777216 bytes), or the take's smaller `maxBytes` when provided.
 The guarded claim selects whole Sends in FIFO order under the count and byte caps, leaving the
 rest queued. It budgets comment bodies, placement metadata, instructions and space for truncation
 flags before reading history, then loads history only for the selected comments. Byte accounting
 measures JSON components without building an oversized string.
-The first Send is always claimed; if the selected comments' history exceeds the budget, entries
+Without `maxBytes`, the first Send is always claimed, as its required payload fits the Send-time
+check. With `maxBytes`, if even that first Send with all history removed cannot fit, the take
+returns `413 too_large` and claims nothing. If the selected comments' history exceeds the budget, entries
 are removed in global insertion order, oldest first, from every comment carrying them. Each entry costs its
 serialized bytes times the number of comments carrying it. Sizes determine the retained suffix
 before history bodies are loaded, and every affected comment carries `historyTrimmed: true`.
 Comment bodies and instructions are never truncated.
+
+MCP takes use `maxBytes: 3145728` (3 MiB) so the escaped text copy, structured result, and
+JSON-RPC envelope fit the SDK's 10 MiB stdio message limit. A `413` becomes a tool error directing
+the agent to run `emend feedback <review>` in a shell; the Send stays queued. CLI takes retain
+the full budget.
 
 `target.quote`, `prefix`, `suffix`, `lines`, `before` and `after` are text from the repository or
 the agent's own documents, quoted for placement. Only the comment `body`, `history[].body` written

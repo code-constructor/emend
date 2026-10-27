@@ -8,7 +8,10 @@ import { CommentBody, Outcome } from "./thread.ts";
 export const LEASE_SECONDS = 120;
 export const MAX_TAKE_WAIT_SECONDS = 25;
 
-export const TakeRequest = z.object({ waitSeconds: z.number().min(0).max(MAX_TAKE_WAIT_SECONDS).default(0) });
+export const TakeRequest = z.object({
+  waitSeconds: z.number().min(0).max(MAX_TAKE_WAIT_SECONDS).default(0),
+  maxBytes: z.int().min(65536).max(LIMITS.handoffBytes).optional(),
+});
 export type TakeRequest = z.infer<typeof TakeRequest>;
 
 export const HandoffComment = z.object({

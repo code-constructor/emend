@@ -14,6 +14,7 @@ import {
 } from "@emend/contract";
 import { serverProof } from "../server/auth/server-proof.ts";
 import { ensureStateDir } from "../state/files.ts";
+import { VERSION } from "../version.ts";
 
 export async function discover(
   stateDir: string,
@@ -51,7 +52,7 @@ export async function discover(
     const challenge = randomBytes(32).toString("base64url");
     const response = await fetch(`${url.origin}/api/v1/capabilities`, {
       redirect: "error",
-      headers: { [SERVER_CHALLENGE_HEADER]: challenge },
+      headers: { [SERVER_CHALLENGE_HEADER]: challenge, "X-Emend-Client": `cli/${VERSION}` },
       signal: AbortSignal.timeout(Math.max(1, timeoutMs)),
     });
     const proof = ServerProof.safeParse(response.headers.get(SERVER_PROOF_HEADER));

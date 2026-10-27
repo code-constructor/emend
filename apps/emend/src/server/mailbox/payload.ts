@@ -122,6 +122,7 @@ export async function loadHistory(
   reviewId: string,
   result: Go,
   commentOrders: Map<string, number>,
+  maxBytes: number = LIMITS.handoffBytes,
 ): Promise<Go> {
   if (!result.comments.length) return result;
   type Carrier = { comment: HandoffComment; count: number };
@@ -193,7 +194,7 @@ export async function loadHistory(
   for (const entry of ordered) bytes += entry.bytes * entry.carriers.length;
   let dropped = 0;
   for (const entry of ordered) {
-    if (bytes <= LIMITS.handoffBytes) break;
+    if (bytes <= maxBytes) break;
     for (const carrier of entry.carriers) {
       bytes -= entry.bytes + (carrier.count > 1 ? 1 : 0);
       carrier.count--;
@@ -204,7 +205,7 @@ export async function loadHistory(
     }
     dropped++;
   }
-  if (bytes > LIMITS.handoffBytes) throw new ApiError("too_large");
+  if (bytes > maxBytes) throw new ApiError("too_large");
 
   const kept = ordered.slice(dropped);
   // Bound SQL parameters as well as bodies. Shared entries are loaded just once.

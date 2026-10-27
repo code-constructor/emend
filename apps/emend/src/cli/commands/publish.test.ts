@@ -3,14 +3,55 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Writable } from "node:stream";
 import { promisify } from "node:util";
 import { type PublishManifest, PublishRequest } from "@emend/contract";
 import { afterEach, expect, test, vi } from "vitest";
 import { run } from "../../main.ts";
-import { provenTestServer } from "../test-support.ts";
+import { commandFixture, provenTestServer } from "../test-support.ts";
 import { publishCommand, publishTimeoutMs } from "./publish.ts";
 
 afterEach(() => vi.unstubAllGlobals());
+test("publish with closed stdout exits 1 with one diagnostic", async () => {
+  const f = await commandFixture();
+  const manifest = join(f.dir, "manifest.json");
+  await writeFile(
+    manifest,
+    JSON.stringify({
+      version: 1,
+      title: "Synthetic",
+      topics: [],
+      files: [],
+      writeup: { overview: "", tldr: "", decisions: null, topics: {} },
+    }),
+  );
+  await writeFile(join(f.dir, "instance.json"), JSON.stringify({ id: randomUUID() }));
+  const reviewId = randomUUID();
+  f.setResponse(async () =>
+    Response.json({
+      reviewId,
+      revision: 1,
+      placed: 0,
+      unplaced: 0,
+      unrendered: ["synthetic.md"],
+      url: `http://127.0.0.1:3636/r/${reviewId}`,
+    }),
+  );
+  const closed = new Writable({
+    write(_chunk, _encoding, callback) {
+      callback();
+    },
+  });
+  closed.on("error", () => {});
+  closed.destroy();
+  f.io.stdoutAsync = (line) =>
+    new Promise<void>((resolve, reject) => {
+      closed.write(line, (error) => (error ? reject(error) : resolve()));
+    });
+  expect(await run(["publish", "--manifest", manifest, "--key", "synthetic"], f.io)).toBe(1);
+  expect(f.stdout).toEqual([]);
+  expect(f.stderr).toEqual(["emend: Could not write to stdout.\n"]);
+});
 test("publish deadlines include the slot, one render pass and three placement attempts", () => {
   expect(publishTimeoutMs([])).toBe(145000);
   expect(

@@ -13,6 +13,7 @@ import type { Db, Queries } from "../../db/client.ts";
 import { commentOrder, newestRevision, requireReview } from "../../db/repo/threads.ts";
 import { comments, deliveries, placements, reviews, revisions, sends, threads } from "../../db/schema.ts";
 import type { Principal } from "../auth/principal.ts";
+import { ApiError } from "../http/errors.ts";
 import { envelopeBytes, loadHistory, pendingCommentSizes, placementOrMissing, sendSizes } from "./payload.ts";
 
 async function reopen(ownerId: string, q: Queries, reviewId: string, now: number, approvedRevisions: string[]) {
@@ -31,8 +32,10 @@ export async function takeDelivery(
   reviewId: string,
   now: number,
   authorize?: (q: Queries) => Promise<void>,
+  maxBytes: number = LIMITS.handoffBytes,
 ): Promise<Exclude<WaitResult, { kind: "pending" }> | null> {
   const ownerId = principal.ownerId;
+  const byteLimit = Math.min(maxBytes, LIMITS.handoffBytes);
   // An empty poll reads committed state without waiting behind a publishing writer.
   const available = await db.read(async (q) => {
     await requireReview(ownerId, q, reviewId, principal);
@@ -123,7 +126,7 @@ export async function takeDelivery(
           and s.delivery_id is null and s.set_aside_at is null
       ) where position = 1 or (comment_count <= ${LIMITS.commentsPerHandoff}
         and instruction_count <= ${LIMITS.instructionsPerHandoff}
-        and payload_bytes + ${envelopeBytes} <= ${LIMITS.handoffBytes})
+        and payload_bytes + ${envelopeBytes} <= ${byteLimit})
     )`,
         ),
       );
@@ -142,7 +145,20 @@ export async function takeDelivery(
     }
     const go = claimed.filter((row) => row.send.kind === "go");
     const latest = go.at(-1);
-    if (!latest) return { kind: "approve", reviewId, deliveryId, revision: newest.seq };
+    if (!latest) {
+      // Leading approvals and the first queued Go are indivisible. A smaller
+      // budget must roll back this claim instead of hiding feedback behind approval.
+      if (
+        await q
+          .select({ id: sends.id })
+          .from(sends)
+          .where(and(unclaimed, eq(sends.kind, "go")))
+          .limit(1)
+          .get()
+      )
+        throw new ApiError("too_large");
+      return { kind: "approve", reviewId, deliveryId, revision: newest.seq };
+    }
     const approvalSetAside = claimed.some((row) => row.send.kind === "approve");
     if (approvalSetAside) {
       await q
@@ -215,6 +231,7 @@ export async function takeDelivery(
         comments: output,
       },
       commentOrders,
+      byteLimit,
     );
   });
 }

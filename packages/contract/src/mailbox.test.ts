@@ -35,6 +35,14 @@ test("take defaults to an immediate poll and bounds the wait", () => {
   expect(TakeRequest.parse({ waitSeconds: 25 })).toEqual({ waitSeconds: 25 });
   for (const waitSeconds of [-1, 26, Infinity, "1"]) expect(TakeRequest.safeParse({ waitSeconds }).success).toBe(false);
 });
+test("take optionally narrows the handoff byte budget within the public bounds", () => {
+  for (const maxBytes of [65536, 3145728, LIMITS.handoffBytes]) {
+    expect(TakeRequest.parse({ maxBytes })).toEqual({ waitSeconds: 0, maxBytes });
+  }
+  for (const maxBytes of [0, 65535, LIMITS.handoffBytes + 1, 65536.5, Infinity, "65536", null]) {
+    expect(TakeRequest.safeParse({ maxBytes }).success).toBe(false);
+  }
+});
 test("thread and comment requests validate bodies and targets", () => {
   expect(CreateThreadRequest.parse({ revision: 1, target: { kind: "review" }, body: " note " }).body).toBe(" note ");
   for (const schema of [AddCommentRequest, EditCommentRequest]) {

@@ -1,11 +1,22 @@
-import { join } from "node:path";
 import { ErrorBody, type ErrorCode } from "@emend/contract";
+import type { Io } from "../main.ts";
 import { ApiError } from "../server/http/errors.ts";
-import { readTokenFile } from "../state/token-file.ts";
 import { VERSION } from "../version.ts";
 import { discover } from "./server-client.ts";
+import type { Target } from "./target.ts";
 
 export class CliError extends Error {}
+export class CliUsageError extends CliError {}
+export function errorLine(error: unknown): string {
+  return `emend: ${error instanceof CliApiError ? error.code : error instanceof CliError ? error.message : "The emend request failed."}\n`;
+}
+export async function printJson(io: Io, value: unknown): Promise<void> {
+  try {
+    await (io.stdoutAsync ?? io.stdout)(`${JSON.stringify(value)}\n`);
+  } catch {
+    throw new CliError("Could not write to stdout.");
+  }
+}
 export const publishAnswerIncomplete = "the server's answer was cut off; the revision may have been published";
 export class CliApiError extends CliError {
   readonly code: ErrorCode;
@@ -16,34 +27,31 @@ export class CliApiError extends CliError {
 }
 export async function apiRequest(
   stateDir: string,
-  baseUrl: string,
+  target: Target,
   path: string,
   opts: {
-    token: "admin" | "agent";
     method: string;
     body?: unknown;
     raw?: Buffer;
     missingOk?: boolean;
     timeoutMs?: number;
+    signal?: AbortSignal;
   },
 ): Promise<unknown> {
-  if (!(await discover(stateDir, 5000, baseUrl))) throw new CliError("Could not authenticate the emend server.");
-  let token: string | null;
-  try {
-    token = await readTokenFile(join(stateDir, `${opts.token}.token`));
-  } catch {
-    throw new CliError("Could not read the emend credential.");
-  }
-  if (!token || !/^em_[A-Za-z0-9_-]{43}$/.test(token)) throw new CliError("The emend credential is invalid.");
+  opts.signal?.throwIfAborted();
+  if (target.via === "local" && !(await discover(stateDir, 5000, target.url)))
+    throw new CliError("Could not authenticate the emend server.");
+  opts.signal?.throwIfAborted();
   let response: Response;
-  const signal = AbortSignal.timeout(opts.timeoutMs ?? 5000);
+  const timeout = AbortSignal.timeout(opts.timeoutMs ?? 5000);
+  const signal = opts.signal ? AbortSignal.any([opts.signal, timeout]) : timeout;
   try {
-    response = await fetch(new URL(`/api/v1${path}`, baseUrl), {
+    response = await fetch(new URL(`/api/v1${path}`, target.url), {
       method: opts.method,
       redirect: "error",
       signal,
       headers: {
-        Authorization: `Bearer ${token}`,
+        Authorization: `Bearer ${target.token}`,
         "X-Emend-Client": `cli/${VERSION}`,
         "Content-Type": opts.raw === undefined ? "application/json" : "application/octet-stream",
         ...(opts.raw === undefined ? {} : { "Content-Length": String(opts.raw.length) }),

@@ -1,5 +1,9 @@
 import { createHmac } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { onTestFinished, vi } from "vitest";
+import type { Io } from "../main.ts";
 import { writeSecretFile } from "../state/files.ts";
 
 export function provenTestServer(stateDir: string): (url: string | URL, init?: RequestInit) => Response | undefined {
@@ -19,5 +23,46 @@ export function provenTestServer(stateDir: string): (url: string | URL, init?: R
         },
       },
     );
+  };
+}
+
+export async function commandFixture() {
+  const dir = await mkdtemp(join(tmpdir(), "emend-handoff-"));
+  onTestFinished(async () => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    await rm(dir, { recursive: true, force: true });
+  });
+  writeSecretFile(join(dir, "agent.token"), `em_${"a".repeat(43)}`);
+  const proof = provenTestServer(dir);
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const io: Io = {
+    stdout: (line) => {
+      stdout.push(line);
+    },
+    stdoutAsync: async (line) => {
+      stdout.push(line);
+    },
+    stderr: (line) => {
+      stderr.push(line);
+    },
+    env: { EMEND_HOME: dir },
+  };
+  const f = {
+    dir,
+    io,
+    stdout,
+    stderr,
+    respond: async (_url: string | URL, _init?: RequestInit): Promise<Response> => Response.json({}),
+  };
+  const fetcher = vi.fn(async (url: string | URL, init?: RequestInit) => proof(url, init) ?? f.respond(url, init));
+  vi.stubGlobal("fetch", fetcher);
+  return {
+    ...f,
+    fetcher,
+    setResponse: (respond: typeof f.respond) => {
+      f.respond = respond;
+    },
   };
 }

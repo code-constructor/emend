@@ -8,6 +8,7 @@ import { run } from "../main.ts";
 import { writeSecretFile } from "../state/files.ts";
 import { apiRequest } from "./http.ts";
 import { ensureServer } from "./server-client.ts";
+import { localTarget } from "./target.ts";
 
 vi.mock("node:child_process", () => ({ spawn: vi.fn() }));
 afterEach(() => {
@@ -91,7 +92,10 @@ test("a valid proof allows discovery and the authenticated fetch re-proves with 
     const discovered = await ensureServer(fixture.dir, { timeoutMs: 100 });
     expect(discovered).toEqual({ url });
     expect(
-      await apiRequest(fixture.dir, discovered.url, "/pairings", { method: "POST", token: "admin", body: {} }),
+      await apiRequest(fixture.dir, await localTarget(fixture.dir, discovered.url, "admin"), "/pairings", {
+        method: "POST",
+        body: {},
+      }),
     ).toEqual({ ok: true });
     expect(challenges).toHaveLength(2);
     expect(challenges[0]).not.toBe(challenges[1]);
@@ -108,7 +112,9 @@ test("apiRequest refuses an arbitrary URL even if another server was discovered"
     const fetcher = vi.fn();
     vi.stubGlobal("fetch", fetcher);
     await expect(
-      apiRequest(fixture.dir, "http://127.0.0.1:3637", "/pairings", { method: "POST", token: "admin" }),
+      apiRequest(fixture.dir, await localTarget(fixture.dir, "http://127.0.0.1:3637", "admin"), "/pairings", {
+        method: "POST",
+      }),
     ).rejects.toThrow("Could not authenticate the emend server.");
     expect(fetcher).not.toHaveBeenCalled();
   } finally {

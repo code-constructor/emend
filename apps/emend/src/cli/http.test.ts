@@ -4,6 +4,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { testDb } from "../db/test-support.ts";
 import { writeSecretFile } from "../state/files.ts";
 import { apiRequest } from "./http.ts";
+import { localTarget } from "./target.ts";
 import { provenTestServer } from "./test-support.ts";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -21,8 +22,7 @@ test("a publish timeout reports that nothing was published", async () => {
         }),
     );
     await expect(
-      apiRequest(fixture.dir, "http://127.0.0.1:3636", "/publish", {
-        token: "agent",
+      apiRequest(fixture.dir, await localTarget(fixture.dir, "http://127.0.0.1:3636", "agent"), "/publish", {
         method: "POST",
         body: {},
         timeoutMs: 10,
@@ -48,8 +48,7 @@ test("HTTP sends state token, version and JSON, refuses redirects and renders fi
     );
     vi.stubGlobal("fetch", fetcher);
     expect(
-      await apiRequest(fixture.dir, "http://127.0.0.1:3636", "/pairings", {
-        token: "admin",
+      await apiRequest(fixture.dir, await localTarget(fixture.dir, "http://127.0.0.1:3636", "admin"), "/pairings", {
         method: "POST",
         body: { purpose: "device" },
       }),
@@ -61,7 +60,10 @@ test("HTTP sends state token, version and JSON, refuses redirects and renders fi
       body: '{"purpose":"device"}',
     });
     await expect(
-      apiRequest(fixture.dir, "http://127.0.0.1:3636", "/pairings", { token: "admin", method: "POST", body: {} }),
+      apiRequest(fixture.dir, await localTarget(fixture.dir, "http://127.0.0.1:3636", "admin"), "/pairings", {
+        method: "POST",
+        body: {},
+      }),
     ).rejects.toThrow("Authentication is required.");
   } finally {
     await fixture.cleanup();
@@ -80,7 +82,10 @@ test("CLI tokens trim trailing CR/LF and reject symlinks before any Authorizatio
     );
     vi.stubGlobal("fetch", fetcher);
     expect(
-      await apiRequest(fixture.dir, "http://127.0.0.1:3636", "/pairings", { token: "admin", method: "POST", body: {} }),
+      await apiRequest(fixture.dir, await localTarget(fixture.dir, "http://127.0.0.1:3636", "admin"), "/pairings", {
+        method: "POST",
+        body: {},
+      }),
     ).toEqual({ ok: true });
     expect(new Headers(fetcher.mock.calls[1]?.[1]?.headers).get("Authorization")).toBe(`Bearer ${secret}`);
     await rm(path);
@@ -88,11 +93,10 @@ test("CLI tokens trim trailing CR/LF and reject symlinks before any Authorizatio
     writeSecretFile(target, secret);
     await symlink(target, path);
     fetcher.mockClear();
-    await expect(
-      apiRequest(fixture.dir, "http://127.0.0.1:3636", "/pairings", { token: "admin", method: "POST" }),
-    ).rejects.toThrow("Could not read the emend credential.");
-    expect(fetcher).toHaveBeenCalledTimes(1);
-    expect(new Headers(fetcher.mock.calls[0]?.[1]?.headers).has("Authorization")).toBe(false);
+    await expect(localTarget(fixture.dir, "http://127.0.0.1:3636", "admin")).rejects.toThrow(
+      "Could not read the emend credential.",
+    );
+    expect(fetcher).not.toHaveBeenCalled();
   } finally {
     await fixture.cleanup();
   }
@@ -120,8 +124,7 @@ test.each([200, 500])(
           ),
       );
       await expect(
-        apiRequest(fixture.dir, "http://127.0.0.1:3636", "/publish", {
-          token: "agent",
+        apiRequest(fixture.dir, await localTarget(fixture.dir, "http://127.0.0.1:3636", "agent"), "/publish", {
           method: "POST",
           body: {},
           timeoutMs: 10,
@@ -162,8 +165,7 @@ test.each([200, 500])("publish response %i body reset preserves possible publica
       );
     });
     await expect(
-      apiRequest(fixture.dir, "http://127.0.0.1:3636", "/publish", {
-        token: "agent",
+      apiRequest(fixture.dir, await localTarget(fixture.dir, "http://127.0.0.1:3636", "agent"), "/publish", {
         method: "POST",
         body: {},
       }),

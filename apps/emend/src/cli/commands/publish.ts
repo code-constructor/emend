@@ -2,11 +2,12 @@ import { join, resolve } from "node:path";
 import { LIMITS, PublishManifest, PublishResponse } from "@emend/contract";
 import type { Io } from "../../main.ts";
 import { escapeReference } from "../escape.ts";
-import { apiRequest, CliError, publishAnswerIncomplete } from "../http.ts";
+import { apiRequest, CliError, printJson, publishAnswerIncomplete } from "../http.ts";
 import { GitFolderRead, inside, readRegular } from "../publish/read.ts";
 import { type PublishOptions, publishContext, resolvePublish } from "../publish/resolve.ts";
 import { upload } from "../publish/upload.ts";
 import { ensureServer } from "../server-client.ts";
+import { localTarget } from "../target.ts";
 
 export function parsePublishArgs(args: string[]): PublishOptions {
   const opts: Partial<PublishOptions> = {};
@@ -85,16 +86,15 @@ export async function publishCommand(stateDir: string, args: string[], io: Io, c
   const request = collected.forInstance(instanceId);
   await upload(stateDir, server.url, collected.blobs);
   const result = PublishResponse.safeParse(
-    await apiRequest(stateDir, server.url, "/publish", {
-      token: "agent",
+    await apiRequest(stateDir, await localTarget(stateDir, server.url), "/publish", {
       method: "POST",
       body: request,
       timeoutMs: publishTimeoutMs(request.files),
     }),
   );
   if (!result.success) throw new CliError(publishAnswerIncomplete);
+  await printJson(io, result.data);
   for (const warning of warnings) io.stderr(warning);
   for (const path of result.data.unrendered) io.stderr(`emend: could not render ${escapeReference(path)}\n`);
-  io.stdout(`${JSON.stringify(result.data)}\n`);
   io.stderr(`emend: published revision ${result.data.revision}: ${escapeReference(result.data.url)}\n`);
 }
