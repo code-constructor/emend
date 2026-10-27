@@ -435,6 +435,23 @@ test("web files use a fixed type map, SPA fallbacks, and never escape through pa
   await error(await app.request(`${origin}/pair`, { headers: { Host: host } }), "not_found");
 });
 
+test("Mermaid HTML is served with only its exact frame policy while app assets keep the app policy", async () => {
+  await writeFile(join(webRoot, "mermaid-frame.html"), '<!doctype html><div id="diagram"></div>');
+  const frame = await app.request(`${origin}/mermaid-frame.html`, { headers: { Host: host } });
+  expect(frame.status).toBe(200);
+  expect(frame.headers.get("Content-Type")).toContain("text/html");
+  expect(frame.headers.get("Content-Security-Policy")).toBe(
+    "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src data:",
+  );
+  expect(frame.headers.get("X-Frame-Options")).toBe("SAMEORIGIN");
+  expect(frame.headers.get("X-Content-Type-Options")).toBe("nosniff");
+  expect(frame.headers.get("Referrer-Policy")).toBe("no-referrer");
+  expect(frame.headers.get("Cross-Origin-Opener-Policy")).toBe("same-origin");
+  const appAsset = await app.request(`${origin}/app.js`, { headers: { Host: host } });
+  expect(appAsset.headers.get("Content-Security-Policy")).toBe(APP_CSP);
+  expect(appAsset.headers.get("X-Frame-Options")).toBe("DENY");
+});
+
 test("unexpected errors return and log fixed messages without request input or SQL", async () => {
   const logger = vi.spyOn(console, "error").mockImplementation(() => {});
   vi.spyOn(fixture.db, "query").mockRejectedValueOnce(new Error("sensitive SQL detail"));

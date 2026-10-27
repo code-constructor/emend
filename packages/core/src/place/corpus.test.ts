@@ -52,12 +52,17 @@ test.each(cases)("synthetic corpus: $name", async (entry) => {
     const block = old.find((block) => block.id === entry.target.blockId);
     if (!block) throw new Error("Corpus target must belong to an old block");
     const start = normalizeText(block.text).indexOf(entry.target.quote);
-    expect(makeSpan(block, start, start + entry.target.quote.length)).toEqual({
-      blockId: entry.target.blockId,
-      quote: entry.target.quote,
-      prefix: entry.target.prefix,
-      suffix: entry.target.suffix,
-    });
+    if (block.kind === "diagram") {
+      expect(start).toBeGreaterThanOrEqual(0);
+      expect(entry.target.prefix).toBe("");
+      expect(entry.target.suffix).toBe("");
+    } else
+      expect(makeSpan(block, start, start + entry.target.quote.length)).toEqual({
+        blockId: entry.target.blockId,
+        quote: entry.target.quote,
+        prefix: entry.target.prefix,
+        suffix: entry.target.suffix,
+      });
     const blocks = await render(entry.new);
     if (entry.target.kind === "doc-span") ctx.docs.set(entry.target.path, { kind: "markdown", blocks });
     else ctx.writeup = blocks;
@@ -94,7 +99,7 @@ test.each(cases)("synthetic corpus: $name", async (entry) => {
   const result = placeThread(entry.target, ctx);
   Placement.parse(result);
   expect(result).toEqual(entry.expected);
-  // The shared invariant: no successful result can point at text other than the saved quote.
+  // Same-id diagrams place whole; all searched spans must still equal the saved quote.
   if (result.status !== "placed") return;
   const loc = result.location;
   if (loc.kind === "writeup-span" || loc.kind === "doc-span") {
@@ -102,7 +107,10 @@ test.each(cases)("synthetic corpus: $name", async (entry) => {
     const blocks = loc.kind === "writeup-span" ? ctx.writeup : doc?.kind === "markdown" ? doc.blocks : [];
     const block = blocks.find((block) => block.id === loc.blockId);
     if (!block || !("quote" in entry.target)) throw new Error("Expected the placed quote's block");
-    expect(normalizeText(block.text).slice(loc.start, loc.end)).toBe(entry.target.quote);
+    if (block.kind === "diagram" && "blockId" in entry.target && block.id === entry.target.blockId) {
+      expect(loc.start).toBe(0);
+      expect(loc.end).toBe(normalizeText(block.text).length);
+    } else expect(normalizeText(block.text).slice(loc.start, loc.end)).toBe(entry.target.quote);
   } else if (loc.kind === "html-span") {
     const doc = ctx.docs.get(loc.path);
     if (doc?.kind !== "html" || doc.text === null || !("quote" in entry.target))

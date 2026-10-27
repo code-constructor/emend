@@ -1,17 +1,24 @@
 import type { ReviewView, RevisionView } from "@emend/contract";
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
-import { useState } from "react";
+import { useLocation, useNavigate, useParams, useSearch } from "@tanstack/react-router";
+import { type MouseEvent, useEffect, useRef, useState } from "react";
+import { placeSpan } from "../../../../packages/core/src/place/span.ts";
 import { reviewQuery, revisionQuery } from "../api/queries.ts";
 import { OriginBadge } from "../components/inbox/OriginBadge.tsx";
 import { AgentStatus } from "../components/inbox/ReviewRow.tsx";
 import { AppFrame } from "../components/layout/AppFrame.tsx";
 import { Panes } from "../components/layout/Panes.tsx";
 import { PhoneTabs, ReviewTabs } from "../components/layout/PhoneTabs.tsx";
+import { DocView } from "../components/reading/DocView.tsx";
+import { Writeup } from "../components/reading/Writeup.tsx";
+import { SendBar } from "../components/send/SendBar.tsx";
+import { Composer } from "../components/threads/Composer.tsx";
+import { ThreadList } from "../components/threads/ThreadList.tsx";
 import { Button } from "../components/ui/Button.tsx";
+import type { SavedDraft } from "../lib/drafts.ts";
 import { useReviewEvents } from "../lib/events.ts";
 import { useInboxCollapsed, useLayout } from "../lib/layout.ts";
-import type { ReviewSearch } from "../router.tsx";
+import { type ReviewSearch, validateReviewSearch } from "../router.tsx";
 import { Inbox } from "./inbox.tsx";
 
 function RevisionPicker({
@@ -43,36 +50,43 @@ function RevisionPicker({
     </label>
   );
 }
-function Reading({ revision, tab }: { revision: RevisionView; tab: string }) {
-  if (tab === "comments")
-    return (
-      <div className="p-5">
-        <h2 className="font-semibold">Comments</h2>
-        <p className="mt-2 text-sm text-neutral-500 dark:text-neutral-400">{revision.threads.length} threads</p>
-      </div>
+function Reading({
+  reviewId,
+  revision,
+  tab,
+  onResume,
+}: {
+  reviewId: string;
+  revision: RevisionView;
+  tab: string;
+  onResume: (draft: SavedDraft) => void;
+}) {
+  const props = { reviewId, revision: revision.seq, threads: revision.threads, changedBlocks: revision.changedBlocks };
+  if (tab === "comments") return <ThreadList {...props} onResume={onResume} />;
+  if (tab === "docs") return <DocView {...props} docs={revision.docs} />;
+  return <Writeup {...props} writeup={revision.writeup} />;
+}
+function draftPlacement(draft: SavedDraft, revision: RevisionView) {
+  if (draft.threadId) return revision.threads.find((thread) => thread.id === draft.threadId)?.placement;
+  const target = draft.target;
+  if (target?.kind === "writeup-span")
+    return placeSpan(
+      revision.writeup.sections.flatMap((section) => section.blocks),
+      target,
     );
-  return (
-    <div className="space-y-5 p-5">
-      {tab !== "docs" &&
-        revision.writeup.sections.map((section) => (
-          <h2 key={section.key} className="border-b border-neutral-100 pb-4 font-medium dark:border-neutral-900">
-            {section.label}
-          </h2>
-        ))}
-      {revision.docs.length > 0 && (
-        <div>
-          <h2 className="mb-3 font-semibold">Documents</h2>
-          <ul className="space-y-2 text-sm">
-            {revision.docs.map((doc) => (
-              <li key={doc.path} className="break-words font-mono">
-                {doc.path}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-    </div>
-  );
+  if (target?.kind === "doc-span") {
+    const doc = revision.docs.find((doc) => doc.path === target.path);
+    return placeSpan(doc?.kind === "markdown" ? doc.blocks : [], target);
+  }
+  return undefined;
+}
+function readingIntent(search: ReviewSearch, hash: string, seq: number) {
+  const reply = search.tab === "comments" && !!search.thread;
+  return {
+    navigation: JSON.stringify([seq, search.tab, search.thread, hash]),
+    elementId: reply ? `thread-${search.thread}` : hash,
+    reply,
+  };
 }
 function Diff({ revision }: { revision: RevisionView }) {
   const files = revision.files.filter((file) => file.role === "diff").toSorted((a, b) => a.order - b.order);
@@ -116,6 +130,73 @@ function LoadedReview({ review, search, published }: { review: ReviewView; searc
     void navigate({ search: { ...search, rev } });
   };
   const revision = query.data;
+  const hash = useLocation({ select: (location) => location.hash });
+  const [requested, setRequested] = useState<ReturnType<typeof readingIntent> | null>(null);
+  const pending = useRef<ReturnType<typeof readingIntent> | null>(null);
+  const previous = useRef<{ navigation: string; requested: typeof requested } | null>(null);
+  const navigateReading = (next: ReviewSearch, nextHash = "") => {
+    // A repeated Resume or link click is a new intent even when the URL is unchanged.
+    setRequested(readingIntent(next, nextHash, next.rev ?? initialRevision));
+    void navigate({ search: next, hash: nextHash });
+  };
+  const followReadingLink = (event: MouseEvent) => {
+    if (
+      event.defaultPrevented ||
+      event.button !== 0 ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.shiftKey ||
+      event.altKey
+    )
+      return;
+    const link = event.target instanceof Element ? event.target.closest("a[href]") : null;
+    if (
+      !(link instanceof HTMLAnchorElement) ||
+      link.hasAttribute("download") ||
+      (link.target && link.target !== "_self")
+    )
+      return;
+    const url = new URL(link.href);
+    if (url.origin !== window.location.origin || url.pathname !== `/r/${encodeURIComponent(review.id)}`) return;
+    event.preventDefault();
+    navigateReading(validateReviewSearch(Object.fromEntries(url.searchParams)), url.hash.slice(1));
+  };
+  const [resumed, setResumed] = useState<SavedDraft | null>(null);
+  const resume = (draft: SavedDraft) => {
+    if (!draft.target || !revision) return;
+    if (draft.threadId && revision.threads.some((thread) => thread.id === draft.threadId)) {
+      setResumed(null);
+      navigateReading({ ...search, tab: "comments", thread: draft.threadId });
+      return;
+    }
+    setResumed(draft);
+    const placement = draftPlacement(draft, revision);
+    if (placement?.status === "placed" && "blockId" in placement.location)
+      navigateReading(
+        { ...search, tab: placement.location.kind === "doc-span" ? "docs" : "writeup", thread: undefined },
+        `block-${placement.location.blockId}`,
+      );
+  };
+  // Data/DOM changes may fulfill an existing intent, but only navigation creates one.
+  useEffect(() => {
+    const current = readingIntent(search, hash, seq);
+    if (requested && requested !== previous.current?.requested) pending.current = requested;
+    else if (current.navigation !== previous.current?.navigation && pending.current?.navigation !== current.navigation)
+      pending.current = current;
+    previous.current = { navigation: current.navigation, requested };
+    const intent = pending.current;
+    if (!revision || !intent || intent.navigation !== current.navigation) return;
+    if (!intent.elementId) {
+      pending.current = null;
+      return;
+    }
+    const element = document.getElementById(intent.elementId);
+    const reply = intent.reply ? element?.querySelector<HTMLTextAreaElement>("[data-reply-composer]") : null;
+    if (!element || (intent.reply && !reply)) return;
+    pending.current = null;
+    element.scrollIntoView?.({ block: "center" });
+    reply?.focus({ preventScroll: true });
+  });
   const hasDocs = (revision?.docs.length ?? 0) > 0;
   const tab = search.tab === "docs" && !hasDocs ? "writeup" : search.tab;
   const tabProps = { id: review.id, search: { ...search, tab }, hasDocs, unsentCount: review.unsentCount };
@@ -140,6 +221,16 @@ function LoadedReview({ review, search, published }: { review: ReviewView; searc
         collapsed={collapsed}
         tab={tab}
         phoneTabs={<PhoneTabs {...tabProps} />}
+        sendBar={
+          <SendBar
+            key={review.id}
+            reviewId={review.id}
+            revision={revision?.seq}
+            revisionError={query.isError}
+            unsentCount={review.unsentCount}
+            phone={layout === "phone"}
+          />
+        }
         header={
           <div className="shrink-0 border-b border-neutral-200 p-4 dark:border-neutral-800">
             <div className="flex flex-wrap items-center gap-2">
@@ -166,7 +257,7 @@ function LoadedReview({ review, search, published }: { review: ReviewView; searc
           </div>
         }
         reading={
-          <>
+          <div className="contents" onClickCapture={followReadingLink}>
             {layout !== "phone" && <ReviewTabs {...tabProps} />}
             {query.isPending && (
               <p role="status" className="p-5">
@@ -179,8 +270,31 @@ function LoadedReview({ review, search, published }: { review: ReviewView; searc
                 <Button onClick={() => void query.refetch()}>Retry</Button>
               </div>
             )}
-            {revision && <Reading revision={revision} tab={tab} />}
-          </>
+            {revision && (
+              <Reading key={`${seq}:${tab}`} reviewId={review.id} revision={revision} tab={tab} onResume={resume} />
+            )}
+            {resumed?.target && (
+              <section
+                aria-label="Resumed comment"
+                className="sticky bottom-0 space-y-3 border-t border-neutral-300 bg-white p-3 dark:border-neutral-700 dark:bg-neutral-950"
+              >
+                {"quote" in resumed.target && (
+                  <blockquote className="max-h-24 overflow-auto border-l-2 pl-2 text-sm">
+                    {resumed.target.quote}
+                  </blockquote>
+                )}
+                <Composer
+                  reviewId={review.id}
+                  revision={seq}
+                  target={resumed.target}
+                  threadId={resumed.threadId}
+                  storageKey={resumed.key}
+                  onSaved={() => setResumed(null)}
+                  onCancel={() => setResumed(null)}
+                />
+              </section>
+            )}
+          </div>
         }
         diff={
           revision ? (

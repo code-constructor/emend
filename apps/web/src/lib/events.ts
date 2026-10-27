@@ -23,6 +23,8 @@ export function useReviewEvents(reviewId: string) {
           }));
         void client.invalidateQueries({ queryKey: ["inbox"] });
         void client.invalidateQueries({ queryKey: ["review", reviewId] });
+        if (event.type === "thread" || event.type === "send")
+          void client.invalidateQueries({ queryKey: ["revision", reviewId] });
       });
     }
     return () => source.close();

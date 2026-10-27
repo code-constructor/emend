@@ -7,6 +7,7 @@ export function Panes({
   reading,
   diff,
   phoneTabs,
+  sendBar,
   collapsed,
   tab,
 }: {
@@ -15,6 +16,7 @@ export function Panes({
   reading: ReactNode;
   diff: ReactNode;
   phoneTabs: ReactNode;
+  sendBar?: ReactNode;
   collapsed: boolean;
   tab: string;
 }) {
@@ -48,6 +50,7 @@ export function Panes({
             </section>
           )}
         </div>
+        {sendBar}
         {layout === "phone" && phoneTabs}
       </main>
     </div>

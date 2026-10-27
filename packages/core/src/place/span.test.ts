@@ -53,6 +53,78 @@ describe("makeSpan", () => {
 });
 
 describe("placeSpan", () => {
+  test("same-id diagrams place the whole normalized block regardless of quote or context", async () => {
+    const diagram = await block("```mermaid\nflowchart LR\nA[flowchart LR]\n```");
+    for (const quote of ["flowchart LR", "old quote"])
+      expect(
+        placeSpan([diagram], { kind: "writeup-span", blockId: diagram.id, quote, prefix: "", suffix: "" }),
+      ).toEqual({
+        status: "placed",
+        location: { kind: "writeup-span", blockId: diagram.id, start: 0, end: normalizeText(diagram.text).length },
+      });
+    const edited = await block("```mermaid\nflowchart  LR\n\nA[flowchart LR]\n```");
+    expect(edited.id).toBe(diagram.id);
+    expect(
+      placeSpan([edited], {
+        kind: "doc-span",
+        path: "plan.md",
+        blockId: diagram.id,
+        quote: "flowchart LR",
+        prefix: "old",
+        suffix: "context",
+      }),
+    ).toEqual({
+      status: "placed",
+      location: {
+        kind: "doc-span",
+        path: "plan.md",
+        blockId: diagram.id,
+        start: 0,
+        end: normalizeText(diagram.text).length,
+      },
+    });
+  });
+  test("diagram search in a new section keeps ordinary B5 matching and ambiguity", async () => {
+    const diagram = await block("```mermaid\nflowchart LR\nA[flowchart LR]\n```", "t-garden-body");
+    const target = {
+      kind: "writeup-span" as const,
+      blockId: "overview-12345678",
+      quote: "A[flowchart LR]",
+      prefix: "",
+      suffix: "",
+    };
+    expect(placeSpan([diagram], target)).toEqual({
+      status: "placed",
+      location: { kind: "writeup-span", blockId: diagram.id, start: 13, end: 28 },
+    });
+    expect(placeSpan([diagram], { ...target, quote: "flowchart LR" })).toEqual({
+      status: "unplaced",
+      reason: "ambiguous",
+    });
+    expect(placeSpan([diagram], { ...target, quote: "flowchart  LR" })).toEqual({
+      status: "unplaced",
+      reason: "block-gone",
+    });
+    expect(
+      placeSpan([{ ...diagram, kind: "paragraph" }], { ...target, blockId: diagram.id, quote: "flowchart LR" }),
+    ).toEqual({ status: "unplaced", reason: "ambiguous" });
+  });
+  test("a truncated diagram quote still places the entire long source", async () => {
+    const diagram = await block(`\`\`\`mermaid\nflowchart LR\n${"A --> B\n".repeat(300)}\`\`\``);
+    const text = normalizeText(diagram.text);
+    expect(
+      placeSpan([diagram], {
+        kind: "writeup-span",
+        blockId: diagram.id,
+        quote: text.slice(0, 2000),
+        prefix: "",
+        suffix: "",
+      }),
+    ).toEqual({
+      status: "placed",
+      location: { kind: "writeup-span", blockId: diagram.id, start: 0, end: text.length },
+    });
+  });
   test("rejects a 2000-character quote with missing context in 8 MiB of repeated text within 5 seconds", () => {
     const text = "a".repeat(8 * 1024 * 1024);
     const target = {

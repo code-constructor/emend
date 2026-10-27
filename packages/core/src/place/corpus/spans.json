@@ -525,5 +525,128 @@
       "status": "unplaced",
       "reason": "block-gone"
     }
+  },
+  {
+    "name": "same-id diagram repeated quote places whole",
+    "surface": "writeup",
+    "old": [
+      {
+        "section": "overview",
+        "text": "```mermaid\nflowchart LR\nA[flowchart LR]\n```"
+      }
+    ],
+    "target": {
+      "kind": "writeup-span",
+      "blockId": "overview-b2b043b0",
+      "quote": "flowchart LR",
+      "prefix": "",
+      "suffix": ""
+    },
+    "new": [
+      {
+        "section": "overview",
+        "text": "```mermaid\nflowchart LR\nA[flowchart LR]\n```"
+      }
+    ],
+    "expected": {
+      "status": "placed",
+      "location": {
+        "kind": "writeup-span",
+        "blockId": "overview-b2b043b0",
+        "start": 0,
+        "end": 28
+      }
+    }
+  },
+  {
+    "name": "diagram whitespace-only edit places whole",
+    "surface": "writeup",
+    "old": [
+      {
+        "section": "overview",
+        "text": "```mermaid\nflowchart LR\nA[flowchart LR]\n```"
+      }
+    ],
+    "target": {
+      "kind": "writeup-span",
+      "blockId": "overview-b2b043b0",
+      "quote": "flowchart LR",
+      "prefix": "",
+      "suffix": ""
+    },
+    "new": [
+      {
+        "section": "overview",
+        "text": "```mermaid\nflowchart  LR\n\nA[flowchart LR]\n```"
+      }
+    ],
+    "expected": {
+      "status": "placed",
+      "location": {
+        "kind": "writeup-span",
+        "blockId": "overview-b2b043b0",
+        "start": 0,
+        "end": 28
+      }
+    }
+  },
+  {
+    "name": "diagram moved section unique quote uses B5",
+    "surface": "writeup",
+    "old": [
+      {
+        "section": "overview",
+        "text": "```mermaid\nflowchart LR\nA[flowchart LR]\n```"
+      }
+    ],
+    "target": {
+      "kind": "writeup-span",
+      "blockId": "overview-b2b043b0",
+      "quote": "A[flowchart LR]",
+      "prefix": "",
+      "suffix": ""
+    },
+    "new": [
+      {
+        "section": "t-garden-body",
+        "text": "```mermaid\nflowchart LR\nA[flowchart LR]\n```"
+      }
+    ],
+    "expected": {
+      "status": "placed",
+      "location": {
+        "kind": "writeup-span",
+        "blockId": "t-garden-body-b2b043b0",
+        "start": 13,
+        "end": 28
+      }
+    }
+  },
+  {
+    "name": "diagram moved section repeated quote is ambiguous",
+    "surface": "writeup",
+    "old": [
+      {
+        "section": "overview",
+        "text": "```mermaid\nflowchart LR\nA[flowchart LR]\n```"
+      }
+    ],
+    "target": {
+      "kind": "writeup-span",
+      "blockId": "overview-b2b043b0",
+      "quote": "flowchart LR",
+      "prefix": "",
+      "suffix": ""
+    },
+    "new": [
+      {
+        "section": "t-garden-body",
+        "text": "```mermaid\nflowchart LR\nA[flowchart LR]\n```"
+      }
+    ],
+    "expected": {
+      "status": "unplaced",
+      "reason": "ambiguous"
+    }
   }
 ]

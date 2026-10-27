@@ -25,6 +25,12 @@ async function request(path: string, init?: RequestInit, redirect = true) {
 export async function get<T>(path: string, schema: { parse(value: unknown): T }, signal?: AbortSignal): Promise<T> {
   return schema.parse(await (await request(path, { signal })).json());
 }
+export async function change(path: string, method: "POST" | "PATCH" | "DELETE", body?: unknown) {
+  await request(path, {
+    method,
+    ...(body === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+  });
+}
 export async function pair(input: SessionRequest) {
   await request(
     "/api/v1/session",

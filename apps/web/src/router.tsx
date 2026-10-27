@@ -36,8 +36,19 @@ const review = createRoute({
 });
 const pair = createRoute({ getParentRoute: () => root, path: "/pair", component: PairPage });
 const devices = createRoute({ getParentRoute: () => root, path: "/devices", component: DevicesPage });
-export const createWebRouter = (history?: RouterHistory) =>
-  createRouter({ routeTree: root.addChildren([inbox, review, pair, devices]), history, search: { strict: true } });
+export const createWebRouter = (history?: RouterHistory) => {
+  const router = createRouter({
+    routeTree: root.addChildren([inbox, review, pair, devices]),
+    history,
+    search: { strict: true },
+  });
+  // Initialize with default (uncached) scrolling. Passing a predicate to the
+  // constructor enables the cache even when it returns false for some routes.
+  // This version has no route-level switch; navigation flags miss direct URLs
+  // and history traversal. The runtime predicate suppresses only review scrolls.
+  router.update({ scrollRestoration: ({ location }) => !/^\/r\/[^/]+\/?$/.test(location.pathname) });
+  return router;
+};
 declare module "@tanstack/react-router" {
   interface Register {
     router: ReturnType<typeof createWebRouter>;

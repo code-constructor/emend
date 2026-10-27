@@ -1,0 +1,438 @@
+import { ok } from "node:assert/strict";
+import type { RenderedBlock, Target, ThreadView } from "@emend/contract";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from "@tanstack/react-router";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import type { ReactNode } from "react";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { DocView } from "./components/reading/DocView.tsx";
+import { Writeup } from "./components/reading/Writeup.tsx";
+import { SendBar } from "./components/send/SendBar.tsx";
+import { Composer } from "./components/threads/Composer.tsx";
+import { DraftList } from "./components/threads/DraftList.tsx";
+import { ThreadCard } from "./components/threads/ThreadCard.tsx";
+import { ThreadList } from "./components/threads/ThreadList.tsx";
+import { draftKey } from "./lib/drafts.ts";
+
+const id = "11111111-1111-4111-8111-111111111111";
+const target: Target = { kind: "writeup-span", blockId: "overview-12345678", quote: "seed", prefix: "", suffix: "" };
+const block: RenderedBlock = {
+  id: target.blockId,
+  section: "overview",
+  kind: "paragraph",
+  text: "seed",
+  html: "<p>seed</p>",
+};
+const thread: ThreadView = {
+  id,
+  target,
+  createdOn: 1,
+  state: "open",
+  placement: { status: "placed", location: { kind: "writeup-span", blockId: block.id, start: 0, end: 4 } },
+  comments: [{ id, author: "user", body: "Synthetic comment", sent: false, sentOn: null }],
+};
+function required<T>(value: T | undefined | null): T {
+  ok(value != null);
+  return value;
+}
+let client: QueryClient;
+let fetchMock: ReturnType<typeof vi.fn>;
+function mount(ui: ReactNode) {
+  return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+}
+beforeEach(() => {
+  localStorage.clear();
+  window.dispatchEvent(new StorageEvent("storage", { key: null, storageArea: localStorage }));
+  client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  for (const key of [["inbox"], ["review", id], ["revision", id, 1], ["revision", id, 2], ["revision", id, 3]])
+    client.setQueryData(key, {});
+  fetchMock = vi.fn(async () => Response.json({ threadId: id, commentId: id, sendId: id }, { status: 201 }));
+  vi.stubGlobal("fetch", fetchMock);
+});
+afterEach(() => {
+  cleanup();
+  client.clear();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+test("draft survives remount, creates the thread on the displayed revision, clears and invalidates all three queries", async () => {
+  const first = mount(<Composer reviewId={id} revision={2} target={target} />);
+  fireEvent.change(screen.getByLabelText("Comment"), { target: { value: "Keep this draft" } });
+  expect(localStorage.getItem(draftKey(id, target))).toBe("Keep this draft");
+  expect(draftKey(id, target)).toBe(
+    draftKey(id, { suffix: "", prefix: "", quote: "seed", blockId: block.id, kind: "writeup-span" }),
+  );
+  first.unmount();
+  mount(<Composer reviewId={id} revision={2} target={target} />);
+  expect((screen.getByLabelText("Comment") as HTMLTextAreaElement).value).toBe("Keep this draft");
+  fireEvent.click(screen.getByRole("button", { name: "Save comment" }));
+  await waitFor(() => expect(localStorage.getItem(draftKey(id, target))).toBeNull());
+  expect(fetchMock).toHaveBeenCalledWith(
+    `/api/v1/reviews/${id}/threads`,
+    expect.objectContaining({
+      method: "POST",
+      credentials: "same-origin",
+      body: JSON.stringify({ revision: 2, target, body: "Keep this draft" }),
+    }),
+  );
+  for (const key of [["inbox"], ["review", id], ["revision", id, 1], ["revision", id, 2], ["revision", id, 3]])
+    expect(client.getQueryState(key)?.isInvalidated).toBe(true);
+});
+test("composer works when every localStorage operation throws", async () => {
+  vi.spyOn(window, "localStorage", "get").mockImplementation(() => {
+    throw new Error("Storage unavailable");
+  });
+  mount(<Composer reviewId={id} revision={2} target={target} />);
+  fireEvent.change(screen.getByLabelText("Comment"), { target: { value: "Without storage" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save comment" }));
+  await waitFor(() => expect((screen.getByLabelText("Comment") as HTMLTextAreaElement).value).toBe(""));
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+});
+test("failed save keeps the draft and comment text", async () => {
+  fetchMock.mockResolvedValue(
+    Response.json({ error: { code: "too_large", message: "Synthetic limit" } }, { status: 413 }),
+  );
+  mount(<Composer reviewId={id} revision={2} target={target} />);
+  fireEvent.change(screen.getByLabelText("Comment"), { target: { value: "Keep me" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save comment" }));
+  expect((await screen.findByRole("alert")).textContent).toBe("Synthetic limit");
+  expect(localStorage.getItem(draftKey(id, target))).toBe("Keep me");
+});
+test("thread edits and deletes only unsent comments, replies, resolves and reopens", async () => {
+  fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
+  const view = mount(<ThreadCard reviewId={id} revision={2} thread={thread} changedBlocks={[]} />);
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  fireEvent.change(screen.getByLabelText("Edit comment"), { target: { value: "Edited comment" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save edit" }));
+  await waitFor(() =>
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/v1/comments/${id}`,
+      expect.objectContaining({ method: "PATCH", body: JSON.stringify({ body: "Edited comment" }) }),
+    ),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+  await waitFor(() =>
+    expect(fetchMock).toHaveBeenCalledWith(`/api/v1/comments/${id}`, expect.objectContaining({ method: "DELETE" })),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
+  await waitFor(() =>
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/v1/threads/${id}/resolve`,
+      expect.objectContaining({ method: "POST" }),
+    ),
+  );
+  view.unmount();
+  mount(
+    <ThreadCard
+      reviewId={id}
+      revision={2}
+      thread={{
+        ...thread,
+        state: "resolved",
+        comments: [
+          { ...required(thread.comments[0]), sent: true, sentOn: 1 },
+          {
+            id: "22222222-2222-4222-8222-222222222222",
+            author: "agent",
+            body: "Reply",
+            outcome: "fixed",
+            sent: false,
+            sentOn: null,
+          },
+        ],
+      }}
+      changedBlocks={[]}
+    />,
+  );
+  expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+  expect(screen.getByText("Sent")).toBeTruthy();
+  expect(screen.getByText("fixed")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Reopen" }));
+  await waitFor(() =>
+    expect(fetchMock).toHaveBeenCalledWith(`/api/v1/threads/${id}/reopen`, expect.objectContaining({ method: "POST" })),
+  );
+  fetchMock.mockResolvedValue(Response.json({ commentId: id }, { status: 201 }));
+  fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "Follow-up" } });
+  fireEvent.click(screen.getByRole("button", { name: "Add reply" }));
+  await waitFor(() =>
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/v1/threads/${id}/comments`,
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ body: "Follow-up" }) }),
+    ),
+  );
+});
+test("reading shows server blocks and change badges, rejects cross-block selection and offers a whole-diagram comment", () => {
+  const diagram = {
+    ...block,
+    id: "overview-87654321",
+    kind: "diagram" as const,
+    text: "graph TD; A-->B",
+    source: "graph TD; A-->B",
+    html: "",
+  };
+  const { container } = mount(
+    <Writeup
+      reviewId={id}
+      revision={2}
+      writeup={{ sections: [{ key: "overview", label: "Overview", topic: null, blocks: [block, diagram] }] }}
+      changedBlocks={[{ blockId: block.id, revision: 2 }]}
+      threads={[]}
+    />,
+  );
+  expect(screen.getByText("Changed in revision 2")).toBeTruthy();
+  const range = document.createRange();
+  range.setStart(required(container.querySelector("[data-block-id] p")?.firstChild), 0);
+  range.setEnd(required(container.querySelector("pre")?.firstChild), 3);
+  const selection = required(window.getSelection());
+  selection.removeAllRanges();
+  selection.addRange(range);
+  fireEvent.mouseUp(required(container.querySelector("p")));
+  expect(screen.getByText("Select text within one paragraph")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Comment on diagram" }));
+  expect(screen.getByLabelText("Comment")).toBeTruthy();
+});
+test("Markdown docs render blocks while HTML docs remain path listings", () => {
+  const { container } = mount(
+    <DocView
+      reviewId={id}
+      revision={2}
+      docs={[
+        { path: "plan.md", kind: "markdown", blocks: [block] },
+        { path: "demo.html", kind: "html", contentUrl: "/content/synthetic/demo.html" },
+      ]}
+      changedBlocks={[]}
+      threads={[]}
+    />,
+  );
+  expect(screen.getByText("seed")).toBeTruthy();
+  expect(screen.getByText("demo.html")).toBeTruthy();
+  expect(container.querySelector("iframe")).toBeNull();
+});
+test("thread groups are ordered, unplaced quotes link to their original revision, and answered changes link to the block", async () => {
+  const answered = {
+    ...thread,
+    state: "answered" as const,
+    comments: [
+      { ...required(thread.comments[0]), sent: true, sentOn: 1 },
+      {
+        id: "22222222-2222-4222-8222-222222222222",
+        author: "agent" as const,
+        body: "Done",
+        outcome: "fixed" as const,
+        sent: false,
+        sentOn: null,
+      },
+    ],
+  };
+  const ui = (
+    <ThreadList
+      onResume={() => {}}
+      reviewId={id}
+      revision={3}
+      threads={[
+        answered,
+        {
+          ...thread,
+          id: "33333333-3333-4333-8333-333333333333",
+          placement: { status: "unplaced", reason: "block-gone" },
+        },
+      ]}
+      changedBlocks={[{ blockId: block.id, revision: 3 }]}
+    />
+  );
+  const router = createRouter({
+    routeTree: createRootRoute({ component: () => ui }),
+    history: createMemoryHistory({ initialEntries: ["/"] }),
+  });
+  mount(<RouterProvider router={router} />);
+  await screen.findByRole("heading", { name: "Unplaced" });
+
+  expect(screen.getAllByRole("heading", { level: 2 }).map((heading) => heading.textContent)).toEqual([
+    "Unsaved comments",
+    "Open",
+    "Sent",
+    "Answered",
+    "Resolved",
+    "Unplaced",
+  ]);
+  const changed = screen.getByRole("link", { name: "Changed in revision 3" });
+  expect(changed.getAttribute("href")).toContain(`#block-${block.id}`);
+  const unplaced = screen.getByRole("region", { name: "Unplaced" });
+  expect(within(unplaced).getByText("seed")).toBeTruthy();
+  expect(within(unplaced).getByRole("link", { name: "Revision 1" }).getAttribute("href")).toContain("rev=1");
+});
+test("Send counts review-wide unsent comments, defaults mode, caps instruction and posts the revision on screen", async () => {
+  mount(<SendBar reviewId={id} revision={2} unsentCount={7} />);
+  expect(screen.getByText("7 unsent comments")).toBeTruthy();
+  expect((screen.getByLabelText("Mode") as HTMLSelectElement).selectedOptions[0]?.textContent).toBe(
+    "Fix what's clear, ask about the rest",
+  );
+  expect(screen.getAllByRole("option")).toHaveLength(3);
+  expect((screen.getByRole("button", { name: "Approve" }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.getByText("Send or delete your 7 unsent comments first.")).toBeTruthy();
+  fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "x".repeat(4001) } });
+  expect(screen.getByText("4000 / 4000")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  await waitFor(() =>
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/v1/reviews/${id}/sends`,
+      expect.objectContaining({
+        body: JSON.stringify({ revision: 2, kind: "go", mode: "fix-clear", instruction: "x".repeat(4000) }),
+      }),
+    ),
+  );
+  await screen.findByText("Feedback sent.");
+});
+test.each([
+  ["stale_revision", 409, "This page is out of date. Reload to see the newest revision."],
+  ["empty_send", 400, "Synthetic message"],
+  ["unsent_comments", 409, "Synthetic message"],
+  ["too_large", 413, "Synthetic message"],
+])("Send surfaces %s", async (code, status, message) => {
+  fetchMock.mockResolvedValue(
+    Response.json({ error: { code, message: "Synthetic message" } }, { status: Number(status) }),
+  );
+  mount(<SendBar reviewId={id} revision={2} unsentCount={0} />);
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  expect((await screen.findByRole("alert")).textContent).toBe(message);
+});
+test("Approve has no mode or instruction, invalidates the displayed revision, review and inbox", async () => {
+  mount(<SendBar reviewId={id} revision={2} unsentCount={0} />);
+  fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+  await screen.findByText("Revision approved.");
+  expect(fetchMock).toHaveBeenCalledWith(
+    `/api/v1/reviews/${id}/sends`,
+    expect.objectContaining({ body: JSON.stringify({ revision: 2, kind: "approve" }) }),
+  );
+  for (const key of [["inbox"], ["review", id], ["revision", id, 1], ["revision", id, 2], ["revision", id, 3]])
+    expect(client.getQueryState(key)?.isInvalidated).toBe(true);
+});
+test("phone Send opens the existing Sheet with mode and instructions", async () => {
+  mount(<SendBar reviewId={id} revision={2} unsentCount={0} phone />);
+  expect(screen.queryByLabelText("Instructions")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  const dialog = await screen.findByRole("dialog");
+  expect(within(dialog).getByLabelText("Mode")).toBeTruthy();
+  expect(within(dialog).getByLabelText("Instructions")).toBeTruthy();
+});
+
+test("empty diagrams have no comment control and long selections explain the limit", () => {
+  const text = "x".repeat(2001);
+  const { container } = mount(
+    <Writeup
+      reviewId={id}
+      revision={2}
+      threads={[]}
+      changedBlocks={[]}
+      writeup={{
+        sections: [
+          {
+            key: "overview",
+            label: "Overview",
+            topic: null,
+            blocks: [
+              { ...block, text, html: `<p>${text}</p>` },
+              { ...block, id: "overview-87654321", kind: "diagram", text: " \n \t", source: " \n \t", html: "" },
+            ],
+          },
+        ],
+      }}
+    />,
+  );
+  expect(screen.queryByRole("button", { name: "Comment on diagram" })).toBeNull();
+  const node = required(container.querySelector("[data-block-id] p")?.firstChild);
+  const range = document.createRange();
+  range.setStart(node, 0);
+  range.setEnd(node, 2001);
+  const selection = required(window.getSelection());
+  selection.removeAllRanges();
+  selection.addRange(range);
+  fireEvent.mouseUp(required(node.parentElement));
+  expect(screen.getByText("Select at most 2000 characters.")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Comment on selection" })).toBeNull();
+  selection.removeAllRanges();
+});
+
+test("two composers share edits and both empty after either saves their draft", async () => {
+  mount(
+    <>
+      <Composer reviewId={id} revision={2} target={target} />
+      <Composer reviewId={id} revision={2} target={target} />
+    </>,
+  );
+  const fields = screen.getAllByLabelText("Comment") as HTMLTextAreaElement[];
+  fireEvent.change(required(fields[0]), { target: { value: "Follow-up" } });
+  expect(fields.map((field) => field.value)).toEqual(["Follow-up", "Follow-up"]);
+  fireEvent.change(required(fields[1]), { target: { value: "Shared edit" } });
+  expect(fields.map((field) => field.value)).toEqual(["Shared edit", "Shared edit"]);
+  fireEvent.click(required(screen.getAllByRole("button", { name: "Save comment" })[1]));
+  await waitFor(() => expect(fields.map((field) => field.value)).toEqual(["", ""]));
+  expect(localStorage.getItem(draftKey(id, target))).toBeNull();
+  expect(
+    screen.getAllByRole("button", { name: "Save comment" }).every((button) => (button as HTMLButtonElement).disabled),
+  ).toBe(true);
+});
+test("Discard empties every open composer for its draft", () => {
+  localStorage.setItem(draftKey(id, target), "Discard this text");
+  mount(
+    <>
+      <DraftList reviewId={id} onResume={() => {}} />
+      <Composer reviewId={id} revision={2} target={target} />
+    </>,
+  );
+  expect((screen.getByLabelText("Comment") as HTMLTextAreaElement).value).toBe("Discard this text");
+  fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+  expect((screen.getByLabelText("Comment") as HTMLTextAreaElement).value).toBe("");
+  expect(localStorage.getItem(draftKey(id, target))).toBeNull();
+});
+test("storage events update and clear open composers and the draft list", () => {
+  mount(
+    <>
+      <DraftList reviewId={id} onResume={() => {}} />
+      <Composer reviewId={id} revision={2} target={target} />
+    </>,
+  );
+  const field = screen.getByLabelText("Comment") as HTMLTextAreaElement;
+  const key = draftKey(id, target);
+  localStorage.setItem(key, "From another tab");
+  act(() =>
+    window.dispatchEvent(new StorageEvent("storage", { key, newValue: "From another tab", storageArea: localStorage })),
+  );
+  expect(field.value).toBe("From another tab");
+  expect(screen.getByRole("button", { name: "Resume" })).toBeTruthy();
+  localStorage.removeItem(key);
+  act(() =>
+    window.dispatchEvent(
+      new StorageEvent("storage", { key, oldValue: "From another tab", newValue: null, storageArea: localStorage }),
+    ),
+  );
+  expect(field.value).toBe("");
+  expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
+  fireEvent.change(field, { target: { value: "Local draft" } });
+  localStorage.clear();
+  act(() => window.dispatchEvent(new StorageEvent("storage", { key: null, storageArea: localStorage })));
+  expect(field.value).toBe("");
+});
+test("unavailable storage keeps shared draft text through rerender and remount", () => {
+  vi.spyOn(window, "localStorage", "get").mockImplementation(() => {
+    throw new Error("Storage unavailable");
+  });
+  const first = mount(<Composer reviewId={id} revision={2} target={target} />);
+  fireEvent.change(screen.getByLabelText("Comment"), { target: { value: "In memory" } });
+  first.rerender(
+    <QueryClientProvider client={client}>
+      <Composer reviewId={id} revision={3} target={target} />
+      <Composer reviewId={id} revision={3} target={target} />
+      <DraftList reviewId={id} onResume={() => {}} />
+    </QueryClientProvider>,
+  );
+  expect(screen.getAllByLabelText("Comment").map((field) => (field as HTMLTextAreaElement).value)).toEqual([
+    "In memory",
+    "In memory",
+  ]);
+  expect(screen.getByRole("button", { name: "Resume" })).toBeTruthy();
+  first.unmount();
+  mount(<Composer reviewId={id} revision={3} target={target} />);
+  expect((screen.getByLabelText("Comment") as HTMLTextAreaElement).value).toBe("In memory");
+});
