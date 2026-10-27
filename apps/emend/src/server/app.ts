@@ -6,6 +6,7 @@ import type { BlobStore } from "../store/blobs.ts";
 import { type AppEnv, requireScope } from "./auth/principal.ts";
 import { sessionCookie, verifySession, writeSessionCookie } from "./auth/sessions.ts";
 import { verifyBearer } from "./auth/tokens.ts";
+import { contentRoutes } from "./content/route.ts";
 import { ReviewEvents } from "./events.ts";
 import { checkContentLength, limitJsonBody } from "./http/body.ts";
 import { clientVersion } from "./http/client-version.ts";
@@ -142,6 +143,7 @@ export function createApp(deps: AppDeps) {
   sendRoutes(app, deps);
   deliveryRoutes(app, deps);
   eventRoutes(app, deps);
+  contentRoutes(app, deps);
   app.get("*", (c) => {
     if (isApiPath(c.req.path) || c.req.path.startsWith("/content/")) throw new ApiError("not_found");
     return appPage(c, deps.config.webRoot);

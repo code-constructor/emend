@@ -28,7 +28,8 @@ export function ReviewTabs({
             key={tab}
             to="/r/$reviewId"
             params={{ reviewId: id }}
-            search={{ ...search, tab }}
+            search={{ ...search, tab, thread: undefined }}
+            hash=""
             aria-current={tab === active ? "page" : undefined}
             className={`flex min-h-12 flex-1 items-center justify-center gap-1 px-2 text-sm ${tab === active ? "font-medium text-blue-700 dark:text-blue-400" : "text-neutral-600 dark:text-neutral-400"}`}
           >

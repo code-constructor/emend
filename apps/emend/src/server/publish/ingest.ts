@@ -7,6 +7,7 @@ import type { Db, Queries } from "../../db/client.ts";
 import { DuplicateReviewKeyError } from "../../db/repo/reviews.ts";
 import {
   blobs as blobRows,
+  docAssets,
   files,
   placements,
   repos,
@@ -481,6 +482,24 @@ async function computePublish(
           });
           if (++inserted % 100 === 0) await setImmediate();
         }
+        let associations: (typeof docAssets.$inferInsert)[] = [];
+        for (const file of input.files) {
+          if (file.role !== "doc" || mediaType(file.path) !== "text/html") continue;
+          const docId = ids.get(fileKey(file));
+          if (!docId) throw new Error("Missing doc id");
+          for (const path of file.assets ?? []) {
+            const assetId = ids.get(`doc:${path}`);
+            if (!assetId) throw new Error("Missing asset id");
+            associations.push({ ownerId, revisionId: revision.id, docId, assetId });
+            if (associations.length === 500) {
+              checkPublishSignal(deps.signal);
+              await q.insert(docAssets).values(associations);
+              associations = [];
+              await setImmediate();
+            }
+          }
+        }
+        if (associations.length) await q.insert(docAssets).values(associations);
         await insertChangedBlocks(q, ownerId, revision.id, changed.bytes, deps.signal);
         for (const { id, placement } of placedRows) {
           checkPublishSignal(deps.signal);

@@ -1,7 +1,9 @@
+// @vitest-environment-options {"settings":{"disableIframePageLoading":true}}
 import type { FileView, RenderedBlock, Target, ThreadView } from "@emend/contract";
 import { QueryClient } from "@tanstack/react-query";
 import { createMemoryHistory } from "@tanstack/react-router";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import type { Window } from "happy-dom";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { App } from "./App.tsx";
 import { draftKey, editDraftKey } from "./lib/drafts.ts";
@@ -106,10 +108,12 @@ beforeEach(() => {
   vi.stubGlobal("fetch", fetchMock);
   client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 });
-afterEach(() => {
+afterEach(async () => {
   cleanup();
   takePairingSecret();
   client.clear();
+  // Stop browser tasks before restoring mocks or closing Vitest's logging channel.
+  await (window as unknown as Window).happyDOM.abort();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -731,6 +735,195 @@ function navigationFixture({ cold = false, threads = true, unplaced = false } = 
     },
   };
 }
+
+const htmlTarget: Target = { kind: "html-span", path: "seed.html", quote: "seed", prefix: "", suffix: "" };
+function htmlReviewFixture(
+  placement: ThreadView["placement"] = {
+    status: "placed",
+    location: { kind: "html-span", path: "seed.html", start: 0, end: 4 },
+  },
+  doc: "html" | "markdown" | "missing" = "html",
+) {
+  const thread: ThreadView = { id, target: htmlTarget, createdOn: 1, state: "open", comments: [], placement };
+  const fallback = fetchMock.getMockImplementation();
+  fetchMock.mockImplementation(async (path, init) =>
+    path.includes("/revisions/")
+      ? Response.json({
+          ...revision,
+          seq: Number(path.split("/").at(-1)),
+          docs:
+            doc === "missing"
+              ? []
+              : doc === "markdown"
+                ? [{ kind: "markdown", path: "seed.html", blocks: [] }]
+                : [{ kind: "html", path: "seed.html", contentUrl: "/content/synthetic/seed.html" }],
+          threads: [thread],
+        })
+      : (fallback?.(path, init) ?? Response.error()),
+  );
+  return thread;
+}
+
+test.each(["resume", "thread", "hash-link"])(
+  "an unplaced HTML %s opens Comments and its reply composer",
+  async (kind) => {
+    htmlReviewFixture({ status: "unplaced", reason: "block-gone" });
+    localStorage.setItem(draftKey(id, htmlTarget, id), "Unplaced HTML reply");
+    const scroll = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => {});
+    const { history, container } = mount(
+      `/r/${id}?${kind === "resume" ? "tab=comments" : kind === "thread" ? `thread=${id}` : `tab=docs#thread-${id}`}`,
+    );
+    if (kind === "resume") fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+    await waitFor(() => expect(history.location.search).toContain("tab=comments"));
+    const reply = await screen.findByLabelText("Reply");
+    await waitFor(() => expect(document.activeElement).toBe(reply));
+    expect((reply as HTMLTextAreaElement).value).toBe("Unplaced HTML reply");
+    expect(within(screen.getByRole("region", { name: "Unplaced" })).getByLabelText("Reply")).toBe(reply);
+    expect(scroll.mock.instances.some((node) => (node as HTMLElement).id === `thread-${id}`)).toBe(true);
+    expect(container.querySelector("iframe")).toBeNull();
+  },
+);
+
+test.each(["missing", "markdown"] as const)("HTML placement on a %s doc routes to Comments", async (doc) => {
+  htmlReviewFixture(undefined, doc);
+  const { history } = mount(`/r/${id}?thread=${id}`);
+  await waitFor(() => expect(history.location.search).toContain("tab=comments"));
+  expect(await screen.findByLabelText("Reply")).toBeTruthy();
+});
+
+test.each([
+  [1280, "Comments"],
+  [1280, "Writeup"],
+  [390, "Comments"],
+  [390, "Writeup"],
+] as const)("an incoming HTML thread does not override a later tab choice at %s: %s", async (pixels, tab) => {
+  width = pixels;
+  htmlReviewFixture();
+  const scroll = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => {});
+  const { history, container } = mount(`/r/${id}?thread=${id}`);
+  await waitFor(() => expect(history.location.search).toContain("tab=docs"));
+  await waitFor(() =>
+    expect(scroll.mock.instances.some((node) => (node as HTMLElement).id === `thread-${id}`)).toBe(true),
+  );
+  const link = screen.getByRole("link", { name: new RegExp(tab) });
+  expect(new URL((link as HTMLAnchorElement).href).searchParams.has("thread")).toBe(false);
+  fireEvent.click(link);
+  await waitFor(() => expect(history.location.search).toContain(`tab=${tab.toLowerCase()}`));
+  expect(history.location.search).not.toContain("thread=");
+  expect(history.location.hash).toBe("");
+  await act(async () => {
+    await client.invalidateQueries({ queryKey: ["revision", id, 1] });
+  });
+  expect(screen.getByRole("link", { name: new RegExp(tab) }).getAttribute("aria-current")).toBe("page");
+  expect(container.querySelector("iframe")).toBeNull();
+});
+
+test.each([false, true])(
+  "an HTML thread link waits for a missing cached thread unless the reviewer picks Comments (switch=%s)",
+  async (switchTab) => {
+    const thread = htmlReviewFixture();
+    const cached = {
+      ...revision,
+      docs: [{ kind: "html", path: "seed.html", contentUrl: "/content/synthetic/seed.html" }],
+    };
+    client.setQueryData(["revision", id, 1], cached);
+    await client.invalidateQueries({ queryKey: ["revision", id, 1], refetchType: "none" });
+    const response = Promise.withResolvers<Response>();
+    const fallback = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation((path, init) =>
+      path.endsWith("/revisions/1") ? response.promise : (fallback?.(path, init) ?? Promise.resolve(Response.error())),
+    );
+    const scroll = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => {});
+    const { history, container } = mount(`/r/${id}?thread=${id}`);
+    await screen.findByRole("link", { name: "Writeup" });
+    await waitFor(() => expect(client.isFetching({ queryKey: ["revision", id, 1] })).toBe(1));
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(scroll).not.toHaveBeenCalled();
+    if (switchTab) {
+      fireEvent.click(screen.getByRole("link", { name: /Comments/ }));
+      await waitFor(() => expect(history.location.search).toContain("tab=comments"));
+      expect(history.location.search).not.toContain("thread=");
+    }
+    await act(async () => {
+      response.resolve(Response.json({ ...cached, threads: [thread] }));
+      await vi.waitFor(() => expect(client.isFetching()).toBe(0));
+    });
+    if (switchTab) {
+      expect(history.location.search).toContain("tab=comments");
+      expect(screen.getByRole("link", { name: /Comments/ }).getAttribute("aria-current")).toBe("page");
+      expect(container.querySelector("iframe")).toBeNull();
+      expect(scroll).not.toHaveBeenCalled();
+    } else {
+      await waitFor(() => expect(history.location.search).toContain("tab=docs"));
+      expect(container.querySelector('iframe[title="seed.html"]')).not.toBeNull();
+      await waitFor(() =>
+        expect(scroll.mock.instances.some((node) => (node as HTMLElement).id === `thread-${id}`)).toBe(true),
+      );
+    }
+    expect(document.getElementById(`thread-${id}`)).not.toBeNull();
+  },
+);
+
+test("a consumed HTML navigation does not redirect or refocus when placement changes", async () => {
+  const thread = htmlReviewFixture({ status: "unplaced", reason: "block-gone" });
+  const { history, container } = mount(`/r/${id}?tab=comments&thread=${id}`);
+  const reply = await screen.findByLabelText("Reply");
+  await waitFor(() => expect(document.activeElement).toBe(reply));
+  const instructions = screen.getByLabelText("Instructions");
+  act(() => instructions.focus());
+  thread.placement = { status: "placed", location: { kind: "html-span", path: "seed.html", start: 0, end: 4 } };
+  await act(async () => {
+    await client.invalidateQueries({ queryKey: ["revision", id, 1] });
+  });
+  expect(history.location.search).toContain("tab=comments");
+  expect(container.querySelector("iframe")).toBeNull();
+  expect(document.activeElement).toBe(instructions);
+});
+
+test.each(["thread", "draft", "reply", "comment-link"])(
+  "HTML %s navigation opens docs and waits for the frame before scrolling",
+  async (kind) => {
+    const target: Target = { kind: "html-span", path: "seed.html", quote: "seed", prefix: "", suffix: "" };
+    const thread: ThreadView = {
+      id,
+      target,
+      createdOn: 1,
+      state: "open",
+      comments: [],
+      placement: { status: "placed", location: { kind: "html-span", path: "seed.html", start: 0, end: 4 } },
+    };
+    const fallback = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation(async (path, init) =>
+      path.endsWith("/revisions/1")
+        ? Response.json({
+            ...revision,
+            docs: [{ kind: "html", path: "seed.html", contentUrl: "/content/synthetic/seed.html" }],
+            threads: [thread],
+          })
+        : (fallback?.(path, init) ?? Response.error()),
+    );
+    if (kind === "draft" || kind === "reply")
+      localStorage.setItem(draftKey(id, target, kind === "reply" ? id : undefined), "HTML draft");
+    const { history, container } = mount(
+      `/r/${id}?${kind === "thread" ? `thread=${id}` : kind === "comment-link" ? `tab=comments&thread=${id}` : "tab=comments"}`,
+    );
+    if (kind === "draft" || kind === "reply") fireEvent.click(await screen.findByText("Resume"));
+    await waitFor(() => expect(container.querySelector('iframe[title="seed.html"]')).not.toBeNull());
+    expect(history.location.search).toContain("tab=docs");
+    const frame = container.querySelector('iframe[title="seed.html"]') as HTMLIFrameElement;
+    const post = vi.fn();
+    Object.defineProperty(frame, "contentWindow", { value: { postMessage: post } });
+    expect(post).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent(window, new MessageEvent("message", { source: frame.contentWindow, data: { type: "emend:ready" } }));
+    });
+    if (kind !== "draft") expect(post).toHaveBeenCalledWith({ type: "emend:scroll", threadId: id }, "*");
+    if (kind === "draft" || kind === "reply")
+      expect((screen.getByLabelText(kind === "reply" ? "Reply" : "Comment") as HTMLTextAreaElement).value).toBe(
+        "HTML draft",
+      );
+  },
+);
 
 test("reply Resume focuses once; a thread SSE update leaves focus in Instructions", async () => {
   const fixture = navigationFixture();

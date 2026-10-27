@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Synthetic isolation probe</title>
+  <link rel="stylesheet" href="probe.css">
+</head>
+<body>
+  <h1>Synthetic isolation probe</h1>
+  <p>Select these dry seeds to propose a comment.</p>
+  <img src="seed.svg" alt="Synthetic seed" width="80" height="80">
+  <p>The image and stylesheet should load. No synthetic script marker should be posted.</p>
+  <img src="data:image/png;base64,AAAA" alt="Blocked handler probe"
+    onerror="parent.postMessage({ type: 'synthetic:script-ran', source: 'handler' }, '*')">
+  <!-- biome-ignore lint/a11y/useValidAnchor lint/security/noScriptUrl: Intentional hostile script probe. -->
+  <a href="javascript:parent.postMessage({ type: 'synthetic:script-ran', source: 'javascript-url' }, '*')">Probe the blocked JavaScript link</a>
+  <script src="probe.js"></script>
+  <script>
+    parent.postMessage({ type: "synthetic:script-ran", source: "inline" }, "*");
+  </script>
+</body>
+</html>

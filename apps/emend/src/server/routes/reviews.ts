@@ -145,7 +145,7 @@ async function revisionView(ownerId: string, q: Queries, deps: AppDeps, reviewId
       docs.push({
         path: file.path,
         kind: "html",
-        contentUrl: `/content/${encodeURIComponent(revision.contentKey)}/${file.path.split("/").map(encodeURIComponent).join("/")}`,
+        contentUrl: `/content/${revision.contentKey}${file.id.replaceAll("-", "")}/${file.path.split("/").map(encodeURIComponent).join("/")}`,
       });
     } else {
       docs.push({

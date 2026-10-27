@@ -1,6 +1,6 @@
 import type { ReviewView, RevisionView } from "@emend/contract";
 import { useQuery } from "@tanstack/react-query";
-import { useLocation, useNavigate, useParams, useSearch } from "@tanstack/react-router";
+import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import { type MouseEvent, useEffect, useRef, useState } from "react";
 import { placeSpan } from "../../../../packages/core/src/place/span.ts";
 import { reviewQuery, revisionQuery } from "../api/queries.ts";
@@ -12,6 +12,7 @@ import { AppFrame } from "../components/layout/AppFrame.tsx";
 import { Panes } from "../components/layout/Panes.tsx";
 import { PhoneTabs, ReviewTabs } from "../components/layout/PhoneTabs.tsx";
 import { DocView } from "../components/reading/DocView.tsx";
+import type { HtmlNavigation } from "../components/reading/HtmlDocFrame.tsx";
 import { Writeup } from "../components/reading/Writeup.tsx";
 import { SendBar } from "../components/send/SendBar.tsx";
 import { Composer } from "../components/threads/Composer.tsx";
@@ -58,15 +59,20 @@ function Reading({
   revision,
   tab,
   onResume,
+  htmlNavigation,
+  composingPath,
 }: {
   reviewId: string;
   revision: RevisionView;
   tab: string;
   onResume: (draft: SavedDraft) => void;
+  htmlNavigation?: HtmlNavigation;
+  composingPath?: string;
 }) {
   const props = { reviewId, revision: revision.seq, threads: revision.threads, changedBlocks: revision.changedBlocks };
   if (tab === "comments") return <ThreadList {...props} onResume={onResume} />;
-  if (tab === "docs") return <DocView {...props} docs={revision.docs} />;
+  if (tab === "docs")
+    return <DocView {...props} docs={revision.docs} navigation={htmlNavigation} composingPath={composingPath} />;
   return <Writeup {...props} writeup={revision.writeup} />;
 }
 function draftPlacement(draft: SavedDraft, revision: RevisionView) {
@@ -89,9 +95,15 @@ function readingIntent(search: ReviewSearch, hash: string, seq: number) {
     navigation: JSON.stringify([seq, search.tab, search.thread, hash]),
     elementId: reply ? `thread-${search.thread}` : hash,
     reply,
+    threadId: search.thread ?? (hash.startsWith("thread-") ? hash.slice(7) : undefined),
+    routeThread: true,
   };
 }
-function LoadedReview({ review, search, published }: { review: ReviewView; search: ReviewSearch; published: number }) {
+function LoadedReview({ review, published }: { review: ReviewView; published: number }) {
+  // Read search and hash from one location: route matches can lag during navigation.
+  const location = useLocation();
+  const search = validateReviewSearch(location.search);
+  const hash = location.hash;
   const [initialRevision] = useState(review.newestRevision);
   const seq = search.rev ?? initialRevision;
   const query = useQuery(revisionQuery(review.id, seq));
@@ -102,8 +114,8 @@ function LoadedReview({ review, search, published }: { review: ReviewView; searc
     void navigate({ search: { ...search, rev } });
   };
   const revision = query.data;
-  const hash = useLocation({ select: (location) => location.hash });
   const [requested, setRequested] = useState<ReturnType<typeof readingIntent> | null>(null);
+  const [htmlNavigation, setHtmlNavigation] = useState<HtmlNavigation>();
   const pending = useRef<ReturnType<typeof readingIntent> | null>(null);
   const previous = useRef<{ navigation: string; requested: typeof requested } | null>(null);
   const navigateReading = (next: ReviewSearch, nextHash = "") => {
@@ -160,6 +172,10 @@ function LoadedReview({ review, search, published }: { review: ReviewView; searc
     }
     claimDraft(draft.key, "resumed");
     setResumed({ ...draft });
+    if (draft.target.kind === "html-span") {
+      navigateReading({ ...search, tab: "docs", thread: undefined }, `html-doc-${draft.target.path}`);
+      return;
+    }
     const placement = draftPlacement(draft, revision);
     if (placement?.status === "placed" && "blockId" in placement.location)
       navigateReading(
@@ -170,21 +186,44 @@ function LoadedReview({ review, search, published }: { review: ReviewView; searc
   // Data/DOM changes may fulfill an existing intent, but only navigation creates one.
   useEffect(() => {
     const current = readingIntent(search, hash, seq);
-    if (requested && requested !== previous.current?.requested) pending.current = requested;
+    if (requested && requested !== previous.current?.requested) pending.current = { ...requested };
     else if (current.navigation !== previous.current?.navigation && pending.current?.navigation !== current.navigation)
       pending.current = current;
     previous.current = { navigation: current.navigation, requested };
     const intent = pending.current;
     if (!revision || !intent || intent.navigation !== current.navigation) return;
+    const thread = revision.threads.find((thread) => thread.id === intent.threadId);
+    if (intent.routeThread) {
+      if (intent.threadId && !thread) return;
+      // Placement selects the destination once for this navigation, never on a refetch.
+      intent.routeThread = false;
+      setHtmlNavigation(undefined);
+      if (thread?.target.kind === "html-span") {
+        const location = thread.placement.status === "placed" ? thread.placement.location : undefined;
+        const placed =
+          location?.kind === "html-span" &&
+          revision.docs.some((doc) => doc.kind === "html" && doc.path === location.path);
+        const next: ReviewSearch = { ...search, tab: placed ? "docs" : "comments" };
+        const nextHash = `thread-${thread.id}`;
+        intent.elementId = nextHash;
+        intent.reply ||= !placed;
+        if (placed) setHtmlNavigation({ threadId: thread.id, intent });
+        if (search.tab !== next.tab || hash !== nextHash) {
+          // The redirect continues this intent; it does not create another one.
+          intent.navigation = readingIntent(next, nextHash, seq).navigation;
+          void navigate({ search: next, hash: nextHash, replace: true });
+          return;
+        }
+      }
+    }
     if (!intent.elementId) {
       pending.current = null;
       return;
     }
     if (intent.reply) {
-      const thread = revision.threads.find((thread) => thread.id === search.thread);
       if (!thread) return;
       pending.current = null;
-      claimDraft(draftKey(review.id, thread.target, thread.id), "comments");
+      claimDraft(draftKey(review.id, thread.target, thread.id), search.tab === "docs" ? "reading" : "comments");
       return;
     }
     const element = document.getElementById(intent.elementId);
@@ -266,7 +305,15 @@ function LoadedReview({ review, search, published }: { review: ReviewView; searc
               </div>
             )}
             {revision && (
-              <Reading key={`${seq}:${tab}`} reviewId={review.id} revision={revision} tab={tab} onResume={resume} />
+              <Reading
+                key={`${seq}:${tab}`}
+                reviewId={review.id}
+                revision={revision}
+                tab={tab}
+                onResume={resume}
+                htmlNavigation={htmlNavigation}
+                composingPath={resumed?.target?.kind === "html-span" ? resumed.target.path : undefined}
+              />
             )}
             {resumed?.target && !isDiffTarget(resumed.target) && (
               <Composer
@@ -316,10 +363,9 @@ function LoadedReview({ review, search, published }: { review: ReviewView; searc
 }
 export function ReviewPage() {
   const { reviewId } = useParams({ from: "/r/$reviewId" });
-  const search = useSearch({ from: "/r/$reviewId" });
   const query = useQuery(reviewQuery(reviewId));
   const published = useReviewEvents(reviewId);
-  if (query.data) return <LoadedReview key={reviewId} review={query.data} search={search} published={published} />;
+  if (query.data) return <LoadedReview key={reviewId} review={query.data} published={published} />;
   return (
     <AppFrame title="Review" isReview>
       <main className="p-5">

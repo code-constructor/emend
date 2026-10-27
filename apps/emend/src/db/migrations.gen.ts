@@ -100,5 +100,17 @@ export const MIGRATIONS: readonly { tag: string; when: number; hash: string; sta
       "CREATE INDEX `comments_owner_review_thread_idx` ON `comments` (`owner_id`,`review_id`,`thread_id`);",
       "CREATE INDEX `comments_owner_review_send_idx` ON `comments` (`owner_id`,`review_id`,`send_id`);"
     ]
+  },
+  {
+    "tag": "0004_lean_the_watchers",
+    "when": 1793095064706,
+    "hash": "5a0937d8e0a63942d7ad7a4fb7dcddd0bb23880f3371f3951ee28009f9b1897a",
+    "statements": [
+      "CREATE TABLE `doc_assets` (\n\t`owner_id` text NOT NULL,\n\t`revision_id` text NOT NULL,\n\t`doc_id` text NOT NULL,\n\t`asset_id` text NOT NULL,\n\tFOREIGN KEY (`owner_id`) REFERENCES `owners`(`id`) ON UPDATE no action ON DELETE no action,\n\tFOREIGN KEY (`owner_id`,`revision_id`,`doc_id`) REFERENCES `files`(`owner_id`,`revision_id`,`id`) ON UPDATE no action ON DELETE no action,\n\tFOREIGN KEY (`owner_id`,`revision_id`,`asset_id`) REFERENCES `files`(`owner_id`,`revision_id`,`id`) ON UPDATE no action ON DELETE no action\n);",
+      "CREATE INDEX `doc_assets_owner_idx` ON `doc_assets` (`owner_id`);",
+      "CREATE UNIQUE INDEX `doc_assets_owner_doc_asset_unique` ON `doc_assets` (`owner_id`,`doc_id`,`asset_id`);",
+      "CREATE UNIQUE INDEX `revisions_content_key_unique` ON `revisions` (`content_key`);",
+      "INSERT INTO doc_assets (owner_id, revision_id, doc_id, asset_id) SELECT owner_id, revision_id, parent_doc_id, id FROM files WHERE role = 'asset' AND parent_doc_id IS NOT NULL;"
+    ]
   }
 ];

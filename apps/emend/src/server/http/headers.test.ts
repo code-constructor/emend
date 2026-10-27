@@ -1,6 +1,18 @@
 import { expect, test } from "vitest";
 import { APP_CSP, headersForPath } from "./headers.ts";
 
+test("content paths default to the exact script-free CSP until a doc is served", () => {
+  for (const path of ["/content/key/doc.html", "/content/key/font.woff2", "/content/missing"])
+    expect(headersForPath(path)).toEqual({
+      "Content-Security-Policy":
+        "sandbox allow-scripts; default-src 'none'; script-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self'; connect-src 'none'; form-action 'none'; frame-src 'none'; frame-ancestors 'self'",
+      "X-Content-Type-Options": "nosniff",
+      "Referrer-Policy": "no-referrer",
+      "Cross-Origin-Resource-Policy": "same-origin",
+      "Cache-Control": "no-store",
+    });
+});
+
 test("only the exact Mermaid frame path gets the frame CSP and SAMEORIGIN", () => {
   const shared = {
     "X-Content-Type-Options": "nosniff",

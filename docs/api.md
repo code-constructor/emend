@@ -44,8 +44,8 @@ credential and scope, bounded body streaming, then handler and schema parsing. A
 request never reads its body. Every API response carries `Cache-Control: no-store`.
 Unimplemented listed routes still enforce their scope before `404 not_found`. Unlisted API
 paths require a credential before returning `404 not_found`. HEAD inherits the corresponding
-GET route's scope unless it has an explicit endpoint entry. Until content serving is implemented,
-`/content/*` responses carry `X-Content-Type-Options: nosniff` and `Cache-Control: no-store`.
+GET route's scope unless it has an explicit endpoint entry. Every `/content/` response, including
+errors, carries the content isolation headers described below.
 
 Local discovery and the default pairing URL use the listener's numeric address, with IPv6
 literals in brackets and wildcard listeners represented by their corresponding loopback address.
@@ -151,8 +151,58 @@ Kinds are `heading | paragraph | item | code | table | quote | diagram`; diagram
 mirrors core's rendered writeup. These are server-rendered blocks, never browser-rendered Markdown.
 Markdown docs are `{ path, kind: "markdown", blocks: RenderedBlock[] }` (empty if unrendered).
 HTML docs are `{ path, kind: "html", contentUrl }`, where the URL is
-`/content/<contentKey>/<path>` with each path segment percent-encoded. The isolated content
-handler is delivered separately; this URL never grants app-origin rendering.
+`/content/<docKey>/<path>` with each path segment percent-encoded. The doc key is the revision's
+43-character base64url `contentKey` followed by that doc's file UUID with dashes removed (32
+lowercase hex characters); its exact shape is `^[A-Za-z0-9_-]{43}[0-9a-f]{32}$`.
+GET and HEAD serve only that HTML doc and the assets it lists in the same owner and revision.
+The key is the capability: neither cookies nor Authorization are read, and the owner comes from
+the revision. Wrong keys, missing files, other docs, diff files, unlisted assets and invalid paths
+receive 404. The doc receives an inline selection/highlight bridge; assets retain their bytes.
+Content-Type is the stored media type, with `; charset=utf-8` for `text/*`, `application/json`
+and `image/svg+xml`; the doc is `text/html; charset=utf-8`.
+
+Asset and error responses under `/content/` send:
+
+```
+Content-Security-Policy: sandbox allow-scripts; default-src 'none'; script-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self'; connect-src 'none'; form-action 'none'; frame-src 'none'; frame-ancestors 'self'
+X-Content-Type-Options: nosniff
+Referrer-Policy: no-referrer
+Cache-Control: no-store
+```
+
+Successful doc responses have the same headers, with only `script-src` replaced by
+`script-src 'sha256-<base64 SHA-256 of the bridge script text>'`. The server computes that hash
+once from the bridge constant and injects exactly that text, byte for byte. Only emend's bridge
+runs: a doc's own inline scripts, event handlers, `javascript:` URLs and script files never run.
+Script files may still be published and served, but never execute in the frame. Assets, including
+SVG opened as a document, and errors allow no scripts. The bridge's body text model equals the
+server's `docText`; author scripts cannot change the text after load.
+
+`frame-ancestors 'self'` permits framing only by the app at the content response's own origin,
+including when the reviewer uses an IPv6 literal host. A different app hostname is a different origin.
+Cross-Origin-Resource-Policy is `same-origin` for the doc and errors, and `cross-origin` for
+assets so the opaque-origin frame can load them. Asset responses also send
+`Access-Control-Allow-Origin: *`, allowing file fonts requested with `Origin: null` to load;
+docs and error responses do not send that header. Data fonts also work. No content response sends
+X-Frame-Options. App-page headers are unchanged.
+
+The app displays HTML in an iframe with `sandbox="allow-scripts"` and `referrerPolicy="no-referrer"`.
+Relative asset URLs resolve within the doc key. Primary clicks without modifiers on links to
+another HTML or Markdown doc under this doc key send
+`{ type: "emend:navigate", path: FilePath, fragment: string }` to the parent. The path and fragment
+are decoded; the fragment excludes `#` and is at most 1024 characters. The parent accepts this
+strict message only from the current trusted frame and only for another doc in the same revision.
+It scrolls to that doc's section. For an HTML target with a fragment, it sets that frame's src to
+its own content URL plus `#` and the percent-encoded fragment. Same-doc fragment links remain
+normal hash navigation. The app's `frame-src 'self'` blocks a clicked external link or a meta
+refresh to an outside URL; the frame then shows `This doc navigated away.` with Reload. An asset
+link opens the asset in the frame and triggers the same state.
+
+A parent-initiated src change or Reload establishes a fresh load baseline. A further unexpected
+load disables the frame's bridge and shows `This doc navigated away.` with Reload. Directly
+navigating to another doc under the current doc's key still returns 404 and triggers that state.
+Other frame messages carry ready notifications, proposed quotes, quote highlights and thread
+scroll requests; saving a comment requires the reviewer's explicit action.
 
 `ThreadView = { id, target: Target, state: ThreadState, placement: Placement, createdOn,
 comments: { id, author: "user" | "agent", body, outcome?: Outcome, sent: boolean,
@@ -241,7 +291,9 @@ An omitted `unrendered` field defaults to `[]`.
 HTML doc entries include `assets: FilePath[]`. Each listed path must be an asset in the request
 inside that doc's folder. The HTML source plus its own listed assets must fit
 `htmlDocWithAssetsBytes`; shared assets count for every doc listing them. Asset rows retain
-their first parent, and their blob bytes count once toward the revision byte budget.
+their first parent, and their blob bytes count once toward the revision byte budget. Every HTML
+doc's full asset list is stored, so a shared asset loads under each doc that lists it. Existing
+revisions migrate their parent associations and retain parent-only asset access.
 `unrendered` lists Markdown docs whose rendering failed, timed out or exceeded rendered-output budgets
 (at most `filesPerRevision`). Rendered blocks and JSON bytes count every path, including the writeup.
 Docs render in manifest order; once a doc exceeds either budget it and all later Markdown docs

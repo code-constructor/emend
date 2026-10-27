@@ -25,6 +25,7 @@ import {
   sqliteTable,
   text,
   unique,
+  uniqueIndex,
 } from "drizzle-orm/sqlite-core";
 
 const id = () => text("id").primaryKey().$defaultFn(randomUUID);
@@ -120,6 +121,7 @@ export const revisions = sqliteTable(
   (t): SQLiteTableExtraConfigValue[] => [
     ...owned("revisions", t),
     unique("revisions_review_seq_unique").on(t.reviewId, t.seq),
+    uniqueIndex("revisions_content_key_unique").on(t.contentKey),
     unique("revisions_owner_review_id_unique").on(t.ownerId, t.reviewId, t.id),
     foreignKey({ columns: [t.ownerId, t.reviewId], foreignColumns: [reviews.ownerId, reviews.id] }),
     check("revisions_seq_positive", sql`${t.seq} > 0`),
@@ -201,6 +203,26 @@ export const files = sqliteTable(
     enumCheck("files_role_check", t.role, FileRole.options),
     enumCheck("files_status_check", t.status, FileStatus.options),
     enumCheck("files_flag_check", t.flag, FileFlag.options),
+  ],
+);
+
+export const docAssets = sqliteTable(
+  "doc_assets",
+  {
+    ownerId: ownerId(),
+    revisionId: text("revision_id").notNull(),
+    docId: text("doc_id").notNull(),
+    assetId: text("asset_id").notNull(),
+  },
+  (t) => [
+    index("doc_assets_owner_idx").on(t.ownerId),
+    unique("doc_assets_owner_doc_asset_unique").on(t.ownerId, t.docId, t.assetId),
+    ...[t.docId, t.assetId].map((fileId) =>
+      foreignKey({
+        columns: [t.ownerId, t.revisionId, fileId],
+        foreignColumns: [files.ownerId, files.revisionId, files.id],
+      }),
+    ),
   ],
 );
 

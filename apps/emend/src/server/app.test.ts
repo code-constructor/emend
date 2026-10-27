@@ -641,14 +641,16 @@ test("a fresh session request takes no write transaction and only one concurrent
   expect(transaction).not.toHaveBeenCalled();
 });
 
-test("missing assets return JSON 404, extensionless paths retain SPA fallback, and content has minimal headers", async () => {
+test("missing assets return JSON 404, extensionless paths retain SPA fallback, and content stays isolated", async () => {
   const asset = await app.request(`${origin}/assets/missing.js`, { headers: { Host: host } });
   await error(asset, "not_found");
   expect((await app.request(`${origin}/pair`, { headers: { Host: host } })).status).toBe(200);
   const content = await app.request(`${origin}/content/example/page.html`, { headers: { Host: host } });
   expect(content.headers.get("X-Content-Type-Options")).toBe("nosniff");
   expect(content.headers.get("Cache-Control")).toBe("no-store");
-  expect(content.headers.has("Content-Security-Policy")).toBe(false);
+  expect(content.headers.get("Content-Security-Policy")).toContain("sandbox allow-scripts;");
+  expect(content.headers.get("Content-Security-Policy")).toContain("frame-ancestors 'self'");
+  expect(content.headers.has("X-Frame-Options")).toBe(false);
 });
 
 test("HEAD inherits GET scopes, including public capabilities", async () => {

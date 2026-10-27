@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "title": "Synthetic HTML isolation probe",
+  "topics": [],
+  "files": [{ "path": "hostile.html", "role": "doc", "source": "hostile.html" }],
+  "writeup": {
+    "overview": "Synthetic HTML isolation probe with an image, a stylesheet and four blocked script markers.",
+    "tldr": "Verify relative assets load and author scripts never run.",
+    "decisions": null,
+    "topics": {}
+  }
+}

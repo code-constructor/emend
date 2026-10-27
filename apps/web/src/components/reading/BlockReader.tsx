@@ -20,7 +20,16 @@ export function BlockReader({
   changedBlocks,
   threads,
   groups,
-}: ReaderProps & { groups: { key: string; heading: ReactNode; blocks: RenderedBlock[]; path?: string }[] }) {
+}: ReaderProps & {
+  groups: {
+    key: string;
+    id?: string;
+    heading: ReactNode;
+    blocks: RenderedBlock[];
+    path?: string;
+    content?: ReactNode;
+  }[];
+}) {
   const root = useRef<HTMLDivElement>(null);
   const [target, setTarget] = useState<Target | null>(null);
   const [composing, setComposing] = useState(false);
@@ -81,10 +90,11 @@ export function BlockReader({
     <div ref={root} className="space-y-6 p-5">
       <p className="text-xs text-neutral-500 dark:text-neutral-400">Select text to comment.</p>
       {groups.map((group) => (
-        <section key={group.key} className="space-y-4">
+        <section key={group.key} id={group.id} className="space-y-4">
           <h2 className="break-words border-b border-neutral-200 pb-2 font-semibold dark:border-neutral-800">
             {group.heading}
           </h2>
+          {group.content}
           {group.blocks.map((block) => (
             <div key={block.id} className="space-y-3">
               <BlockView block={block} changedIn={changes.get(block.id)} />

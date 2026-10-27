@@ -68,3 +68,24 @@ test.each([
   expect(response.raw).toContain(APP_CSP);
   expect(response.raw).not.toContain("synthetic adapter failure");
 });
+
+test("raw content-path errors carry content isolation headers with self ancestors", async () => {
+  for (const [host, fail] of [
+    ["invalid.example", false],
+    ["127.0.0.1:3636", true],
+  ] as const) {
+    const response = await rawExchange(host, "/content/invalid/doc.html", fail);
+    for (const header of [
+      "sandbox allow-scripts;",
+      "script-src 'none';",
+      "frame-ancestors 'self'",
+      "cross-origin-resource-policy: same-origin",
+      "referrer-policy: no-referrer",
+      "x-content-type-options: nosniff",
+      "cache-control: no-store",
+    ])
+      expect(response.raw).toContain(header);
+    expect(response.raw).not.toContain("x-frame-options");
+    expect(response.raw).not.toContain("access-control-allow-origin");
+  }
+});

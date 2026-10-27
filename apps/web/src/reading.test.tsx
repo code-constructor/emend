@@ -1,3 +1,4 @@
+// @vitest-environment-options {"settings":{"disableIframePageLoading":true}}
 import { ok } from "node:assert/strict";
 import type { RenderedBlock, Target, ThreadView } from "@emend/contract";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -346,7 +347,7 @@ test("reading shows server blocks and change badges, rejects cross-block selecti
   fireEvent.click(screen.getByRole("button", { name: "Comment on diagram" }));
   expect(screen.getByLabelText("Comment")).toBeTruthy();
 });
-test("Markdown docs render blocks while HTML docs remain path listings", () => {
+test("Markdown docs render blocks alongside isolated HTML doc frames", () => {
   const { container } = mount(
     <DocView
       reviewId={id}
@@ -361,7 +362,7 @@ test("Markdown docs render blocks while HTML docs remain path listings", () => {
   );
   expect(screen.getByText("seed")).toBeTruthy();
   expect(screen.getByText("demo.html")).toBeTruthy();
-  expect(container.querySelector("iframe")).toBeNull();
+  expect(container.querySelector("iframe")?.getAttribute("sandbox")).toBe("allow-scripts");
 });
 test("thread groups are ordered, unplaced quotes link to their original revision, and answered changes link to the block", async () => {
   const answered = {
