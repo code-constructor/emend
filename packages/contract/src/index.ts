@@ -3,6 +3,7 @@ export const CONTRACT_VERSION = 1;
 export * from "./api.ts";
 export * from "./auth.ts";
 export * from "./errors.ts";
+export * from "./events.ts";
 export * from "./limits.ts";
 export * from "./manifest.ts";
 export * from "./placement.ts";

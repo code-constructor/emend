@@ -2,7 +2,14 @@ import { z } from "zod";
 import { FilePath } from "./review.ts";
 import { BlockId, FileTarget, ReviewTarget, TopicTarget } from "./target.ts";
 
-export const UnplacedReason = z.enum(["block-gone", "ambiguous", "topic-gone", "file-gone", "lines-gone"]);
+export const UnplacedReason = z.enum([
+  "block-gone",
+  "ambiguous",
+  "topic-gone",
+  "file-gone",
+  "lines-gone",
+  "not-placed",
+]);
 export type UnplacedReason = z.infer<typeof UnplacedReason>;
 
 const spanRange = z

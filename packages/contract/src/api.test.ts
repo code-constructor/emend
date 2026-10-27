@@ -46,6 +46,8 @@ test("exports the v1 API, limits, file vocabulary and reserved fallback", () => 
     targetTextChars: 65536,
     contextLineChars: 2000,
     commentsPerHandoff: 5000,
+    handoffBytes: 16777216,
+    waitingTakesPerOwner: 32,
     historyPerComment: 500,
     instructionsPerHandoff: 100,
     versionChars: 64,

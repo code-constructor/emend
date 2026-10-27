@@ -8,15 +8,23 @@ import { CommentBody, Outcome } from "./thread.ts";
 export const LEASE_SECONDS = 120;
 export const MAX_TAKE_WAIT_SECONDS = 25;
 
+export const TakeRequest = z.object({ waitSeconds: z.number().min(0).max(MAX_TAKE_WAIT_SECONDS).default(0) });
+export type TakeRequest = z.infer<typeof TakeRequest>;
+
 export const HandoffComment = z.object({
   id: z.uuid(),
   threadId: z.uuid(),
   target: Target,
   placement: Placement,
   body: CommentBody,
+  historyTrimmed: z
+    .boolean()
+    .optional()
+    .describe("Some history was left out, by the per-comment cap or the byte budget"),
   history: z
     .array(z.object({ author: z.enum(["user", "agent"]), body: CommentBody, outcome: Outcome.optional() }))
-    .max(LIMITS.historyPerComment),
+    .max(LIMITS.historyPerComment)
+    .describe("The newest eligible entries before this comment, in oldest-first insertion order"),
 });
 export type HandoffComment = z.infer<typeof HandoffComment>;
 

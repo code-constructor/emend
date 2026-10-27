@@ -1,0 +1,174 @@
+import { randomUUID } from "node:crypto";
+import type { Target } from "@emend/contract";
+import { and, eq } from "drizzle-orm";
+import { afterEach, beforeEach, expect, test } from "vitest";
+import { files, placements, revisions, topics, writeups } from "../../db/schema.ts";
+import { executeWork } from "../publish/work.ts";
+import { error, mailboxFixture } from "./test-support.ts";
+
+let f: Awaited<ReturnType<typeof mailboxFixture>>;
+beforeEach(async () => {
+  f = await mailboxFixture();
+});
+afterEach(async () => {
+  await f.cleanup();
+});
+const line = (start = 1): Target => ({
+  kind: "lines",
+  path: "a.ts",
+  side: "new",
+  start,
+  end: start,
+  lines: ["needle"],
+  before: [],
+  after: [],
+});
+async function file(revisionId: string, path: string, text: string, oldPath: string | null = null) {
+  const blob = await f.deps.blobs.put(f.ownerId, Buffer.from(text), "text/plain");
+  await f.db.query((q) =>
+    q.insert(files).values({
+      ownerId: f.ownerId,
+      revisionId,
+      path,
+      oldPath,
+      role: "diff",
+      ord: 0,
+      mediaType: "text/plain",
+      newBlob: blob,
+    }),
+  );
+}
+test("places a thread made on an older revision on every newer revision, including unplaced renames", async () => {
+  await file(f.revisionId, "a.ts", "needle\n");
+  await file(await f.revision(2), "a.ts", "absent\n");
+  await file(await f.revision(3), "b.ts", "absent\n", "a.ts");
+  await file(await f.revision(4), "b.ts", "extra\nneedle\n", "a.ts");
+  const t = await f.thread("Note", line());
+  const rows = await f.db.read((q) =>
+    q
+      .select()
+      .from(placements)
+      .innerJoin(revisions, and(eq(revisions.ownerId, f.ownerId), eq(revisions.id, placements.revisionId)))
+      .where(and(eq(placements.ownerId, f.ownerId), eq(placements.threadId, t.threadId)))
+      .orderBy(revisions.seq),
+  );
+  expect(rows.map((r) => r.placements.status)).toEqual(["placed", "unplaced", "unplaced", "placed"]);
+  expect(rows.map((r) => r.placements.carried)).toEqual([
+    { path: "a.ts", side: "new" },
+    { path: "a.ts", side: "new" },
+    { path: "b.ts", side: "new" },
+    { path: "b.ts", side: "new" },
+  ]);
+  expect(rows[3]?.placements.location).toEqual({ kind: "lines", path: "b.ts", side: "new", start: 2, end: 2 });
+  await f.send({ revision: 4, kind: "go" });
+  expect(await f.take()).toMatchObject({
+    kind: "go",
+    comments: [{ placement: { status: "placed", location: { path: "b.ts", start: 2 } } }],
+  });
+});
+test("unplaced comments are delivered rather than dropped", async () => {
+  await file(f.revisionId, "a.ts", "needle\n");
+  await f.revision(2);
+  await f.thread("Note", line());
+  await f.send({ revision: 2, kind: "go" });
+  expect(await f.take()).toMatchObject({
+    kind: "go",
+    comments: [{ placement: { status: "unplaced", reason: "file-gone" } }],
+  });
+});
+test("invalid original targets are rejected even if the quote exists elsewhere", async () => {
+  await file(f.revisionId, "a.ts", "other\nneedle\n");
+  const blocks = [{ id: "overview-11111111", text: "needle", html: "<p>needle</p>", kind: "paragraph" }];
+  const rendered = await f.deps.blobs.put(
+    f.ownerId,
+    Buffer.from(JSON.stringify({ sections: [{ blocks }] })),
+    "application/json",
+  );
+  await f.db.query((q) =>
+    q
+      .insert(writeups)
+      .values({ ownerId: f.ownerId, revisionId: f.revisionId, sourceBlob: rendered, renderedBlob: rendered }),
+  );
+  for (const target of [
+    line(),
+    { kind: "file", path: "missing.ts" },
+    { kind: "topic", slug: "missing" },
+    { kind: "writeup-span", blockId: "overview-22222222", quote: "needle", prefix: "", suffix: "" },
+  ])
+    await error(
+      await f.request(`/reviews/${f.reviewId}/threads`, "POST", { revision: 1, target, body: "No" }),
+      400,
+      "invalid_target",
+    );
+  expect(await f.db.read((q) => q.select().from(placements).where(eq(placements.ownerId, f.ownerId)))).toHaveLength(0);
+});
+test("file, topic and span targets place on their own revision", async () => {
+  await file(f.revisionId, "a.ts", "needle\n");
+  await f.db.query((q) =>
+    q.insert(topics).values({
+      ownerId: f.ownerId,
+      revisionId: f.revisionId,
+      slug: "topic",
+      title: "Topic",
+      importance: 50,
+      summary: "Summary",
+    }),
+  );
+  const rendered = await f.deps.blobs.put(
+    f.ownerId,
+    Buffer.from(
+      JSON.stringify({ sections: [{ blocks: [{ id: "overview-11111111", text: "needle", html: "<p>needle</p>" }] }] }),
+    ),
+    "application/json",
+  );
+  await f.db.query((q) =>
+    q
+      .insert(writeups)
+      .values({ ownerId: f.ownerId, revisionId: f.revisionId, sourceBlob: rendered, renderedBlob: rendered }),
+  );
+  for (const target of [
+    { kind: "file", path: "a.ts" },
+    { kind: "topic", slug: "topic" },
+    { kind: "writeup-span", blockId: "overview-11111111", quote: "needle", prefix: "", suffix: "" },
+  ] satisfies Target[])
+    await f.thread("Note", target);
+});
+test("creation retries a revision race outside the database and stops after three conflicts", async () => {
+  let calls = 0;
+  f.deps.publishExecutor = async (work) => {
+    expect(work.kind).toBe("place");
+    if (++calls === 1) await f.revision(2);
+    return executeWork(work);
+  };
+  await f.thread();
+  expect(calls).toBe(3);
+  expect(await f.db.read((q) => q.select().from(placements).where(eq(placements.ownerId, f.ownerId)))).toHaveLength(2);
+  let seq = 2;
+  const seen = new Set<string>();
+  f.deps.publishExecutor = async (work) => {
+    if (work.kind === "place" && !seen.has(work.threads[0]?.id ?? "")) {
+      seen.add(work.threads[0]?.id ?? "");
+      await f.revision(++seq);
+    }
+    return executeWork(work);
+  };
+  await error(
+    await f.request(`/reviews/${f.reviewId}/threads`, "POST", {
+      revision: 1,
+      target: { kind: "review" },
+      body: "Conflict",
+    }),
+    409,
+    "publish_conflict",
+  );
+  expect(seen.size).toBe(3);
+});
+test("missing revision is invalid_target and the production placement worker is used", async () => {
+  await error(
+    await f.request(`/reviews/${f.reviewId}/threads`, "POST", { revision: 99, target: { kind: "review" }, body: "No" }),
+    400,
+    "invalid_target",
+  );
+  f.deps.publishExecutor = undefined;
+  expect((await f.thread()).threadId).not.toBe(randomUUID());
+});

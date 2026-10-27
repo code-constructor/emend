@@ -16,7 +16,11 @@ export const SendRequest = z.discriminatedUnion("kind", [
     revision: z.int().positive(),
     kind: z.literal("go"),
     mode: GoMode.optional(),
-    instruction: z.string().max(LIMITS.instructionChars).optional(),
+    instruction: z
+      .string()
+      .max(LIMITS.instructionChars)
+      .refine((instruction) => instruction.isWellFormed(), "instruction must be well-formed UTF-16")
+      .optional(),
   }),
   z.object({
     revision: z.int().positive(),
@@ -26,3 +30,6 @@ export const SendRequest = z.discriminatedUnion("kind", [
   }),
 ]);
 export type SendRequest = z.infer<typeof SendRequest>;
+
+export const SendCreated = z.object({ sendId: z.uuid() });
+export type SendCreated = z.infer<typeof SendCreated>;

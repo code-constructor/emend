@@ -1,0 +1,2 @@
+CREATE INDEX `comments_owner_review_thread_idx` ON `comments` (`owner_id`,`review_id`,`thread_id`);--> statement-breakpoint
+CREATE INDEX `comments_owner_review_send_idx` ON `comments` (`owner_id`,`review_id`,`send_id`);

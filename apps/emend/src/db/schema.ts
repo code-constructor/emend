@@ -288,7 +288,12 @@ export const placements = sqliteTable(
       foreignColumns: [revisions.ownerId, revisions.reviewId, revisions.id],
     }),
     enumCheck("placements_status_check", t.status, ["placed", "unplaced"]),
-    enumCheck("placements_reason_check", t.reason, UnplacedReason.options),
+    // not-placed describes an absent row in an API response, never a stored placement.
+    enumCheck(
+      "placements_reason_check",
+      t.reason,
+      UnplacedReason.options.filter((reason) => reason !== "not-placed"),
+    ),
     check(
       "placements_shape_check",
       sql`(${t.status} = 'placed' and ${t.location} is not null and ${t.reason} is null) or (${t.status} = 'unplaced' and ${t.location} is null and ${t.reason} is not null)`,
@@ -360,6 +365,8 @@ export const comments = sqliteTable(
   },
   (t) => [
     ...owned("comments", t),
+    index("comments_owner_review_thread_idx").on(t.ownerId, t.reviewId, t.threadId),
+    index("comments_owner_review_send_idx").on(t.ownerId, t.reviewId, t.sendId),
     foreignKey({
       columns: [t.ownerId, t.reviewId, t.threadId],
       foreignColumns: [threads.ownerId, threads.reviewId, threads.id],

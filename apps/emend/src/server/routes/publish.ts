@@ -11,14 +11,14 @@ export function publishRoutes(app: Hono<AppEnv>, deps: AppDeps) {
     const principal = c.get("principal");
     if (!principal.instanceId) throw new ApiError("forbidden");
     const request = parseBody(c, PublishRequest);
-    return c.json(
-      await ingest(principal.ownerId, principal.instanceId, request, {
-        db: deps.db,
-        blobs: deps.blobs,
-        baseUrl: deps.config.baseUrl,
-        executor: deps.publishExecutor,
-        signal: c.req.raw.signal,
-      }),
-    );
+    const result = await ingest(principal.ownerId, principal.instanceId, request, {
+      db: deps.db,
+      blobs: deps.blobs,
+      baseUrl: deps.config.baseUrl,
+      executor: deps.publishExecutor,
+      signal: c.req.raw.signal,
+    });
+    deps.events?.emit({ type: "publish", reviewId: result.reviewId, revision: result.revision });
+    return c.json(result);
   });
 }

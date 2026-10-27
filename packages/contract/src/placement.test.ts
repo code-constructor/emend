@@ -13,8 +13,8 @@ test.each([
   expect(Placement.parse({ status: "placed", location, extra: true })).toEqual({ status: "placed", location });
 });
 
-test("accepts precisely the five unplaced reasons", () => {
-  const reasons = ["block-gone", "ambiguous", "topic-gone", "file-gone", "lines-gone"];
+test("accepts the placement reasons and the missing-row fallback", () => {
+  const reasons = ["block-gone", "ambiguous", "topic-gone", "file-gone", "lines-gone", "not-placed"];
   expect(UnplacedReason.options).toEqual(reasons);
   for (const reason of reasons)
     expect(Placement.parse({ status: "unplaced", reason })).toEqual({ status: "unplaced", reason });

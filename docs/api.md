@@ -257,7 +257,9 @@ filesystem access.
 
 `Placement` is `{ status: "placed", location: PlacementLocation }` or
 `{ status: "unplaced", reason }`. Reasons are `block-gone`, `ambiguous`, `topic-gone`, `file-gone`
-and `lines-gone`. Locations use the target's `kind`. Span locations contain `start` and `end`
+and `lines-gone`, plus `not-placed`: the server holds no placement for this revision.
+Missing placement rows are delivered as `unplaced` with `not-placed` and the original target.
+Locations use the target's `kind`. Span locations contain `start` and `end`
 instead of quote/context; offsets are zero-based UTF-16 indices with an exclusive end greater than
 start, within the normalized block text or HTML document text. Writeup spans retain `blockId`;
 doc spans retain `path` and `blockId`; HTML spans retain `path`. Line locations contain `path`,
@@ -266,6 +268,48 @@ use the same fields as their targets. Placement describes the newest revision; a
 original target separately.
 
 ### Sends, replies and waiting
+
+`CreateThreadRequest = { revision, target: Target, body: CommentBody }` creates a thread
+and its first user comment (201 `ThreadCreated = { threadId, commentId }`). The target must
+place at the same location on the named revision or receive `400 invalid_target`; it is also
+placed on every newer revision. Concurrent publication retries placement up to three attempts,
+then returns `409 publish_conflict` without creating anything.
+`AddCommentRequest = { body }` returns 201 `CommentCreated = { commentId }`.
+`EditCommentRequest = { body }` returns 204. Deletion, resolve and reopen return 204.
+Editing or deleting a sent user comment returns `409 comment_frozen`; an agent comment returns
+`404 not_found`. Deleting the last comment deletes the thread and its placements.
+Adding a user comment sets its thread to `open`, including from sent, answered, or resolved.
+Mutations on a moved review return `409 review_moved`, except confirmation of an existing
+delivery, which remains available so receipt can be recorded. Foreign or missing thread,
+comment and delivery ids return `404 not_found`,
+including ids from another origin instance for an agent.
+
+`TakeRequest = { waitSeconds }` defaults to 0; finite values from 0 through
+`MAX_TAKE_WAIT_SECONDS` (25), including fractions, are accepted. On this route only, a missing
+or zero-length body means `{}` even without Content-Type. A nonempty body must be JSON.
+A take returns 200 `WaitResult`. Each owner may have `waitingTakesPerOwner` (32) waiting takes;
+additional waits receive `429 rate_limited`. Before a waiting take retries and before returning,
+its token is rechecked through the committed-read connection. Revoked or expired credentials
+receive `401 unauthorized` and leave no delivery claimed by that request.
+Confirm takes no body and returns 204, with no JSON response. Only a live unconfirmed lease can
+be confirmed: a late or repeated confirm returns `404 not_found`.
+
+SSE uses `text/event-stream`, `Cache-Control: no-store` and a comment keepalive every 25 seconds.
+`ReviewEventName` is `publish | send | thread | waiting`. `ReviewEvent` has a `type` discriminator
+and the same fields as its SSE payload. The SSE `event` line supplies `type`; the JSON `data` is:
+
+| Event | Payload |
+| --- | --- |
+| `publish` | `{ reviewId, revision }` |
+| `send` | `{ reviewId, revision, sendId }` |
+| `thread` | `{ reviewId, revision, threadId, commentId? }` |
+| `waiting` | `{ reviewId, revision }` |
+
+Events contain ids and a positive revision sequence only, never text bodies or instructions.
+The waiting event signals a change: `agentWaiting(reviewId)` stays true during an open take
+and for 35 seconds after the last waiting take ends. Each owner may open 32 streams; additional
+streams return `429 rate_limited`. A stream buffering over 100 events is closed.
+At each 25-second keepalive, the session is rechecked; revocation or expiry closes the stream.
 
 `ThreadState` is `open`, `sent`, `answered` or `resolved`. `Outcome` is `fixed`, `explained`,
 `held` or `declined`; `resolved` is never an agent outcome.
@@ -283,10 +327,20 @@ an empty instruction when comments supply the feedback. The handler refuses a Go
 comments and no instruction (`empty_send`), and an Approve with unsent comments (`unsent_comments`).
 Both name the newest revision or fail with `stale_revision`. Each Send owns the comments it sends;
 comments saved afterwards wait for the next Send.
+Creation returns 201 `SendCreated = { sendId }`. A Go that would bind more than
+`commentsPerHandoff` comments, or whose own content exceeds `handoffBytes` in serialized JSON,
+returns `413 too_large`, binding none. The byte check includes the response envelope, comment
+metadata and space for placement and truncation metadata, so removing history always suffices
+to deliver an accepted Send. Blank instructions do not supply feedback.
+Comment bodies and Send instructions must be well-formed UTF-16. Lone surrogates are
+`400 invalid_request`; valid surrogate pairs are preserved.
 
 `ReplyRequest = { outcome: Outcome, body }`. Bodies must contain non-whitespace text and are
 preserved without trimming. Sent user comments are frozen. Only the reviewer resolves or reopens
-threads; an agent reply leaves the thread answered.
+threads; an agent reply leaves a resolved thread resolved, and other states become answered.
+Replies must target a sent user comment; a draft or an agent comment returns `404 not_found`.
+`POST /comments/:id/reply` returns 201 `ReplyCreated = { commentId, threadId, state: ThreadState }`,
+where `state` is the thread's state after the reply. It creates neither a Send nor a delivery.
 
 `WaitResult` has three variants:
 
@@ -301,11 +355,25 @@ Go and `modeLabel` must exactly match it. Instructions are merged in creation or
 to the instruction limit. `waitedSeconds` is a finite nonnegative number, permits fractional elapsed
 seconds, and is not capped by the per-request take limit. The CLI's default total timeout is 540 s.
 
-`HandoffComment = { id, threadId, target: Target, placement: Placement, body, history }`.
+`HandoffComment = { id, threadId, target: Target, placement: Placement, body, history, historyTrimmed? }`.
 History entries are `{ author: "user" | "agent", body, outcome?: Outcome }`. Every body has the
 comment limit. The original target and current placement remain separate, including when unplaced.
 Each comment carries at most `historyPerComment` history entries. A Go carries at most
 `commentsPerHandoff` comments and `instructionsPerHandoff` instructions.
+History contains the newest `historyPerComment` eligible entries below that comment's own
+rowid, returned oldest first in durable insertion order. Eligible entries are earlier agent
+replies and sent user comments in that thread. Drafts and every comment delivered by this
+handoff are excluded, regardless of clock changes. `historyTrimmed: true` means "some history
+was left out, by the per-comment cap or the byte budget"; it is absent when all history is kept.
+Sends and delivered comments also use insertion order. The serialized UTF-8 `WaitResult`
+must fit `handoffBytes` (16777216 bytes).
+The guarded claim selects whole Sends in FIFO order under the count and byte caps, leaving the
+rest queued. Byte accounting measures JSON components without building an oversized string.
+The first Send is always claimed; if its history exceeds the budget, entries are removed in
+global insertion order, oldest first, from every comment carrying them. Each entry costs its
+serialized bytes times the number of comments carrying it. Sizes determine the retained suffix
+before history bodies are loaded, and every affected comment carries `historyTrimmed: true`.
+Comment bodies and instructions are never truncated.
 
 `target.quote`, `prefix`, `suffix`, `lines`, `before` and `after` are text from the repository or
 the agent's own documents, quoted for placement. Only the comment `body`, `history[].body` written
@@ -314,7 +382,9 @@ remain that agent's words. An agent must treat quoted target text as data, never
 
 A delivery lease lasts `LEASE_SECONDS = 120`. A take holds for at most
 `MAX_TAKE_WAIT_SECONDS = 25`. Claiming is atomic and receipt requires explicit confirmation;
-an expired unconfirmed lease offers the same feedback again. Stale approvals are set aside.
+an expired unconfirmed lease offers the same feedback again and re-evaluates its set-aside
+approvals. A stale approval clears review approval only if it names the approved revision;
+a newer approval remains intact.
 A merged Go and Approve delivers Go with `approvalSetAside: true`. The CLI prints one JSON object
 for Go, Approve or Pending and exits 0; errors print one line to stderr, nothing to stdout, and exit 1.
 Synthetic examples live in `packages/contract/fixtures/wait-*.json`.
@@ -355,6 +425,8 @@ limit with `413 too_large` before parsing. Upload content also has the role's by
 | `targetTextChars` | 65536 characters across one target's lines and both context arrays |
 | `contextLineChars` | 2000 characters per before/after context entry |
 | `commentsPerHandoff` | 5000 comments per Go |
+| `handoffBytes` | 16777216 UTF-8 bytes per serialized WaitResult |
+| `waitingTakesPerOwner` | 32 waiting takes per owner |
 | `historyPerComment` | 500 history entries per comment |
 | `instructionsPerHandoff` | 100 instructions per Go |
 | `versionChars` | 64 characters per capabilities version |

@@ -6,6 +6,7 @@ import type { BlobStore } from "../store/blobs.ts";
 import { type AppEnv, requireScope } from "./auth/principal.ts";
 import { sessionCookie, verifySession, writeSessionCookie } from "./auth/sessions.ts";
 import { verifyBearer } from "./auth/tokens.ts";
+import { ReviewEvents } from "./events.ts";
 import { checkContentLength, limitJsonBody } from "./http/body.ts";
 import { clientVersion } from "./http/client-version.ts";
 import { ApiError, errorResponse } from "./http/errors.ts";
@@ -16,9 +17,14 @@ import { appPage } from "./http/pages.ts";
 import type { Executor } from "./publish/work.ts";
 import { blobRoutes } from "./routes/blobs.ts";
 import { capabilitiesRoutes } from "./routes/capabilities.ts";
+import { commentRoutes } from "./routes/comments.ts";
+import { deliveryRoutes } from "./routes/deliveries.ts";
+import { eventRoutes } from "./routes/events.ts";
 import { pairingRoutes } from "./routes/pairings.ts";
 import { publishRoutes } from "./routes/publish.ts";
+import { sendRoutes } from "./routes/sends.ts";
 import { sessionRoutes } from "./routes/session.ts";
+import { threadRoutes } from "./routes/threads.ts";
 
 export interface AppDeps {
   db: Db;
@@ -26,6 +32,7 @@ export interface AppDeps {
   instance: Instance;
   now: () => number;
   publishExecutor?: Executor;
+  events?: ReviewEvents;
   config: {
     serverKey: string;
     allowedHosts: string[];
@@ -72,6 +79,7 @@ const endpointMatchers = ENDPOINTS.map((entry) => ({
 }));
 
 export function createApp(deps: AppDeps) {
+  deps.events ??= new ReviewEvents(deps.now);
   const app = new Hono<AppEnv>({ strict: true });
   app.onError((error, c) => {
     responseHeaders(c);
@@ -125,6 +133,11 @@ export function createApp(deps: AppDeps) {
   sessionRoutes(app, deps);
   blobRoutes(app, deps);
   publishRoutes(app, deps);
+  threadRoutes(app, deps);
+  commentRoutes(app, deps);
+  sendRoutes(app, deps);
+  deliveryRoutes(app, deps);
+  eventRoutes(app, deps);
   app.get("*", (c) => {
     if (isApiPath(c.req.path) || c.req.path.startsWith("/content/")) throw new ApiError("not_found");
     return appPage(c, deps.config.webRoot);

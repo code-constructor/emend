@@ -25,6 +25,8 @@ const MESSAGES: Record<ErrorCode, string> = {
   rate_limited: "Code entry is temporarily locked.",
 };
 const DETAILS = {
+  waiting_takes: { code: "rate_limited", message: "Too many waiting takes." },
+  event_streams: { code: "rate_limited", message: "Too many open event streams." },
   publish_busy: { code: "rate_limited", message: "The server is busy publishing; try again." },
   publish_aborted: { code: "invalid_request", message: "The publish was cancelled." },
   writeup_blocks: { code: "too_large", message: "The writeup has too many blocks." },

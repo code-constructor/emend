@@ -29,3 +29,12 @@ test.each([
 ])("rejects an invalid send %#", (send) => {
   expect(SendRequest.safeParse(send).success).toBe(false);
 });
+
+test.each(["\ud800", "\udfff", "text\ud800tail"])("rejects a malformed Send instruction %#", (instruction) => {
+  expect(SendRequest.safeParse({ kind: "go", revision: 1, instruction }).success).toBe(false);
+});
+
+test("preserves a valid surrogate pair in a Send instruction", () => {
+  const instruction = "  Pair: \ud83d\ude80  ";
+  expect(SendRequest.parse({ kind: "go", revision: 1, instruction })).toMatchObject({ instruction });
+});

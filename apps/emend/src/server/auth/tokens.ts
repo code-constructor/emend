@@ -81,6 +81,34 @@ export async function verifyBearer(db: Db, header: string | undefined, now: numb
   });
 }
 
+// Revalidate an already authenticated request without retaining its credential or
+// renewing it. Call through Db.read while waiting, or the current claim transaction.
+export async function principalIsLive(q: Queries, principal: Principal, now: number): Promise<boolean> {
+  const row = await q
+    .select({ deviceId: tokens.deviceId, expiresAt: tokens.expiresAt })
+    .from(tokens)
+    .where(
+      and(
+        eq(tokens.ownerId, principal.ownerId),
+        eq(tokens.id, principal.tokenId),
+        eq(tokens.kind, principal.kind),
+        principal.instanceId === null ? isNull(tokens.instanceId) : eq(tokens.instanceId, principal.instanceId),
+        isNull(tokens.revokedAt),
+        or(isNull(tokens.expiresAt), gt(tokens.expiresAt, now)),
+      ),
+    )
+    .get();
+  if (!row || (principal.kind === "reviewer" && (!row.deviceId || row.expiresAt === null))) return false;
+  if (!row.deviceId) return true;
+  return Boolean(
+    await q
+      .select({ id: devices.id })
+      .from(devices)
+      .where(and(eq(devices.ownerId, principal.ownerId), eq(devices.id, row.deviceId), isNull(devices.revokedAt)))
+      .get(),
+  );
+}
+
 // The caller supplies its transaction so rotation can join the rest of startup repair.
 export async function rotateLocalToken(
   q: Queries,

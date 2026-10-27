@@ -91,5 +91,14 @@ export const MIGRATIONS: readonly { tag: string; when: number; hash: string; sta
     "statements": [
       "ALTER TABLE `placements` ADD `carried` text;"
     ]
+  },
+  {
+    "tag": "0003_mailbox_indexes",
+    "when": 1793058467957,
+    "hash": "0df42cee4865a2593f562cb35bcb90a9da4780ddcfe91c38a5f5dae02d0fd5e6",
+    "statements": [
+      "CREATE INDEX `comments_owner_review_thread_idx` ON `comments` (`owner_id`,`review_id`,`thread_id`);",
+      "CREATE INDEX `comments_owner_review_send_idx` ON `comments` (`owner_id`,`review_id`,`send_id`);"
+    ]
   }
 ];

@@ -137,8 +137,14 @@ test("every documented API endpoint enforces its scope even before its handler e
       if (!(SCOPES_BY_KIND[kind] as readonly string[]).includes(endpoint.scope))
         await error(response, "forbidden", endpoint.method === "HEAD");
       else if (path === "/api/v1/pairings") expect(response.status).toBe(201);
-      else if (path === "/api/v1/publish" || path.startsWith("/api/v1/blobs/"))
+      else if (
+        path === "/api/v1/publish" ||
+        path.startsWith("/api/v1/blobs/") ||
+        (endpoint.method === "POST" && /\/(threads|comments|sends|reply)$/.test(path)) ||
+        (endpoint.method === "PATCH" && path.startsWith("/api/v1/comments/"))
+      )
         await error(response, "invalid_request", endpoint.method === "HEAD");
+      else if (/\/reviews\/missing\/(events|take)$/.test(path)) await error(response, "unknown_review");
       else await error(response, "not_found", endpoint.method === "HEAD");
     }
   }
@@ -532,7 +538,7 @@ test("assets get server-chosen content types and external index symlinks are ref
 });
 
 test("unimplemented routes return 404 after a successful scope check without parsing a body", async () => {
-  await error(await request("/reviews/missing/take", "POST", bearer(agent)), "not_found");
+  await error(await request("/import", "POST", bearer(agent)), "not_found");
   await error(await request("/machines", "POST"), "not_found");
 });
 
