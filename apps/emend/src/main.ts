@@ -1,3 +1,4 @@
+import type { SkillsOptions } from "./cli/commands/skills.ts";
 import type { ServiceOptions } from "./cli/service/common.ts";
 import { defaultStateDir } from "./state/paths.ts";
 import { VERSION } from "./version.ts";
@@ -10,13 +11,29 @@ export interface Io {
   env: Record<string, string | undefined>;
   openUrl?: (url: string) => Promise<boolean>;
   service?: ServiceOptions;
+  skills?: SkillsOptions;
 }
 export async function run(argv: string[], io: Io): Promise<number> {
+  if (argv.length === 1 && ["--help", "-h"].includes(argv[0] ?? "")) {
+    io.stdout(`Usage:
+  emend                         Open the review inbox
+  emend serve                   Run the local server
+  emend publish --manifest <file> [--review <id>] [--key <name>]
+  emend wait <review> [--timeout <seconds>]
+  emend feedback <review>
+  emend reply <comment> --status <outcome> (--body <text> | --body-file <path | ->)
+  emend mcp
+  emend service install [serve options] | uninstall | status
+  emend skills install [--dir <path>] [--dry-run]
+  emend --version
+`);
+    return 0;
+  }
   if (argv.length === 1 && argv[0] === "--version") {
     io.stdout(`emend ${VERSION}\n`);
     return 0;
   }
-  if (["wait", "feedback", "reply", "mcp", "service"].includes(argv[0] ?? "")) {
+  if (["wait", "feedback", "reply", "mcp", "service", "skills"].includes(argv[0] ?? "")) {
     const { CliUsageError, errorLine } = await import("./cli/http.ts");
     try {
       const commands = {
@@ -25,6 +42,7 @@ export async function run(argv: string[], io: Io): Promise<number> {
         reply: () => import("./cli/commands/reply.ts").then((m) => m.replyCommand),
         mcp: () => import("./cli/commands/mcp.ts").then((m) => m.mcpCommand),
         service: () => import("./cli/commands/service.ts").then((m) => m.serviceCommand),
+        skills: () => import("./cli/commands/skills.ts").then((m) => m.skillsCommand),
       };
       const command = await commands[argv[0] as keyof typeof commands]();
       await command(defaultStateDir(io.env), argv.slice(1), io);

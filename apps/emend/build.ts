@@ -1,6 +1,7 @@
 import { cp, readFile, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
+import { copySkills } from "./src/build/skill-copy-filter.ts";
 
 await build({
   entryPoints: {
@@ -26,3 +27,8 @@ for (const entry of ["emend", "publish-worker"]) {
 const webOutput = new URL("./dist/web", import.meta.url);
 await rm(webOutput, { recursive: true, force: true });
 await cp(new URL("../web/dist", import.meta.url), webOutput, { recursive: true });
+
+await copySkills(
+  fileURLToPath(new URL("../../", import.meta.url)),
+  fileURLToPath(new URL("./dist/skills", import.meta.url)),
+);

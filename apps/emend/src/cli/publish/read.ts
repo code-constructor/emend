@@ -1,4 +1,4 @@
-import { constants } from "node:fs";
+import { constants, type Stats } from "node:fs";
 import { lstat, open, stat as pathStat, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { escapeReference } from "../escape.ts";
@@ -62,6 +62,7 @@ export async function readRegular(
   roots?: string[],
   fs = nativeFs,
   gitDirs: string[] = [],
+  check?: (info: Stats, actual: string) => void | Promise<void>,
 ): Promise<Buffer> {
   outsideGit(await fs.realpath(file), gitDirs, roots);
   const root = roots?.find((root) => inside(root, file));
@@ -77,6 +78,7 @@ export async function readRegular(
     if (stat.size > limit) throw new OversizedFile();
     // On Linux check the opened descriptor, including directory symlink swaps, before reading.
     const actual = await fs.realpath(file);
+    await check?.(stat, actual);
     outsideGit(actual, gitDirs, roots);
     if (root && !(await leadingFolders(root, file))) throw new CliError("file changed while reading");
     const resolved = await fs.stat(actual);

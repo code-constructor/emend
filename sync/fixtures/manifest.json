@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "title": "Bound the retry budget",
+  "base": "1111111111111111111111111111111111111111",
+  "head": "worktree",
+  "topics": [
+    {
+      "slug": "retry-budget",
+      "title": "Retry budget",
+      "importance": 10,
+      "summary": "Requests stop retrying after three attempts.",
+      "door": "two-way",
+      "blastRadius": { "scope": "user", "note": "A failed request could stop before a later attempt succeeds." }
+    }
+  ],
+  "files": [
+    { "path": "src/retry.ts", "role": "diff", "topic": "retry-budget" },
+    { "path": "docs/retry-prd.md", "role": "diff", "topic": "retry-budget" },
+    { "path": "docs/retry-prd.md", "role": "doc", "topic": "retry-budget" }
+  ],
+  "writeup": {
+    "overview": "- **Goal:** Failed requests must stop retrying.\n- **Change:** Each request gets three attempts.\n- **Scope:** The request loop and its design doc change.",
+    "tldr": "- **Biggest risk:** An early stop could discard the final attempt.\n- **Check first:** Read `src/retry.ts` in Retry budget.",
+    "decisions": null,
+    "glossary": "- **Retry budget:** The total number of attempts allowed for one request.",
+    "topics": {
+      "retry-budget": {
+        "why": "**What it is:** The request loop retries temporary failures.\n\n**Problem:** Repeated failures kept the loop running.\n\n**Fix:** The loop stops after three attempts.",
+        "example": "A request fails on every attempt.\n\n| Input | Before | After |\n| --- | --- | --- |\n| Repeated temporary failure | Retries continue | Stops after attempt three |",
+        "body": "- The first call counts as attempt one.\n- A successful attempt ends the loop immediately.\n- Check that the third attempt can still succeed."
+      }
+    }
+  }
+}

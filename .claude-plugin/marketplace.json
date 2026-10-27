@@ -1,0 +1,12 @@
+{
+  "name": "emend",
+  "owner": { "name": "shllg" },
+  "description": "Local-first review for work done by coding agents: plans, docs and code.",
+  "plugins": [
+    {
+      "name": "emend",
+      "source": "./",
+      "description": "Local-first review for work done by coding agents: plans, docs and code."
+    }
+  ]
+}

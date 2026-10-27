@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "surfaces": [
+    {
+      "name": "review-wording",
+      "self": ["skills/emend-review/**"],
+      "counterpart": ["skills/hunk-review/SKILL.md"]
+    },
+    {
+      "name": "topic-vocabulary",
+      "self": ["packages/contract/src/review.ts"],
+      "counterpart": ["extension/review-plan/plan.ts"]
+    },
+    {
+      "name": "modes-outcomes",
+      "self": ["packages/contract/src/send.ts", "packages/contract/src/thread.ts", "skills/emend-feedback/**"],
+      "counterpart": ["extension/review-plan/go.ts", "skills/hunk-handle-notes/SKILL.md"]
+    },
+    {
+      "name": "wait-result",
+      "self": ["packages/contract/src/wait.ts", "apps/emend/src/cli/commands/wait.ts"],
+      "counterpart": ["bin/hunk-plan"]
+    }
+  ]
+}

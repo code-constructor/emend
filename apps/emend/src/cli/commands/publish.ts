@@ -1,4 +1,5 @@
-import { join, resolve } from "node:path";
+import { lstat } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import { LIMITS, PublishManifest, PublishResponse } from "@emend/contract";
 import type { Io } from "../../main.ts";
 import { escapeReference } from "../escape.ts";
@@ -41,6 +42,9 @@ export async function publishCommand(stateDir: string, args: string[], io: Io, c
   const options = parsePublishArgs(args);
   const context = await publishContext(cwd);
   const manifestPath = resolve(cwd, options.manifest);
+  const unsafeManifest = new CliError(
+    `the manifest ${escapeReference(manifestPath)} can be changed by other users; write it in a private folder`,
+  );
   let manifest: PublishManifest;
   try {
     manifest = PublishManifest.parse(
@@ -52,12 +56,23 @@ export async function publishCommand(stateDir: string, args: string[], io: Io, c
             inside(context.root, manifestPath) ? [context.root] : undefined,
             undefined,
             context.gitDirs,
+            async (info, actual) => {
+              if (!process.getuid || (context.worktree && inside(context.worktree, actual))) return;
+              const uid = process.getuid();
+              if (info.uid !== uid || (info.mode & 0o002) !== 0) throw unsafeManifest;
+              if ((info.mode & 0o020) !== 0) {
+                const folder = await lstat(dirname(actual)).catch(() => {
+                  throw unsafeManifest;
+                });
+                if (!folder.isDirectory() || folder.uid !== uid || (folder.mode & 0o077) !== 0) throw unsafeManifest;
+              }
+            },
           )
         ).toString(),
       ),
     );
   } catch (error) {
-    if (error instanceof GitFolderRead) throw error;
+    if (error instanceof GitFolderRead || error === unsafeManifest) throw error;
     throw new CliError("invalid publish manifest");
   }
   if (!manifest.base && !options.key && !options.review) throw new CliError("pass --review or --key");
