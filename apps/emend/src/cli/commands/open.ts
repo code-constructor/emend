@@ -5,17 +5,24 @@ import { apiRequest, CliError } from "../http.ts";
 import { ensureServer } from "../server-client.ts";
 import { localTarget } from "../target.ts";
 
-export async function openBrowser(url: string): Promise<boolean> {
+export async function openBrowser(url: string, env = process.env, timeoutMs = 5_000): Promise<boolean> {
+  if (process.platform === "linux" && !env.DISPLAY && !env.WAYLAND_DISPLAY) return false;
   const command = process.platform === "darwin" ? "open" : process.platform === "linux" ? "xdg-open" : null;
   if (!command) return false;
   return new Promise((resolve) => {
     try {
       const child = spawn(command, [url], { detached: true, stdio: "ignore" });
-      child.once("error", () => resolve(false));
-      child.once("spawn", () => {
+      let settled = false;
+      const finish = (opened: boolean) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
         child.unref();
-        resolve(true);
-      });
+        resolve(opened);
+      };
+      const timer = setTimeout(() => finish(true), timeoutMs);
+      child.once("error", () => finish(false));
+      child.once("exit", (code) => finish(code === 0));
     } catch {
       resolve(false);
     }

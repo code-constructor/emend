@@ -1,22 +1,92 @@
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { openBrowser } from "./open.ts";
 
 vi.mock("node:child_process", () => ({ spawn: vi.fn() }));
-test.each(["spawn", "error"])("browser opener settles on %s without waiting for exit", async (event) => {
-  const child = Object.assign(new EventEmitter(), { unref: vi.fn() }) as unknown as ReturnType<typeof spawn>;
-  vi.mocked(spawn).mockReturnValueOnce(child);
-  const url = `http://127.0.0.1:3636/pair#emp_${"a".repeat(43)}`;
-  const opened = openBrowser(url);
-  expect(spawn).toHaveBeenLastCalledWith(process.platform === "darwin" ? "open" : "xdg-open", [url], {
-    detached: true,
-    stdio: "ignore",
+const url = `http://127.0.0.1:3636/pair#emp_${"a".repeat(43)}`;
+let child: ReturnType<typeof spawn>;
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+  child = Object.assign(new EventEmitter(), { unref: vi.fn() }) as unknown as ReturnType<typeof spawn>;
+  vi.mocked(spawn).mockReset().mockReturnValue(child);
+});
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
+
+test.each([{}, { DISPLAY: "" }, { WAYLAND_DISPLAY: "" }, { DISPLAY: "", WAYLAND_DISPLAY: "" }])(
+  "Linux without a graphical session does not spawn an opener: %j",
+  async (env) => {
+    expect(await openBrowser(url, env)).toBe(false);
+    expect(spawn).not.toHaveBeenCalled();
+  },
+);
+
+test.each([{ DISPLAY: ":0" }, { WAYLAND_DISPLAY: "wayland-0" }])(
+  "Linux waits for a successful exit with a graphical session: %j",
+  async (env) => {
+    const settled = vi.fn();
+    const opened = openBrowser(url, env);
+    void opened.then(settled);
+    expect(spawn).toHaveBeenCalledWith("xdg-open", [url], { detached: true, stdio: "ignore" });
+    child.emit("spawn");
+    await Promise.resolve();
+    expect(settled).not.toHaveBeenCalled();
+    expect(child.unref).not.toHaveBeenCalled();
+    child.emit("exit", 0, null);
+    expect(await opened).toBe(true);
+    expect(child.unref).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  },
+);
+
+test.each([3, null])("browser opener exit code %s offers the link", async (code) => {
+  const opened = openBrowser(url, { DISPLAY: ":0" });
+  child.emit("exit", code, code === null ? "SIGTERM" : null);
+  expect(await opened).toBe(false);
+  expect(child.unref).toHaveBeenCalledOnce();
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+test("browser opener spawn error ENOENT offers the link", async () => {
+  const opened = openBrowser(url, { DISPLAY: ":0" });
+  child.emit("error", Object.assign(new Error("missing opener"), { code: "ENOENT" }));
+  expect(await opened).toBe(false);
+  expect(child.unref).toHaveBeenCalledOnce();
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+test("a synchronous spawn failure offers the link", async () => {
+  vi.mocked(spawn).mockImplementationOnce(() => {
+    throw new Error("opener failed");
   });
-  if (event === "error") child.emit("error", Object.assign(new Error("missing opener"), { code: "ENOENT" }));
-  else child.emit("spawn");
-  expect(await Promise.race([opened, new Promise((resolve) => setImmediate(() => resolve("pending")))])).toBe(
-    event === "spawn",
-  );
-  expect(child.unref).toHaveBeenCalledTimes(event === "spawn" ? 1 : 0);
+  expect(await openBrowser(url, { DISPLAY: ":0" })).toBe(false);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+test.each([undefined, 10])("a running opener succeeds and unrefs after timeout %s", async (timeoutMs) => {
+  const settled = vi.fn();
+  const opened = openBrowser(url, { DISPLAY: ":0" }, timeoutMs);
+  void opened.then(settled);
+  await vi.advanceTimersByTimeAsync((timeoutMs ?? 5_000) - 1);
+  expect(settled).not.toHaveBeenCalled();
+  expect(child.unref).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(await opened).toBe(true);
+  expect(child.unref).toHaveBeenCalledOnce();
+  child.emit("exit", 3, null);
+  expect(child.unref).toHaveBeenCalledOnce();
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+test("macOS skips the graphical session check", async () => {
+  vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+  const opened = openBrowser(url, {});
+  expect(spawn).toHaveBeenCalledWith("open", [url], { detached: true, stdio: "ignore" });
+  child.emit("exit", 0, null);
+  expect(await opened).toBe(true);
+  expect(child.unref).toHaveBeenCalledOnce();
 });
