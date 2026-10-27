@@ -1,0 +1,27 @@
+#!/bin/sh
+set -eu
+
+script="$0"
+hops=0
+while :; do
+  directory=$(CDPATH= cd -P -- "$(dirname -- "$script")" && pwd)
+  script="$directory/$(basename -- "$script")"
+  [ -L "$script" ] || break
+  if [ "$hops" -ge 40 ]; then
+    printf 'emend: too many levels of symlinks\n' >&2
+    exit 1
+  fi
+  hops=$((hops + 1))
+  link=$(readlink "$script")
+  case "$link" in
+    /*) script="$link" ;;
+    *) script="$directory/$link" ;;
+  esac
+done
+
+if [ ! -f "$directory/../dist/emend.mjs" ]; then
+  printf 'emend: not built; run install.sh in the emend checkout\n' >&2
+  exit 1
+fi
+
+exec node "$directory/../dist/emend.mjs" "$@"

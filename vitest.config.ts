@@ -3,6 +3,7 @@ import { defineConfig } from "vitest/config";
 
 const globalSetup = fileURLToPath(new URL("./test/global-setup.ts", import.meta.url));
 const isolationTest = fileURLToPath(new URL("./test/state-isolation.test.ts", import.meta.url));
+const installTest = fileURLToPath(new URL("./test/install.test.ts", import.meta.url));
 
 export default defineConfig({
   test: {
@@ -13,7 +14,7 @@ export default defineConfig({
           root,
           environment: "node",
           globalSetup,
-          include: ["src/**/*.test.ts", isolationTest],
+          include: ["src/**/*.test.ts", isolationTest, ...(root === "apps/emend" ? [installTest] : [])],
         },
       })),
       {
