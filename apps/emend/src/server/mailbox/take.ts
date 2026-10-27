@@ -5,6 +5,7 @@ import {
   LEASE_SECONDS,
   LIMITS,
   MODE_LABELS,
+  type UnplacedReason,
   type WaitResult,
 } from "@emend/contract";
 import { and, eq, gte, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
@@ -12,14 +13,7 @@ import type { Db, Queries } from "../../db/client.ts";
 import { commentOrder, newestRevision, requireReview } from "../../db/repo/threads.ts";
 import { comments, deliveries, placements, reviews, revisions, sends, threads } from "../../db/schema.ts";
 import type { Principal } from "../auth/principal.ts";
-import {
-  envelopeBytes,
-  historySizes,
-  loadHistory,
-  pendingCommentSizes,
-  placementOrMissing,
-  sendSizes,
-} from "./payload.ts";
+import { envelopeBytes, loadHistory, pendingCommentSizes, placementOrMissing, sendSizes } from "./payload.ts";
 
 async function reopen(ownerId: string, q: Queries, reviewId: string, now: number, approvedRevisions: string[]) {
   if (!approvedRevisions.length) return;
@@ -114,17 +108,16 @@ export async function takeDelivery(
           unclaimed,
           sql`${sends.id} in (
       with pending_comments as materialized (${pendingCommentSizes(ownerId, reviewId, newest.id)}),
-        history_entries as materialized (${historySizes(ownerId, reviewId, sql`select insertion_order, thread_id from pending_comments`)}),
         send_sizes as materialized (${sendSizes()})
       select id from (
-        select s.id, row_number() over (order by s.rowid) as position,
+        select s.id, row_number() over (order by +s.rowid) as position,
           sum(coalesce(ss.comment_count, 0))
-            over (order by s.rowid rows unbounded preceding) as comment_count,
+            over (order by +s.rowid rows unbounded preceding) as comment_count,
           sum(case when s.instruction is null then 0 else 1 end)
-            over (order by s.rowid rows unbounded preceding) as instruction_count,
+            over (order by +s.rowid rows unbounded preceding) as instruction_count,
           sum(coalesce(ss.bytes, 0) + case when s.instruction is null then 0
             else length(cast(json_quote(s.instruction) as blob)) + 1 end)
-            over (order by s.rowid rows unbounded preceding) as payload_bytes
+            over (order by +s.rowid rows unbounded preceding) as payload_bytes
         from sends s left join send_sizes ss on ss.send_id = s.id
         where s.owner_id = ${ownerId} and s.review_id = ${reviewId}
           and s.delivery_id is null and s.set_aside_at is null
@@ -142,7 +135,7 @@ export async function takeDelivery(
         and(eq(revisions.ownerId, ownerId), eq(revisions.id, sends.revisionId), eq(revisions.reviewId, reviewId)),
       )
       .where(and(eq(sends.ownerId, ownerId), eq(sends.reviewId, reviewId), eq(sends.deliveryId, deliveryId)))
-      .orderBy(sql`sends.rowid`);
+      .orderBy(sql`+sends.rowid`);
     if (!claimed.length) {
       await q.delete(deliveries).where(and(eq(deliveries.ownerId, ownerId), eq(deliveries.id, deliveryId)));
       return null;
@@ -171,52 +164,36 @@ export async function takeDelivery(
         claimed.filter((s) => s.send.kind === "approve").map((s) => s.send.revisionId),
       );
     }
-    const sentComments = await q
-      .select({ comment: comments, order: commentOrder, target: threads.target, placement: placements })
-      .from(sends)
-      // Keep selected Sends first so each comment lookup probes all three index keys.
-      .crossJoin(comments)
-      .innerJoin(
-        threads,
-        and(eq(threads.ownerId, ownerId), eq(threads.id, comments.threadId), eq(threads.reviewId, reviewId)),
-      )
-      .leftJoin(
-        placements,
-        and(
-          eq(placements.ownerId, ownerId),
-          eq(placements.threadId, comments.threadId),
-          eq(placements.reviewId, reviewId),
-          eq(placements.revisionId, newest.id),
-        ),
-      )
-      .where(
-        and(
-          eq(sends.ownerId, ownerId),
-          eq(sends.reviewId, reviewId),
-          eq(sends.id, comments.sendId),
-          eq(comments.ownerId, ownerId),
-          eq(comments.reviewId, reviewId),
-          eq(comments.author, "user"),
-          eq(sends.deliveryId, deliveryId),
-        ),
-      )
-      // Sort only the rows matched by the Send index probes.
-      .orderBy(sql`+${commentOrder}`);
-    const commentOrders = new Map(sentComments.map((row) => [row.comment.id, row.order]));
+    // Positional rows avoid decoding and mapping unused table columns for large Sends.
+    const sentComments = await q.values<
+      [string, string, string, number, string, "placed" | "unplaced" | null, string | null, UnplacedReason | null]
+    >(sql`select ${comments.id}, ${comments.threadId}, ${comments.body}, ${commentOrder},
+        ${threads.target}, ${placements.status}, ${placements.location}, ${placements.reason}
+      from ${sends} cross join ${comments} indexed by comments_owner_review_send_idx
+      join ${threads} on ${threads.ownerId} = ${ownerId} and ${threads.reviewId} = ${reviewId}
+        and ${threads.id} = ${comments.threadId}
+      left join ${placements} on ${placements.ownerId} = ${ownerId} and ${placements.reviewId} = ${reviewId}
+        and ${placements.threadId} = ${comments.threadId} and ${placements.revisionId} = ${newest.id}
+      where ${sends.ownerId} = ${ownerId} and ${sends.reviewId} = ${reviewId}
+        and ${sends.id} = ${comments.sendId} and ${sends.deliveryId} = ${deliveryId}
+        and ${comments.ownerId} = ${ownerId} and ${comments.reviewId} = ${reviewId} and ${comments.author} = 'user'
+      order by +${commentOrder}`);
+    const commentOrders = new Map<string, number>();
     const output: HandoffComment[] = [];
+    const contexts = new Map<string, Pick<HandoffComment, "target" | "placement">>();
     let missingPlacement = false;
-    for (const row of sentComments) {
-      const c = row.comment;
-      const placement = placementOrMissing(row.placement);
-      if (placement.status === "unplaced" && placement.reason === "not-placed") missingPlacement = true;
-      output.push({
-        id: c.id,
-        threadId: c.threadId,
-        target: row.target,
-        body: c.body,
-        placement,
-        history: [],
-      });
+    for (const [id, threadId, body, order, target, status, location, reason] of sentComments) {
+      let context = contexts.get(threadId);
+      if (!context) {
+        const placement = placementOrMissing(
+          status === null ? null : { status, location: location === null ? null : JSON.parse(location), reason },
+        );
+        if (placement.status === "unplaced" && placement.reason === "not-placed") missingPlacement = true;
+        context = { target: JSON.parse(target), placement };
+        contexts.set(threadId, context);
+      }
+      commentOrders.set(id, order);
+      output.push({ id, threadId, target: context.target, body, placement: context.placement, history: [] });
     }
     const mode = latest.send.mode ?? DEFAULT_MODE;
     if (missingPlacement) console.error("emend: missing placement during handoff");

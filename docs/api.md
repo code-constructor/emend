@@ -368,9 +368,11 @@ was left out, by the per-comment cap or the byte budget"; it is absent when all 
 Sends and delivered comments also use insertion order. The serialized UTF-8 `WaitResult`
 must fit `handoffBytes` (16777216 bytes).
 The guarded claim selects whole Sends in FIFO order under the count and byte caps, leaving the
-rest queued. Byte accounting measures JSON components without building an oversized string.
-The first Send is always claimed; if its history exceeds the budget, entries are removed in
-global insertion order, oldest first, from every comment carrying them. Each entry costs its
+rest queued. It budgets comment bodies, placement metadata, instructions and space for truncation
+flags before reading history, then loads history only for the selected comments. Byte accounting
+measures JSON components without building an oversized string.
+The first Send is always claimed; if the selected comments' history exceeds the budget, entries
+are removed in global insertion order, oldest first, from every comment carrying them. Each entry costs its
 serialized bytes times the number of comments carrying it. Sizes determine the retained suffix
 before history bodies are loaded, and every affected comment carries `historyTrimmed: true`.
 Comment bodies and instructions are never truncated.

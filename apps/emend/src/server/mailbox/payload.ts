@@ -8,7 +8,7 @@ import {
   type UnplacedReason,
   type WaitResult,
 } from "@emend/contract";
-import { type SQL, sql } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import type { Queries } from "../../db/client.ts";
 import { ApiError } from "../http/errors.ts";
 
@@ -84,35 +84,7 @@ export function commentReserve(target: Target, body: string) {
 
 const trimmedFieldBytes = Buffer.byteLength(',"historyTrimmed":true');
 
-// One backward range per delivered comment, with one extra eligible row to detect
-// the cap. The sentinel has no body/size. Drafts and selected Sends are excluded.
-export function historySizes(ownerId: string, reviewId: string, selectedComments: SQL) {
-  return sql`with selected_comments(insertion_order, thread_id) as materialized (${selectedComments}),
-  bounded_windows as materialized (
-    select c.insertion_order as comment_order, h.rowid as insertion_order,
-      row_number() over (partition by c.insertion_order order by h.rowid desc) as position
-    from selected_comments c cross join comments h not indexed
-      on h.owner_id = ${ownerId} and h.review_id = ${reviewId} and h.rowid in (
-        select candidate.rowid from comments candidate indexed by comments_owner_review_thread_idx
-        where candidate.owner_id = ${ownerId} and candidate.review_id = ${reviewId}
-          and candidate.thread_id = c.thread_id and candidate.rowid < c.insertion_order
-          and candidate.rowid not in (select insertion_order from selected_comments)
-          and (candidate.author = 'agent' or candidate.send_id is not null)
-        order by candidate.rowid desc limit ${LIMITS.historyPerComment + 1}
-      )
-  ), entry_sizes as materialized (
-    select h.rowid as insertion_order, length(cast(case when h.outcome is null
-      then json_object('author', h.author, 'body', h.body)
-      else json_object('author', h.author, 'body', h.body, 'outcome', h.outcome) end as blob)) as bytes
-    from (select distinct insertion_order from bounded_windows where position <= ${LIMITS.historyPerComment}) w
-    cross join comments h not indexed on h.owner_id = ${ownerId} and h.review_id = ${reviewId}
-      and h.rowid = w.insertion_order
-  ) select w.comment_order, w.insertion_order,
-      case when w.position <= ${LIMITS.historyPerComment} then e.bytes else null end as bytes
-    from bounded_windows w left join entry_sizes e on e.insertion_order = w.insertion_order`;
-}
-
-// Shared by the claim's count/byte aggregates and its per-comment history windows.
+// Size only the required payload; history is loaded after the whole-Send claim.
 // CROSS JOIN keeps selected Sends ahead of the indexed comment membership lookup.
 export function pendingCommentSizes(ownerId: string, reviewId: string, revisionId: string) {
   return sql`select c.rowid as insertion_order, c.thread_id, c.send_id, length(cast(json_object(
@@ -120,7 +92,7 @@ export function pendingCommentSizes(ownerId: string, reviewId: string, revisionI
     'placement', json(case when p.status = 'placed' and p.location is not null
       then json_object('status', 'placed', 'location', json(p.location))
       else json_object('status', 'unplaced', 'reason', coalesce(p.reason, 'not-placed')) end),
-    'history', json('[]')) as blob)) + 1 as bytes
+    'history', json('[]')) as blob)) + 1 + ${trimmedFieldBytes} as bytes
     from sends s
     cross join comments c indexed by comments_owner_review_send_idx
       on c.owner_id = ${ownerId} and c.review_id = ${reviewId} and c.send_id = s.id
@@ -132,12 +104,8 @@ export function pendingCommentSizes(ownerId: string, reviewId: string, revisionI
 }
 
 export function sendSizes() {
-  return sql`with comment_sizes as (
-    select c.send_id, c.insertion_order, c.bytes + coalesce(sum(h.bytes + 1), 0)
-      + max(case when h.comment_order is not null and h.bytes is null then ${trimmedFieldBytes} else 0 end) as bytes
-    from pending_comments c left join history_entries h on h.comment_order = c.insertion_order
-    group by c.insertion_order
-  ) select send_id, count(*) as comment_count, sum(bytes) as bytes from comment_sizes group by send_id`;
+  return sql`select send_id, count(*) as comment_count, sum(bytes) as bytes
+    from pending_comments group by send_id`;
 }
 
 export function placementOrMissing(
@@ -156,26 +124,62 @@ export async function loadHistory(
   commentOrders: Map<string, number>,
 ): Promise<Go> {
   if (!result.comments.length) return result;
-  const selectedComments = sql`values ${sql.join(
-    result.comments.map((c) => sql`(${commentOrders.get(c.id)}, ${c.threadId})`),
-    sql`, `,
-  )}`;
-  // Only each comment's bounded rowid window and byte counts cross into JS.
-  const sizes = await q.values<[number, number, number | null]>(historySizes(ownerId, reviewId, selectedComments));
-  const carriers = new Map(result.comments.map((comment) => [commentOrders.get(comment.id), { comment, count: 0 }]));
   type Carrier = { comment: HandoffComment; count: number };
+  const carriers = new Map<number, Carrier>();
+  const byThread = new Map<string, number[]>();
+  for (const comment of result.comments) {
+    const order = commentOrders.get(comment.id);
+    if (order === undefined) throw new Error("Missing delivered comment within transaction");
+    carriers.set(order, { comment, count: 0 });
+    const orders = byThread.get(comment.threadId) ?? [];
+    orders.push(order);
+    byThread.set(comment.threadId, orders);
+  }
   const entries = new Map<number, { order: number; bytes: number; carriers: Carrier[] }>();
-  for (const [commentOrder, order, bytes] of sizes) {
-    const carrier = carriers.get(commentOrder);
-    if (!carrier) throw new Error("Missing delivered comment within transaction");
-    if (bytes === null) {
-      carrier.comment.historyTrimmed = true;
-      continue;
+  for (const [threadId, orders] of byThread) {
+    // Delivered comments arrive in insertion order. One descending cursor per thread
+    // reuses overlapping windows and passes each same-handoff comment at most once.
+    let cursor = Number.MAX_SAFE_INTEGER;
+    let nextSelected = 0;
+    let exhausted = false;
+    let window: [number, number][] = [];
+    for (const order of orders.reverse()) {
+      const carrier = carriers.get(order);
+      if (!carrier) throw new Error("Missing delivered comment within transaction");
+      window = window.filter(([rowid]) => rowid < order);
+      while (window.length <= LIMITS.historyPerComment && !exhausted) {
+        cursor = Math.min(cursor, order);
+        // Contiguous delivered rows cannot contain eligible history. Skip them
+        // from the known rowids without fetching or sizing them again in SQLite.
+        while (nextSelected < orders.length) {
+          const selected = orders[nextSelected];
+          if (selected === undefined || selected < cursor - 1) break;
+          if (selected === cursor - 1) cursor--;
+          nextSelected++;
+        }
+        const limit = LIMITS.historyPerComment + 1 - window.length;
+        const rows = await q.values<[number, number]>(sql`
+          select rowid, length(cast(case when outcome is null
+            then json_object('author', author, 'body', body)
+            else json_object('author', author, 'body', body, 'outcome', outcome) end as blob))
+          from comments indexed by comments_owner_review_thread_idx
+          where owner_id = ${ownerId} and review_id = ${reviewId} and thread_id = ${threadId}
+            and rowid < ${cursor} and (author = 'agent' or send_id is not null)
+          order by rowid desc limit ${limit}
+        `);
+        exhausted = rows.length < limit;
+        cursor = rows.at(-1)?.[0] ?? cursor;
+        for (const row of rows) if (!carriers.has(row[0])) window.push(row);
+      }
+      if (window.length > LIMITS.historyPerComment) carrier.comment.historyTrimmed = true;
+      // The extra row is only a sentinel. Shared entry sizes and bodies are retained once.
+      for (const [rowid, bytes] of window.slice(0, LIMITS.historyPerComment)) {
+        const entry = entries.get(rowid) ?? { order: rowid, bytes, carriers: [] };
+        entry.carriers.push(carrier);
+        entries.set(rowid, entry);
+        carrier.count++;
+      }
     }
-    const entry = entries.get(order) ?? { order, bytes, carriers: [] };
-    entry.carriers.push(carrier);
-    entries.set(order, entry);
-    carrier.count++;
   }
   const ordered = [...entries.values()].sort((a, b) => a.order - b.order);
   let bytes =
