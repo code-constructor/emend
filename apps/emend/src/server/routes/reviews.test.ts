@@ -1,0 +1,406 @@
+import { randomUUID } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import * as contract from "@emend/contract";
+import { and, eq } from "drizzle-orm";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { changedBlocks, files, placements, repos, reviews, revisions, sends, writeups } from "../../db/schema.ts";
+import { APP_CSP } from "../http/headers.ts";
+import { error, mailboxFixture } from "../mailbox/test-support.ts";
+
+let f: Awaited<ReturnType<typeof mailboxFixture>>;
+beforeEach(async () => {
+  f = await mailboxFixture();
+  await seedWriteup(f.revisionId);
+});
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await f.cleanup();
+});
+async function seedWriteup(revisionId: string) {
+  const blob = await f.deps.blobs.put(f.ownerId, Buffer.from(JSON.stringify({ sections: [] })), "application/json");
+  await f.db.query((q) =>
+    q.insert(writeups).values({ ownerId: f.ownerId, revisionId, sourceBlob: blob, renderedBlob: blob }),
+  );
+}
+const get = (suffix = "", who: "reviewer" | "foreign" | "agent" = "reviewer") =>
+  f.request(`/reviews${suffix}`, "GET", undefined, who);
+
+test("all three GETs parse their schemas and enforce reviewer scope and owner isolation", async () => {
+  for (const [path, schema] of [
+    ["", contract.InboxList],
+    [`/${f.reviewId}`, contract.ReviewView],
+    [`/${f.reviewId}/revisions/1`, contract.RevisionView],
+  ] as const) {
+    const response = await get(path);
+    expect(response.status).toBe(200);
+    expect(schema.safeParse(await response.json()).success).toBe(true);
+    await error(await get(path, "agent"), 403, "forbidden");
+    if (path) await error(await get(path, "foreign"), 404, "unknown_review");
+    else expect(await (await get(path, "foreign")).json()).toEqual({ items: [] });
+  }
+  await error(await get(`/${randomUUID()}`), 404, "unknown_review");
+  await error(await get(`/${randomUUID()}/revisions/1`), 404, "unknown_review");
+  for (const seq of ["2", "0", "bad", "1.5"])
+    await error(await get(`/${f.reviewId}/revisions/${seq}`), 404, "not_found");
+});
+test("inbox sorts newest first and caps the result at 200", async () => {
+  let selects = 0;
+  const read = f.db.read.bind(f.db);
+  vi.spyOn(f.db, "read").mockImplementation((fn) =>
+    read((q) =>
+      fn(
+        new Proxy(q, {
+          get(target, property, receiver) {
+            if (property === "select")
+              return (...args: Parameters<typeof q.select>) => {
+                selects++;
+                return q.select(...args);
+              };
+            return Reflect.get(target, property, receiver);
+          },
+        }),
+      ),
+    ),
+  );
+  expect((await get()).status).toBe(200);
+  const singleReviewSelects = selects;
+  await f.db.query(async (q) => {
+    await q
+      .update(reviews)
+      .set({ updatedAt: 1 })
+      .where(and(eq(reviews.ownerId, f.ownerId), eq(reviews.id, f.reviewId)));
+    for (let i = 0; i < 202; i++) {
+      const reviewId = randomUUID();
+      await q.insert(reviews).values({
+        id: reviewId,
+        ownerId: f.ownerId,
+        originInstanceId: f.instanceId,
+        reviewKey: `synthetic-${i}`,
+        title: `Review ${i}`,
+        updatedAt: 1000 + i,
+      });
+      await q.insert(revisions).values({ ownerId: f.ownerId, reviewId, seq: 1, contentKey: randomUUID() });
+    }
+  });
+  selects = 0;
+  const response = await get();
+  expect(response.status).toBe(200);
+  expect(selects).toBe(singleReviewSelects);
+  const list = contract.InboxList.parse(await response.json());
+  expect(list.items).toHaveLength(contract.LIMITS.inboxItems);
+  expect(list.items[0]?.title).toBe("Review 201");
+  expect(list.items.at(-1)?.title).toBe("Review 2");
+});
+test("inbox counts drafts, unresolved threads, pending delivery and waiting state separately", async () => {
+  const thread = await f.thread();
+  await f.send();
+  await f.comment(thread.threadId, "Another draft");
+  expect(
+    (
+      await f.request(
+        `/comments/${thread.commentId}/reply`,
+        "POST",
+        { outcome: "explained", body: "An answer" },
+        "agent",
+      )
+    ).status,
+  ).toBe(201);
+  let response = await get(`/${f.reviewId}`);
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({
+    unsentCount: 1,
+    openThreads: 1,
+    pendingSend: true,
+    agentWaiting: false,
+  });
+  const delivery = await f.take();
+  expect(delivery.kind).toBe("go");
+  if (delivery.kind !== "go") throw new Error("Expected a Go delivery to confirm");
+  expect(await (await get(`/${f.reviewId}`)).json()).toMatchObject({ pendingSend: true });
+  expect((await f.request(`/deliveries/${delivery.deliveryId}/confirm`, "POST", undefined, "agent")).status).toBe(204);
+  await f.request(`/threads/${thread.threadId}/resolve`);
+  const stop = f.deps.events?.beginWaiting(f.ownerId, f.reviewId, 1);
+  response = await get(`/${f.reviewId}`);
+  expect(await response.json()).toMatchObject({
+    unsentCount: 1,
+    openThreads: 0,
+    pendingSend: false,
+    agentWaiting: true,
+  });
+  stop?.();
+});
+test("revision includes insertion-ordered comments, placements, docs and changes after the last Send", async () => {
+  const thread = await f.thread("First");
+  await f.send();
+  f.advance(-1000);
+  const draft = await f.comment(thread.threadId, "Second");
+  await f.request(`/comments/${thread.commentId}/reply`, "POST", { outcome: "fixed", body: "Third" }, "agent");
+  const revision2 = await f.revision(2);
+  await seedWriteup(revision2);
+  const doc = await f.deps.blobs.put(f.ownerId, Buffer.from("[]"), "application/json");
+  const repoId = randomUUID();
+  await f.db.query(async (q) => {
+    await q.insert(repos).values({ id: repoId, ownerId: f.ownerId, key: "c".repeat(64), name: "widget" });
+    await q
+      .update(reviews)
+      .set({ repoId })
+      .where(and(eq(reviews.ownerId, f.ownerId), eq(reviews.id, f.reviewId)));
+    await q.insert(changedBlocks).values([
+      { ownerId: f.ownerId, revisionId: f.revisionId, blockId: "overview-11111111" },
+      { ownerId: f.ownerId, revisionId: revision2, blockId: "overview-22222222" },
+    ]);
+    await q.insert(files).values([
+      {
+        ownerId: f.ownerId,
+        revisionId: revision2,
+        path: "plan.md",
+        role: "doc",
+        ord: 0,
+        mediaType: "text/markdown",
+        renderedBlob: doc,
+      },
+      {
+        ownerId: f.ownerId,
+        revisionId: revision2,
+        path: "docs/a #é.html",
+        role: "doc",
+        ord: 1,
+        mediaType: "text/html",
+      },
+      { ownerId: f.ownerId, revisionId: revision2, path: "image.png", role: "asset", ord: 2, mediaType: "image/png" },
+    ]);
+  });
+  const response = await get(`/${f.reviewId}/revisions/2`);
+  expect(response.status).toBe(200);
+  const view = contract.RevisionView.parse(await response.json());
+  expect(view.changedBlocks).toEqual([{ blockId: "overview-22222222", revision: 2 }]);
+  expect(view.files.map((file) => file.path)).toEqual(["plan.md", "docs/a #é.html"]);
+  expect(view.docs[0]).toEqual({ path: "plan.md", kind: "markdown", blocks: [] });
+  const html = view.docs[1];
+  expect(html?.kind).toBe("html");
+  if (html?.kind === "html") expect(html.contentUrl).toMatch(/^\/content\/[^/]+\/docs\/a%20%23%C3%A9\.html$/);
+  expect(view.threads[0]).toMatchObject({ createdOn: 1, placement: { status: "unplaced", reason: "not-placed" } });
+  expect(view.threads[0]?.comments.map((comment) => [comment.body, comment.sent, comment.sentOn])).toEqual([
+    ["First", true, 1],
+    ["Second", false, null],
+    ["Third", false, null],
+  ]);
+  expect(view.threads[0]?.comments[2]).toMatchObject({ author: "agent", outcome: "fixed" });
+  const old = contract.RevisionView.parse(await (await get(`/${f.reviewId}/revisions/1`)).json());
+  expect(old.threads[0]?.placement).toEqual({ status: "placed", location: { kind: "review" } });
+  expect(old.changedBlocks).toEqual([]);
+  expect(old.threads[0]?.comments[1]?.id).toBe(draft.commentId);
+  const review = contract.ReviewView.parse(await (await get(`/${f.reviewId}`)).json());
+  expect(review.repo).toBe("c".repeat(64));
+  expect(review.revisions.map((r) => r.seq)).toEqual([1, 2]);
+  await f.db.query((q) =>
+    q
+      .update(sends)
+      .set({ setAsideAt: f.deps.now() })
+      .where(and(eq(sends.ownerId, f.ownerId), eq(sends.reviewId, f.reviewId))),
+  );
+  expect(await (await get(`/${f.reviewId}`)).json()).toMatchObject({ pendingSend: false });
+});
+
+test("changed blocks use the newest change after the last Send through the requested revision", async () => {
+  await f.db.query((q) =>
+    q.insert(changedBlocks).values({ ownerId: f.ownerId, revisionId: f.revisionId, blockId: "overview-11111111" }),
+  );
+  const beforeSend = contract.RevisionView.parse(await (await get(`/${f.reviewId}/revisions/1`)).json());
+  expect(beforeSend.changedBlocks).toEqual([{ blockId: "overview-11111111", revision: 1 }]);
+  await f.thread();
+  await f.send();
+  f.advance(-1000);
+  const revision2 = await f.revision(2);
+  const revision3 = await f.revision(3);
+  const revision4 = await f.revision(4);
+  await seedWriteup(revision2);
+  await seedWriteup(revision3);
+  await f.db.query(async (q) => {
+    await q.insert(changedBlocks).values([
+      { ownerId: f.ownerId, revisionId: revision3, blockId: "overview-33333333" },
+      { ownerId: f.ownerId, revisionId: revision2, blockId: "overview-22222222" },
+      { ownerId: f.ownerId, revisionId: revision3, blockId: "overview-22222222" },
+      { ownerId: f.ownerId, revisionId: revision2, blockId: "overview-44444444" },
+      { ownerId: f.ownerId, revisionId: revision4, blockId: "overview-22222222" },
+      { ownerId: f.ownerId, revisionId: revision4, blockId: "overview-55555555" },
+    ]);
+    for (const ownerId of [f.ownerId, f.otherOwnerId]) {
+      const reviewId = randomUUID();
+      const revisionId = randomUUID();
+      await q.insert(reviews).values({
+        id: reviewId,
+        ownerId,
+        originInstanceId: f.instanceId,
+        reviewKey: randomUUID(),
+        title: "Unrelated synthetic review",
+      });
+      await q.insert(revisions).values({ id: revisionId, ownerId, reviewId, seq: 3, contentKey: randomUUID() });
+      await q.insert(changedBlocks).values([
+        { ownerId, revisionId, blockId: "overview-22222222" },
+        { ownerId, revisionId, blockId: "overview-66666666" },
+      ]);
+      await q.insert(sends).values({ ownerId, reviewId, revisionId, kind: "approve" });
+    }
+  });
+  for (const [seq, expected] of [
+    [1, []],
+    [
+      2,
+      [
+        { blockId: "overview-22222222", revision: 2 },
+        { blockId: "overview-44444444", revision: 2 },
+      ],
+    ],
+    [
+      3,
+      [
+        { blockId: "overview-22222222", revision: 3 },
+        { blockId: "overview-33333333", revision: 3 },
+        { blockId: "overview-44444444", revision: 2 },
+      ],
+    ],
+  ] as const) {
+    const response = await get(`/${f.reviewId}/revisions/${seq}`);
+    expect(response.status).toBe(200);
+    expect(contract.RevisionView.parse(await response.json()).changedBlocks).toEqual(expected);
+  }
+});
+
+test("sentOn follows each comment's Send revision despite clock changes and older revision reads", async () => {
+  const thread = await f.thread("First");
+  const revision2 = await f.revision(2);
+  await seedWriteup(revision2);
+  await f.send({ revision: 2, kind: "go" });
+  f.advance(-1000);
+  await f.comment(thread.threadId, "Second");
+  const revision3 = await f.revision(3);
+  await seedWriteup(revision3);
+  await f.send({ revision: 3, kind: "go" });
+  f.advance(-1000);
+  await f.comment(thread.threadId, "Third");
+  expect(
+    (await f.request(`/comments/${thread.commentId}/reply`, "POST", { outcome: "fixed", body: "Fourth" }, "agent"))
+      .status,
+  ).toBe(201);
+  await f.db.query((q) =>
+    q.insert(changedBlocks).values([
+      { ownerId: f.ownerId, revisionId: revision2, blockId: "overview-11111111" },
+      { ownerId: f.ownerId, revisionId: revision3, blockId: "overview-22222222" },
+    ]),
+  );
+  for (const seq of [2, 3]) {
+    const response = await get(`/${f.reviewId}/revisions/${seq}`);
+    expect(response.status).toBe(200);
+    const view = contract.RevisionView.parse(await response.json());
+    expect(view.changedBlocks).toEqual([]);
+    expect(view.threads[0]?.createdOn).toBe(1);
+    expect(view.threads[0]?.comments.map(({ body, author, sent, sentOn }) => ({ body, author, sent, sentOn }))).toEqual(
+      [
+        { body: "First", author: "user", sent: true, sentOn: 2 },
+        { body: "Second", author: "user", sent: true, sentOn: 3 },
+        { body: "Third", author: "user", sent: false, sentOn: null },
+        { body: "Fourth", author: "agent", sent: false, sentOn: null },
+      ],
+    );
+  }
+});
+test("SPA fallback keeps app headers and no-cache; assets alone are immutable", async () => {
+  await mkdir(join(f.dir, "assets"));
+  await writeFile(join(f.dir, "index.html"), "<!doctype html><title>emend</title>");
+  await writeFile(join(f.dir, "assets", "app-hash.js"), "export {};");
+  const page = (path: string) => f.app.request(`http://127.0.0.1:3636${path}`, { headers: { Host: "127.0.0.1:3636" } });
+  for (const path of ["/r/x", "/pair", "/devices", "/index.html", "/"]) {
+    const response = await page(path);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("<title>emend</title>");
+    expect(response.headers.get("Content-Security-Policy")).toBe(APP_CSP);
+    expect(response.headers.get("X-Frame-Options")).toBe("DENY");
+    expect(response.headers.get("Cache-Control")).toBe("no-cache");
+  }
+  expect((await page("/assets/app-hash.js")).headers.get("Cache-Control")).toBe("public, max-age=31536000, immutable");
+  expect((await page("/assets/missing")).status).toBe(404);
+});
+
+test.each(["/api", "/api/", "/api/v2/reviews", "/content", "/api%2Fv1%2Freviews", "/content%2FKEY%2Fdocs"])(
+  "SPA never serves index.html for decoded reserved path %s",
+  async (path) => {
+    await writeFile(join(f.dir, "index.html"), "<!doctype html><title>emend</title>");
+    const response = await f.app.request(`http://127.0.0.1:3636${path}`, { headers: { Host: "127.0.0.1:3636" } });
+    await error(response, 404, "not_found");
+  },
+);
+
+test("revision reads preserve renamed sides and the placement stored for each revision", async () => {
+  const oldBlob = await f.deps.blobs.put(f.ownerId, Buffer.from("const before = 1;"), "text/plain");
+  const newBlob = await f.deps.blobs.put(f.ownerId, Buffer.from("const after = 2;"), "text/plain");
+  await f.db.query((q) =>
+    q.insert(files).values({
+      ownerId: f.ownerId,
+      revisionId: f.revisionId,
+      path: "a.ts",
+      role: "diff",
+      status: "added",
+      ord: 0,
+      mediaType: "text/plain",
+      newBlob: oldBlob,
+    }),
+  );
+  const thread = await f.thread("Explain the rename.", { kind: "file", path: "a.ts" });
+  const revision2 = await f.revision(2);
+  const revision3 = await f.revision(3);
+  await seedWriteup(revision2);
+  await seedWriteup(revision3);
+  await f.db.query(async (q) => {
+    await q.insert(files).values({
+      ownerId: f.ownerId,
+      revisionId: revision2,
+      path: "b.ts",
+      oldPath: "a.ts",
+      role: "diff",
+      status: "renamed",
+      ord: 0,
+      mediaType: "text/plain",
+      oldBlob,
+      newBlob,
+    });
+    await q.insert(placements).values([
+      {
+        ownerId: f.ownerId,
+        reviewId: f.reviewId,
+        revisionId: revision2,
+        threadId: thread.threadId,
+        status: "placed",
+        location: { kind: "file", path: "b.ts" },
+      },
+      {
+        ownerId: f.ownerId,
+        reviewId: f.reviewId,
+        revisionId: revision3,
+        threadId: thread.threadId,
+        status: "unplaced",
+        reason: "file-gone",
+      },
+    ]);
+  });
+  const views = [];
+  for (const seq of [1, 2, 3]) {
+    const response = await get(`/${f.reviewId}/revisions/${seq}`);
+    expect(response.status).toBe(200);
+    views.push(contract.RevisionView.parse(await response.json()));
+  }
+  expect(views[0]?.files[0]).toMatchObject({ path: "a.ts", oldPath: null, hasOld: false, hasNew: true });
+  expect(views[1]?.files[0]).toMatchObject({
+    path: "b.ts",
+    oldPath: "a.ts",
+    status: "renamed",
+    hasOld: true,
+    hasNew: true,
+  });
+  expect(views.map((view) => view.threads[0]?.placement)).toEqual([
+    { status: "placed", location: { kind: "file", path: "a.ts" } },
+    { status: "placed", location: { kind: "file", path: "b.ts" } },
+    { status: "unplaced", reason: "file-gone" },
+  ]);
+});

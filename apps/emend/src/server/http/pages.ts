@@ -44,6 +44,10 @@ export async function appPage(c: Context, webRoot: string) {
     throw new ApiError("not_found");
   }
   if (
+    path === "/api" ||
+    path.startsWith("/api/") ||
+    path === "/content" ||
+    path.startsWith("/content/") ||
     path.includes("\\") ||
     Array.from(path).some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127) ||
     path.split("/").includes("..")
@@ -58,8 +62,9 @@ export async function appPage(c: Context, webRoot: string) {
   const index = await regularFile(root, resolve(root, "index.html"));
   if (!index) throw new ApiError("not_found");
   let file = path === "/" ? index : await regularFile(root, resolve(root, `.${path}`));
-  if (!file && !extname(path.split("/").at(-1) ?? "")) file = index;
+  if (!file && !path.startsWith("/assets/") && !extname(path.split("/").at(-1) ?? "")) file = index;
   if (!file) throw new ApiError("not_found");
+  c.header("Cache-Control", path.startsWith("/assets/") ? "public, max-age=31536000, immutable" : "no-cache");
   c.header("Content-Type", file.type);
   return c.body(file.bytes);
 }

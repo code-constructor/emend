@@ -1,4 +1,5 @@
 export const LIMITS = {
+  inboxItems: 200,
   publicJsonBytes: 4096,
   commentBodyChars: 20000,
   instructionChars: 4000,

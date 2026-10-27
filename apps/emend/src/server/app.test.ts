@@ -137,6 +137,7 @@ test("every documented API endpoint enforces its scope even before its handler e
       if (!(SCOPES_BY_KIND[kind] as readonly string[]).includes(endpoint.scope))
         await error(response, "forbidden", endpoint.method === "HEAD");
       else if (path === "/api/v1/pairings") expect(response.status).toBe(201);
+      else if (path === "/api/v1/reviews") expect(response.status).toBe(200);
       else if (
         path === "/api/v1/publish" ||
         path.startsWith("/api/v1/blobs/") ||
@@ -144,7 +145,8 @@ test("every documented API endpoint enforces its scope even before its handler e
         (endpoint.method === "PATCH" && path.startsWith("/api/v1/comments/"))
       )
         await error(response, "invalid_request", endpoint.method === "HEAD");
-      else if (/\/reviews\/missing\/(events|take)$/.test(path)) await error(response, "unknown_review");
+      else if (/\/reviews\/missing(?:$|\/(?:events|take|revisions\/missing)$)/.test(path))
+        await error(response, "unknown_review");
       else await error(response, "not_found", endpoint.method === "HEAD");
     }
   }
@@ -272,7 +274,7 @@ test("sessions renew only daily, session-created pairings name the token, logout
   const cookie = await login();
   const secret = cookie.split("=")[1] ?? "";
   let response = await request("/reviews", "GET", { Cookie: cookie });
-  expect(response.status).toBe(404);
+  expect(response.status).toBe(200);
   expect(response.headers.has("set-cookie")).toBe(false);
   const paired = await issue("device", { Cookie: cookie, Origin: origin });
   const reviewer = await fixture.db.query((q) =>
@@ -637,7 +639,7 @@ test("HEAD inherits GET scopes, including public capabilities", async () => {
   expect((await request("/reviews", "HEAD")).status).toBe(401);
   expect((await request("/reviews", "HEAD", bearer(agent))).status).toBe(403);
   const cookie = await login();
-  expect((await request("/reviews", "HEAD", { Cookie: cookie })).status).toBe(404);
+  expect((await request("/reviews", "HEAD", { Cookie: cookie })).status).toBe(200);
 });
 
 test("public capabilities proves a fresh challenge and refuses malformed challenges", async () => {

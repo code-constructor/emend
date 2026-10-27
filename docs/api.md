@@ -109,6 +109,106 @@ a machine token reaches only reviews from its own instance.
 
 ## Schemas
 
+### Review read views
+
+`ReviewState = "open" | "approved" | "settled"`.
+`InboxItem = { id, title, origin: { id, name }, repo: string | null, branch: string | null,
+state: ReviewState, newestRevision, unsentCount, openThreads, agentWaiting, pendingSend,
+updatedAt, movedTo: string | null }`. `repo` is the repository key, and `movedTo` is the
+review's destination URL. Timestamps are ISO 8601 UTC strings; sequences are positive integers.
+`unsentCount` counts user comments without a Send; `openThreads` counts all unresolved threads.
+`pendingSend` means a Send is neither confirmed delivered nor set aside (an unconfirmed lease
+is still pending). `agentWaiting` uses the live waiting state, including its 35-second grace period.
+
+`GET /api/v1/reviews` returns `InboxList = { items: InboxItem[] }`, newest `updatedAt` first,
+with review id as a stable tie breaker, at most `inboxItems` (200) rows.
+`GET /api/v1/reviews/:id` returns `ReviewView = InboxItem & { revisions: { seq, createdAt }[] }`,
+with revisions ascending by sequence. Both are reviewer-only, as is the revision endpoint below.
+
+`GET /api/v1/reviews/:id/revisions/:seq` returns `RevisionView = { seq, base, head,
+topics: TopicMeta[], files: FileView[], writeup: RenderedWriteup, docs, threads: ThreadView[],
+changedBlocks: { blockId: BlockId, revision: number }[] }`.
+Base/head are nullable full commit hashes; head also permits `worktree`.
+`FileView = { id, path, oldPath, role, status, topic, order, mediaType, flag, hasOld, hasNew }`.
+`oldPath`, `status`, `topic` and `flag` are nullable. Files are in their stored order; assets
+are omitted. `hasOld` and `hasNew` indicate stored sides, without exposing blob hashes.
+
+`RenderedBlock = { id: BlockId, section, kind, html, text, source? }` mirrors core's `Block`.
+Kinds are `heading | paragraph | item | code | table | quote | diagram`; diagram source is optional.
+`RenderedWriteup = { sections: { key, label, topic: string | null, blocks: RenderedBlock[] }[] }`
+mirrors core's rendered writeup. These are server-rendered blocks, never browser-rendered Markdown.
+Markdown docs are `{ path, kind: "markdown", blocks: RenderedBlock[] }` (empty if unrendered).
+HTML docs are `{ path, kind: "html", contentUrl }`, where the URL is
+`/content/<contentKey>/<path>` with each path segment percent-encoded. The isolated content
+handler is delivered separately; this URL never grants app-origin rendering.
+
+`ThreadView = { id, target: Target, state: ThreadState, placement: Placement, createdOn,
+comments: { id, author: "user" | "agent", body, outcome?: Outcome, sent: boolean,
+sentOn: number | null }[] }`.
+`createdOn` is the creation revision's sequence. Placement belongs to the requested revision;
+an absent placement is `unplaced/not-placed`. Comments are in durable insertion order,
+regardless of clock changes. `sent` means the comment has a Send; agent replies retain their outcome.
+`sentOn` is the positive revision sequence named by that comment's Send, derived from the stored
+Send/revision relationship, never from timestamps. It is `null` for unsent comments and agent
+replies, and stays the same when reading another revision.
+`changedBlocks` contains each block once, paired with the newest positive revision sequence in
+which it changed after the reviewer's most recent Send's revision and through the requested revision.
+For example, a block changed in revisions 2 and 3 after a Send on revision 1 appears once with
+`revision: 3` when reading revision 3, and with `revision: 2` when reading revision 2.
+Blocks changed only at or before that Send are absent; before any Send changes start at revision 1.
+The most recent Send is determined by insertion order, including approvals and set-aside Sends.
+A requested revision at or before that Send has no changed blocks.
+Every query is owner-scoped. Missing/foreign reviews return `404 unknown_review`; missing or
+invalid sequences of an owned review return `404 not_found`. Agent tokens receive `403 forbidden`.
+
+Read-view bounds follow the write-side validators and rendering budgets; no history is truncated
+to make a read fit a per-Send or per-revision limit. The limits below apply to the schemas above.
+
+| Field | Bound and write-side source |
+| --- | --- |
+| `InboxList.items` | `inboxItems` (200), the inbox query limit |
+| `InboxItem.title` | `titleChars` (200), including publish's nonblank requirement |
+| `InboxItem.repo` | Nullable `Sha256`: exactly 64 lowercase hex characters, the published repository key, not the repository name |
+| `InboxItem.branch` | Nullable, otherwise 1 through `pathChars` (4096) characters, as in `PublishRequest` |
+| `RevisionView.topics` | `topicsPerReview + 1` (201): up to 200 declared topics plus the reserved Other changes entry, as in publish |
+| `RevisionView.files`, `RevisionView.docs` | Each at most `filesPerRevision` (10000), the publish file limit |
+| `FileView.order` | Zero through `filesPerRevision - 1` (9999), the publisher's zero-based file-array index |
+| `RenderedWriteup.sections` | At most `4 + 3 * topicsPerReview` (604): four fixed sections and Why/Example/Details for each writeup topic |
+| `RenderedWriteup.sections[].key`, `RenderedBlock.section` | Renderer-generated keys: overview, tldr, decisions, glossary or `t-<TopicSlug>-why/example/body`; block sections also allow `doc-<hash8>`. TopicSlug permits 1–64 characters, so the longest topic section key is 74 characters |
+| `RenderedWriteup.sections[].label` | `titleChars + " — Example".length` (210), the longest renderer suffix appended to a topic title |
+| Section `blocks` and Markdown doc `blocks` | Each at most `blocksPerRevision` (100000); the same limit also applies to all writeup blocks combined and to writeup plus doc blocks combined |
+| `RenderedBlock.html`, `text`, `source` | Each bounded by `renderedBytesPerRevision` (268435456) UTF-8 bytes, the stored renderer output budget; source is optional |
+| `RenderedWriteup`, Markdown doc block arrays, and revision rendered content | Serialized UTF-8 JSON must fit `renderedBytesPerRevision`, including escaping and structure. The revision budget combines the writeup and nonempty Markdown doc block arrays; empty arrays can represent docs without stored rendered data and add no bytes to that combined read check |
+| File/doc paths, `oldPath`, block IDs and `changedBlocks[].blockId` | Reuse `FilePath`/`BlockId`, including `pathChars` (4096), path segments of at most `pathSegmentChars` (255), and the existing format checks |
+| Topics and section/file topic references | Reuse `TopicMeta`/`TopicSlug`: 64-character slugs, `titleChars`, `summaryChars`, `blastScopeChars` and `blastNoteChars` limits and their existing value checks |
+| `ThreadView.comments[].body` | Reuses `CommentBody`: `commentBodyChars` (20000), nonblank, well-formed UTF-16 |
+| `RevisionView.changedBlocks[].revision`, `ThreadView.comments[].sentOn` | Positive safe integer revision sequences; `sentOn` also accepts `null` |
+| Thread targets and placements | Reuse `Target` and `Placement`, including their quote, context and line limits |
+| IDs, sequences, counts, order, timestamps, states, flags, outcomes, base/head | UUIDs, safe integers, ISO UTC datetimes, finite enums/booleans and full 40/64-character commit hashes as specified above; head additionally accepts `worktree` |
+
+These fields deliberately remain unbounded because their write side has no matching cap:
+
+- `InboxItem.origin.name`: instance loading validates a string without a length limit; machine
+  registration has no implemented name cap yet. A title limit would reject valid stored names.
+- `InboxItem.movedTo`: the stored moved-to URL has no write-side length cap yet; its HTTP(S) URL
+  format is still validated. HTML `contentUrl` has no independent URL-length cap; its decoded doc
+  path uses `FilePath`, each segment must be canonically encoded, and the stored content key has no
+  length validator. Applying `pathChars` to an encoded URL could reject valid non-ASCII paths.
+- `FileView.mediaType`: the server chooses the media type from its mapping; no length validator
+  exists at the storage boundary. It remains a string rather than acquiring an arbitrary new cap.
+- `ReviewView.revisions`: publication is append-only with no lifetime revision-count cap.
+- `RevisionView.threads`: thread creation has no per-review count cap. A per-Send comment limit
+  does not bound the review's thread history.
+- `ThreadView.comments`: neither cumulative user comments nor agent replies per thread are capped.
+  Agent-reply retention is an open owner item; handoff/history limits restrict deliveries, not storage.
+- `RevisionView.changedBlocks`: it unions changes across potentially unbounded revision history
+  after the last Send. `blocksPerRevision` limits one revision and cannot cap this accumulated union.
+
+Browser startup calls `configureBrowserValidation()` from the schema-free `@emend/contract/browser`
+entry before dynamically loading the app and its schemas. It sets Zod's `jitless` option before
+object construction (when Zod captures this setting), so validation never probes or compiles
+`Function` under the app CSP. The normal contract index also exports the function.
+
 `Capabilities = { api: 1, version: string, features: string[] }`. The first feature list is
 `["attach", "html-docs", "mcp"]`; clients accept additional feature strings.
 
@@ -413,6 +513,7 @@ limit with `413 too_large` before parsing. Upload content also has the role's by
 
 | Constant key | Maximum |
 | --- | ---: |
+| `inboxItems` | 200 reviews returned in the inbox |
 | `publicJsonBytes` | 4096 bytes per public session or machine registration JSON request body |
 | `commentBodyChars` | 20000 characters |
 | `instructionChars` | 4000 characters |
