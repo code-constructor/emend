@@ -60,7 +60,7 @@ export function AppFrame({
                   <Link className="block py-2" to="/devices">
                     Devices
                   </Link>
-                  <Link className="block py-2" to="/devices">
+                  <Link className="block py-2" to="/devices/pair">
                     Pair a device
                   </Link>
                 </>

@@ -2,6 +2,7 @@ import { createRootRoute, createRoute, createRouter, Link, Outlet, type RouterHi
 import { DevicesPage } from "./routes/devices.tsx";
 import { InboxPage } from "./routes/inbox.tsx";
 import { PairPage } from "./routes/pair.tsx";
+import { PairDevicePage } from "./routes/pair-device.tsx";
 import { ReviewPage } from "./routes/review.tsx";
 
 export type ReviewSearch = { rev?: number; tab?: "writeup" | "diff" | "docs" | "comments"; thread?: string };
@@ -39,9 +40,10 @@ const review = createRoute({
 });
 const pair = createRoute({ getParentRoute: () => root, path: "/pair", component: PairPage });
 const devices = createRoute({ getParentRoute: () => root, path: "/devices", component: DevicesPage });
+const pairDevice = createRoute({ getParentRoute: () => root, path: "/devices/pair", component: PairDevicePage });
 export const createWebRouter = (history?: RouterHistory) => {
   const router = createRouter({
-    routeTree: root.addChildren([inbox, review, pair, devices]),
+    routeTree: root.addChildren([inbox, review, pair, devices, pairDevice]),
     history,
     search: { strict: true },
   });

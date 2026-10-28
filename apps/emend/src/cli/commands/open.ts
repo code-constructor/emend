@@ -42,11 +42,17 @@ export async function openCommand(stateDir: string, io: Io) {
     }),
   );
   if (!response.success) throw new CliError("The emend server returned an invalid response.");
+  // The hub browser always opens loopback, even when pairing links advertise Tailscale.
+  const localLink = new URL(response.data.url);
+  const localOrigin = new URL(url);
+  localLink.protocol = localOrigin.protocol;
+  localLink.host = localOrigin.host;
+  const browserUrl = localLink.href;
   let opened = false;
   try {
-    opened = await (io.openUrl ?? openBrowser)(response.data.url);
+    opened = await (io.openUrl ?? openBrowser)(browserUrl);
   } catch {
     /* Offer the same one-time link. */
   }
-  io.stdout(opened ? "Opening emend in your browser.\n" : `Open this link within 10 minutes: ${response.data.url}\n`);
+  io.stdout(opened ? "Opening emend in your browser.\n" : `Open this link within 10 minutes: ${browserUrl}\n`);
 }

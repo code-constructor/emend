@@ -81,3 +81,29 @@ test("an HTTP failure is one stderr line, no stdout and exit 1", async () => {
     await fixture.cleanup();
   }
 });
+
+test("bare emend rewrites a public pairing link to the discovered loopback origin", async () => {
+  const fixture = await testDb();
+  try {
+    writeSecretFile(join(fixture.dir, "admin.token"), `em_${"a".repeat(43)}`);
+    const secret = `emp_${"c".repeat(43)}`;
+    const proof = provenTestServer(fixture.dir);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async (target: string | URL, init?: RequestInit) =>
+          proof(target, init) ??
+          Response.json({
+            url: `https://hub.example.ts.net/pair#${secret}`,
+            code: "ABCD-2345",
+            expiresAt: "2026-01-01T00:10:00.000Z",
+          }),
+      ),
+    );
+    const openUrl = vi.fn(async () => true);
+    expect(await run([], { stdout: () => {}, stderr: () => {}, env: { EMEND_HOME: fixture.dir }, openUrl })).toBe(0);
+    expect(openUrl).toHaveBeenCalledWith(`http://127.0.0.1:3636/pair#${secret}`);
+  } finally {
+    await fixture.cleanup();
+  }
+});

@@ -38,6 +38,47 @@ test("built frame rejects diagram theme overrides without dynamic code generatio
     ],
   });
   if (Array.isArray(result) || !("output" in result)) throw new Error("Expected a single web build");
+  const serviceWorker = result.output.find((file) => file.fileName === "sw.js");
+  if (serviceWorker?.type !== "asset") throw new Error("Missing service worker");
+  const handlers = new Map<string, (event: unknown) => void>();
+  const addAll = vi.fn(async (_urls: string[]) => {});
+  const respondWith = vi.fn();
+  runInNewContext(String(serviceWorker.source), {
+    URL,
+    location: { origin: "https://hub.example.ts.net" },
+    caches: { open: async () => ({ addAll }) },
+    addEventListener: (type: string, handler: (event: unknown) => void) => handlers.set(type, handler),
+  });
+  let installed: Promise<unknown> | undefined;
+  handlers.get("install")?.({
+    waitUntil: (pending: Promise<unknown>) => {
+      installed = pending;
+    },
+  });
+  await installed;
+  const shell = addAll.mock.calls[0]?.[0] ?? [];
+  expect(shell).toEqual(
+    expect.arrayContaining([
+      "/",
+      "/index.html",
+      "/manifest.webmanifest",
+      "/icons/icon-192.png",
+      "/icons/icon-512.png",
+      "/icons/apple-touch-icon.png",
+    ]),
+  );
+  expect(shell.filter((path) => path.startsWith("/assets/")).sort()).toEqual(
+    result.output
+      .filter((file) => file.fileName.startsWith("assets/"))
+      .map((file) => `/${file.fileName}`)
+      .sort(),
+  );
+  for (const path of ["/api/v1/devices", "/content/key/doc.html", "/other"])
+    handlers.get("fetch")?.({
+      request: { url: `https://hub.example.ts.net${path}`, method: "GET", mode: "navigate" },
+      respondWith,
+    });
+  expect(respondWith).not.toHaveBeenCalled();
   expect(workerModules.size).toBeGreaterThan(0);
   expect([...workerModules.keys()].some((name) => /\/worker-/.test(name))).toBe(true);
   for (const [name, modules] of workerModules) {

@@ -24,3 +24,9 @@ createRoot(root).render(
     <App />
   </StrictMode>,
 );
+
+if (import.meta.env.PROD && "serviceWorker" in navigator) {
+  void navigator.serviceWorker.register("/sw.js").catch(() => {
+    // Network or browser policy may prevent installation; the online app remains usable.
+  });
+}

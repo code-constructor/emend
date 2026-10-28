@@ -65,7 +65,7 @@ test("bootstrap repairs missing, unknown, expired and revoked token files withou
 
 test("config allows the bound loopbacks and concrete host and enables Secure only for HTTPS base URLs", () => {
   const config = serverConfig("0.0.0.0", 1234, "/synthetic/web", "https://reviewer.example");
-  expect(config.allowedHosts).toEqual(["127.0.0.1:1234", "localhost:1234", "[::1]:1234"]);
+  expect(config.allowedHosts).toEqual(["127.0.0.1:1234", "localhost:1234", "[::1]:1234", "reviewer.example"]);
   expect(config.appOrigins).toEqual([
     "http://127.0.0.1:1234",
     "http://localhost:1234",
@@ -73,7 +73,7 @@ test("config allows the bound loopbacks and concrete host and enables Secure onl
     "https://reviewer.example",
   ]);
   expect(config.baseUrl).toBe("https://reviewer.example");
-  expect(config.secureCookies).toBe(true);
+  expect(config.secureCookieHost).toBe("reviewer.example");
   expect(serverConfig("192.0.2.1", 3636, "/synthetic/web").allowedHosts).toContain("192.0.2.1:3636");
   expect(serverConfig("::", 3636, "/synthetic/web").allowedHosts).not.toContain("[::]:3636");
 });

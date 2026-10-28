@@ -36,7 +36,7 @@ export async function mailboxFixture() {
       baseUrl: origin,
       allowedHosts: ["127.0.0.1:3636"],
       appOrigins: [origin],
-      secureCookies: false,
+      secureCookieHost: undefined,
       webRoot: f.dir,
       serverKey: "A".repeat(43),
     },

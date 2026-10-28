@@ -81,8 +81,8 @@ a machine token reaches only reviews from its own instance.
 | POST | `/api/v1/session` | Browser, no existing credential required | Exchange `SessionRequest` for a reviewer session (204); refuses machine pairings. |
 | DELETE | `/api/v1/session` | Reviewer | End the current browser session. |
 | POST | `/api/v1/pairings` | Admin, reviewer | Create from `PairingRequest`; return `PairingCreated` (201). |
-| GET | `/api/v1/devices` | Admin, reviewer | List paired devices. |
-| DELETE | `/api/v1/devices/:id` | Admin, reviewer | Revoke a device. |
+| GET | `/api/v1/devices` | Admin, reviewer | Return `DeviceList` (200); live devices owned by the principal, newest first. |
+| DELETE | `/api/v1/devices/:id` | Admin, reviewer | Revoke the device and every bound token atomically (204); missing, foreign or revoked is 404. |
 | POST | `/api/v1/machines` | Anyone with a pairing secret or code | Register `{secret, instance: {id, name}}` or `{code, instance: {id, name}}`; refuses device pairings (task 1.14). |
 | DELETE | `/api/v1/machines/self` | Agent | Detach the current machine. |
 | HEAD | `/api/v1/blobs/:sha256` | Agent | Check whether the owner's blob exists. |
@@ -312,12 +312,32 @@ remain unrendered. A writeup alone exceeding either budget returns 413 `too_larg
 "The writeup has too many blocks."
 The CLI warns `emend: could not render <path>` for each; the publish still succeeds.
 The URL is `<baseUrl>/r/<reviewId>` (HTTP or HTTPS);
-it is bounded by `pathChars` (4096 characters). At each start the local server saves its base URL
-(public origin when configured, otherwise its listening URL) in `server-url.json` in the state
-directory, mode 0600, and leaves it there on close. Direct publish uses that saved HTTP(S) origin;
+it is bounded by `pathChars` (4096 characters). At each start the local server saves its listening URL in `server-url.json` in the state
+directory, mode 0600. With Tailscale, it replaces that value with the public origin only after
+Serve setup succeeds; a failed startup keeps the loopback URL. A successful start leaves its
+confirmed base URL there on close. Direct publish uses that saved HTTP(S) origin;
 a missing or invalid JSON record, credentials, path, query or fragment falls back to
 `http://127.0.0.1:3636`. Publish stays local even when attached until attached publishing is built.
 `revision` is a positive integer sequence, and the placement counts are nonnegative integers.
+
+### Devices
+
+`DeviceList = { items: DeviceView[] }`, where `DeviceView = { id, kind, name, createdAt,
+lastSeenAt, current }`. `id` is a UUID; `kind` is `"browser"` or `"machine"`; `name` is a string.
+`createdAt` and non-null `lastSeenAt` are ISO 8601 UTC strings; `lastSeenAt` may be `null`.
+Only non-revoked devices belonging to the authenticated owner appear, newest first. `current`
+is true for the requesting reviewer's device; admin requests see false for every device.
+Device activity timestamps retain their existing update policy.
+
+Revocation is allowed for the current device: its next cookie-authenticated request is 401.
+The device and its still-live bound tokens are revoked in one transaction; earlier token
+revocation timestamps are preserved. An agent token has no
+`devices:manage` scope and receives 403 for both device endpoints.
+
+With `emend serve --tailscale`, pairing URLs use the configured Tailscale HTTPS origin; the
+secret remains exclusively in the fragment. Only that configured tailnet Host is added to
+the allowlist. Session cookies use `Secure` when that Host is requested, including renewal
+and sign-out; loopback HTTP on the same server receives cookies without `Secure`.
 
 ### Manifest and topics
 

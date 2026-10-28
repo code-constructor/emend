@@ -43,6 +43,8 @@ ${[node, entry, "serve", ...flags].map((word) => `    <string>${xml(word)}</stri
   <dict>
     <key>EMEND_HOME</key>
     <string>${xml(stateDir)}</string>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>

@@ -91,7 +91,7 @@ test("publishing at the block cap over a cap-sized previous revision keeps beare
         baseUrl: origin,
         allowedHosts: ["127.0.0.1:3636"],
         appOrigins: [origin],
-        secureCookies: false,
+        secureCookieHost: undefined,
         webRoot: f.dir,
         serverKey: "A".repeat(43),
       },

@@ -128,6 +128,7 @@ test("a stopped server leaves its private public origin for direct publish", asy
   const f = await directFixture();
   const server = await startServer({ stateDir: f.stateDir, port: 0, publicOrigin: "https://review.example" });
   f.cleanup.push(server.close);
+  server.setPublicOriginReady(true);
   await server.close();
   const path = join(f.stateDir, "server-url.json");
   expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ baseUrl: "https://review.example" });

@@ -3,7 +3,7 @@ import { run } from "../main.ts";
 
 vi.mock("../main.ts", () => ({ run: vi.fn() }));
 
-test.each([130, 143])("the executable exits with %s even if stdout is still blocked", async (code) => {
+test.each([129, 130, 143])("the executable exits with %s even if stdout is still blocked", async (code) => {
   const previous = process.exitCode;
   vi.resetModules();
   vi.mocked(run).mockResolvedValue(code);

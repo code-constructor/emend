@@ -198,13 +198,13 @@ test("a failed secret is not posted again, and a different arriving secret can p
 
 test.each(["hashchange", "popstate"] as const)("%s leaves fragments on another path alone", async (event) => {
   window.history.replaceState(null, "", "/devices");
-  const fetch = vi.fn(async () => Response.json({ items: [] }));
+  const fetch = vi.fn(async (_path: string, _init?: RequestInit) => Response.json({ items: [] }));
   vi.stubGlobal("fetch", fetch);
   await boot();
   await screen.findByRole("heading", { name: "Devices" });
   await fragment("/devices#section", event);
   expect(location.hash).toBe("#section");
-  expect(fetch).not.toHaveBeenCalled();
+  expect(fetch.mock.calls.filter(([path, init]) => path === "/api/v1/session" && init?.method === "POST")).toEqual([]);
   const { takePairingSecret } = await import("./lib/pairing-secret.ts");
   expect(takePairingSecret()).toBeUndefined();
 });
@@ -225,4 +225,17 @@ test.each(["/pairs#x", "/pair/x#y"])("startup and navigation leave %s alone", as
     expect(takePairingSecret()).toBeUndefined();
   }
   expect(fetch).not.toHaveBeenCalled();
+});
+
+test.each([false, true])("registers the root service worker only in production (%s)", async (production) => {
+  vi.stubEnv("PROD", production);
+  const register = vi.fn(async () => ({}));
+  vi.stubGlobal("navigator", { serviceWorker: { register } });
+  window.history.replaceState(null, "", "/pair");
+  try {
+    await boot();
+    expect(register.mock.calls).toEqual(production ? [["/sw.js"]] : []);
+  } finally {
+    vi.unstubAllEnvs();
+  }
 });

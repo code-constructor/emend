@@ -486,8 +486,8 @@ test("phone inbox menu offers Devices and Pair a device", async () => {
   await screen.findByRole("heading", { name: "Inbox" });
   fireEvent.click(screen.getByRole("button", { name: "More" }));
   const menu = within(await screen.findByRole("dialog", { name: "More" }));
-  for (const name of ["Devices", "Pair a device"])
-    expect(menu.getByRole("link", { name }).getAttribute("href")).toBe("/devices");
+  expect(menu.getByRole("link", { name: "Devices" }).getAttribute("href")).toBe("/devices");
+  expect(menu.getByRole("link", { name: "Pair a device" }).getAttribute("href")).toBe("/devices/pair");
 });
 
 test("hides Docs without docs, defaults bad search values, and keeps diff visible on desktop", async () => {

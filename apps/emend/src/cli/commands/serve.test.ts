@@ -31,8 +31,13 @@ test("serve defaults to loopback, allows explicit host and port zero, and reject
 });
 
 test.each(["SIGINT", "SIGTERM"] as const)("serve prints once and closes cleanly on %s", async (signal) => {
-  const close = vi.fn().mockResolvedValue(undefined);
-  vi.mocked(startServer).mockResolvedValue({ url: "http://127.0.0.1:3636", close });
+  const close = vi.fn().mockResolvedValue({ otherHttpsPorts: false });
+  vi.mocked(startServer).mockResolvedValue({
+    url: "http://127.0.0.1:3636",
+    port: 3636,
+    setPublicOriginReady: vi.fn(),
+    close,
+  });
   const stdout: string[] = [];
   const stderr: string[] = [];
   const result = run(["serve"], { stdout: (s) => stdout.push(s), stderr: (s) => stderr.push(s), env: process.env });
@@ -41,4 +46,183 @@ test.each(["SIGINT", "SIGTERM"] as const)("serve prints once and closes cleanly 
   expect(await result).toBe(0);
   expect(close).toHaveBeenCalledTimes(1);
   expect(stderr).toEqual([]);
+});
+
+test("tailscale flag is boolean, unique, and binds only loopback", () => {
+  expect(parseServeArgs(["--tailscale"])).toEqual({ host: "127.0.0.1", port: 3636, tailscale: true });
+  expect(parseServeArgs(["--tailscale", "--port", "4000", "--host", "127.0.0.1"])).toEqual({
+    host: "127.0.0.1",
+    port: 4000,
+    tailscale: true,
+  });
+  for (const args of [
+    ["--tailscale", "--tailscale"],
+    ["--host", "0.0.0.0", "--tailscale"],
+    ["--tailscale", "--host", "localhost"],
+  ])
+    expect(() => parseServeArgs(args)).toThrow();
+});
+
+test("tailscale setup follows startup, uses the bound port, and prints only the HTTPS address", async () => {
+  const calls: string[] = [];
+  const close = vi.fn(async () => {});
+  const tailscale = await import("../tailscale.ts");
+  vi.spyOn(tailscale, "removeTailscaleServe").mockResolvedValue(undefined);
+  vi.spyOn(tailscale, "tailscaleSelf").mockImplementation(async () => {
+    calls.push("self");
+    return { dnsName: "hub.example.ts.net" };
+  });
+  vi.mocked(startServer).mockImplementation(async (options) => {
+    calls.push("start");
+    expect(options).toMatchObject({ host: "127.0.0.1", port: 0, publicOrigin: "https://hub.example.ts.net" });
+    return { url: "http://127.0.0.1:4000", port: 4000, setPublicOriginReady: vi.fn(), close };
+  });
+  vi.spyOn(tailscale, "ensureTailscaleServe").mockImplementation(async (port) => {
+    calls.push("serve");
+    expect(port).toBe(4000);
+    return { otherHttpsPorts: false };
+  });
+  const stdout: string[] = [];
+  const result = run(["serve", "--port", "0", "--tailscale"], {
+    env: process.env,
+    stdout: (s) => stdout.push(s),
+    stderr: () => {},
+  });
+  await vi.waitFor(() => expect(stdout).toEqual(["emend: serving https://hub.example.ts.net\n"]));
+  expect(calls).toEqual(["self", "start", "serve"]);
+  process.emit("SIGTERM");
+  expect(await result).toBe(0);
+  expect(close).toHaveBeenCalledTimes(1);
+});
+test("tailscale setup failure closes the started server and exits one", async () => {
+  const tailscale = await import("../tailscale.ts");
+  vi.spyOn(tailscale, "removeTailscaleServe").mockResolvedValue(undefined);
+  const { CliError } = await import("../http.ts");
+  vi.spyOn(tailscale, "tailscaleSelf").mockResolvedValue({ dnsName: "hub.example.ts.net" });
+  vi.spyOn(tailscale, "ensureTailscaleServe").mockRejectedValue(
+    new CliError(
+      "port 443 of Tailscale Serve already has a setup emend did not make or cannot read; inspect it with `tailscale serve status`.",
+    ),
+  );
+  const close = vi.fn(async () => {});
+  vi.mocked(startServer).mockResolvedValue({
+    url: "http://127.0.0.1:3636",
+    port: 3636,
+    setPublicOriginReady: vi.fn(),
+    close,
+  });
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  expect(
+    await run(["serve", "--tailscale"], {
+      env: process.env,
+      stdout: (s) => stdout.push(s),
+      stderr: (s) => stderr.push(s),
+    }),
+  ).toBe(1);
+  expect(close).toHaveBeenCalledTimes(1);
+  expect(stdout).toEqual([]);
+  expect(stderr).toEqual([
+    "emend: port 443 of Tailscale Serve already has a setup emend did not make or cannot read; inspect it with `tailscale serve status`.\n",
+  ]);
+});
+
+test("a stop after startServer resolves skips Tailscale setup and closes normally", async () => {
+  const tailscale = await import("../tailscale.ts");
+  vi.spyOn(tailscale, "tailscaleSelf").mockResolvedValue({ dnsName: "hub.example.ts.net" });
+  const setup = vi.spyOn(tailscale, "ensureTailscaleServe").mockResolvedValue({ otherHttpsPorts: false });
+  const remove = vi.spyOn(tailscale, "removeTailscaleServe").mockResolvedValue(undefined);
+  const close = vi.fn(async () => {});
+  const advertise = vi.fn();
+  vi.mocked(startServer).mockImplementation(() => {
+    const started = Promise.resolve({
+      url: "http://127.0.0.1:41999",
+      port: 41999,
+      setPublicOriginReady: advertise,
+      close,
+    });
+    // Deliver the stop between the resolved start promise and serve's continuation.
+    void started.then(() => queueMicrotask(() => process.emit("SIGTERM")));
+    return started;
+  });
+  const stdout = vi.fn();
+  const stderr = vi.fn();
+  expect(await run(["serve", "--tailscale"], { env: process.env, stdout, stderr })).toBe(0);
+  expect(setup).not.toHaveBeenCalled();
+  expect(remove).not.toHaveBeenCalled();
+  expect(advertise).not.toHaveBeenCalled();
+  expect(close).toHaveBeenCalledTimes(1);
+  expect(stdout).not.toHaveBeenCalled();
+  expect(stderr).not.toHaveBeenCalled();
+});
+
+test.each([
+  ["SIGINT", 130, false],
+  ["SIGTERM", 143, false],
+  ["SIGHUP", 129, false],
+  ["SIGTERM", 143, true],
+] as const)("%s during startup exits %s after the losing start settles (fails: %s)", async (signal, code, fails) => {
+  const tailscale = await import("../tailscale.ts");
+  vi.spyOn(tailscale, "tailscaleSelf").mockResolvedValue({ dnsName: "hub.example.ts.net" });
+  const setup = vi.spyOn(tailscale, "ensureTailscaleServe");
+  const remove = vi.spyOn(tailscale, "removeTailscaleServe");
+  const starting = Promise.withResolvers<Awaited<ReturnType<typeof startServer>>>();
+  const entered = Promise.withResolvers<void>();
+  vi.mocked(startServer).mockImplementation(() => {
+    entered.resolve();
+    return starting.promise;
+  });
+  const close = vi.fn(async () => {});
+  const advertise = vi.fn();
+  const stdout = vi.fn();
+  const stderr = vi.fn();
+  let returned = false;
+  const result = run(["serve", "--tailscale"], { env: process.env, stdout, stderr }).then((code) => {
+    returned = true;
+    return code;
+  });
+  await entered.promise;
+  process.emit(signal);
+  // Let the signal win the race before startup settles.
+  await new Promise(setImmediate);
+  const returnedBeforeStart = returned;
+  if (fails) starting.reject(new Error("synthetic start failure"));
+  else starting.resolve({ url: "http://127.0.0.1:41999", port: 41999, setPublicOriginReady: advertise, close });
+  expect(await result).toBe(code);
+  expect(close).toHaveBeenCalledTimes(fails ? 0 : 1);
+  expect(returnedBeforeStart).toBe(false);
+  expect(setup).not.toHaveBeenCalled();
+  expect(remove).not.toHaveBeenCalled();
+  expect(advertise).not.toHaveBeenCalled();
+  expect(stdout).not.toHaveBeenCalled();
+  expect(stderr).not.toHaveBeenCalled();
+});
+
+test.each([
+  [80, 80, "http://127.0.0.1"],
+  [0, 41327, "http://127.0.0.1:41327"],
+] as const)("Tailscale requested port %s uses the returned bound port %s", async (requested, bound, url) => {
+  const tailscale = await import("../tailscale.ts");
+  vi.spyOn(tailscale, "removeTailscaleServe").mockResolvedValue(undefined);
+  vi.spyOn(tailscale, "tailscaleSelf").mockResolvedValue({ dnsName: "hub.example.ts.net" });
+  const setup = vi.spyOn(tailscale, "ensureTailscaleServe").mockResolvedValue({ otherHttpsPorts: false });
+  vi.mocked(startServer).mockResolvedValue({
+    url,
+    port: bound,
+    setPublicOriginReady: vi.fn(),
+    close: vi.fn(async () => {}),
+  });
+  const stdout: string[] = [];
+  const result = run(["serve", "--tailscale", "--port", String(requested)], {
+    env: process.env,
+    stdout: (line) => stdout.push(line),
+    stderr: () => {},
+  });
+  try {
+    await vi.waitFor(() => expect(stdout).toHaveLength(1));
+    expect(setup.mock.calls[0]?.[0]).toBe(bound);
+  } finally {
+    process.emit("SIGTERM");
+    await result;
+  }
 });

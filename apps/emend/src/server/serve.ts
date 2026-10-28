@@ -49,10 +49,10 @@ export function serverConfig(
   const publicUrl = publicBaseUrl(publicOrigin);
   const baseUrl = publicUrl ?? url;
   return {
-    allowedHosts: uniqueHosts,
+    allowedHosts: [...uniqueHosts, ...(publicUrl ? [new URL(publicUrl).host] : [])],
     appOrigins: [...new Set([...uniqueHosts.map((name) => `http://${name}`), ...(publicUrl ? [publicUrl] : [])])],
     baseUrl,
-    secureCookies: baseUrl.startsWith("https:"),
+    secureCookieHost: publicUrl?.startsWith("https:") ? new URL(publicUrl).host : undefined,
     webRoot,
     serverKey,
   };
@@ -69,7 +69,9 @@ interface DiscoveryIdentity {
   startedAt: string;
   key: string;
 }
-export async function startServer(opts: ServerOptions): Promise<{ url: string; close: () => Promise<void> }> {
+export async function startServer(
+  opts: ServerOptions,
+): Promise<{ url: string; port: number; setPublicOriginReady: (ready: boolean) => void; close: () => Promise<void> }> {
   const host = opts.host ?? "127.0.0.1";
   const port = opts.port ?? 3636;
   const webRoot = opts.webRoot ?? fileURLToPath(new URL("./web/", import.meta.url));
@@ -93,17 +95,22 @@ export async function startServer(opts: ServerOptions): Promise<{ url: string; c
         }
       });
     });
-    writeSecretFile(
-      join(opts.stateDir, "server-url.json"),
-      JSON.stringify({ baseUrl: publicBaseUrl(opts.publicOrigin) ?? bound.url }),
-      opts.stateDir,
-    );
+    writeSecretFile(join(opts.stateDir, "server-url.json"), JSON.stringify({ baseUrl: bound.url }), opts.stateDir);
     const discovery = join(opts.stateDir, "server.json");
     const record = { ...bound, pid: process.pid, startedAt: new Date().toISOString(), key };
     writeSecretFile(discovery, JSON.stringify(record), opts.stateDir);
     let closing: Promise<void> | undefined;
     return {
       url: bound.url,
+      port: bound.port,
+      setPublicOriginReady(ready) {
+        if (closing) throw new Error("The emend server is closing.");
+        writeSecretFile(
+          join(opts.stateDir, "server-url.json"),
+          JSON.stringify({ baseUrl: ready ? (publicBaseUrl(opts.publicOrigin) ?? bound.url) : bound.url }),
+          opts.stateDir,
+        );
+      },
       close() {
         closing ??= (async () => {
           try {

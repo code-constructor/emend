@@ -19,7 +19,9 @@ export async function run(argv: string[], io: Io): Promise<number> {
   if (argv.length === 1 && ["--help", "-h"].includes(argv[0] ?? "")) {
     io.stdout(`Usage:
   emend                         Open the review inbox
-  emend serve                   Run the local server
+  emend serve [--tailscale]      Run the local server
+  emend pair                    Pair a device
+  emend devices [--revoke <id>]  List or revoke devices
   emend publish --manifest <file> [--review <id>] [--key <name>]
   emend wait <review> [--timeout <seconds>]
   emend feedback <review>
@@ -35,10 +37,12 @@ export async function run(argv: string[], io: Io): Promise<number> {
     io.stdout(`emend ${VERSION}\n`);
     return 0;
   }
-  if (["wait", "feedback", "reply", "mcp", "service", "skills"].includes(argv[0] ?? "")) {
+  if (["wait", "feedback", "reply", "mcp", "service", "skills", "pair", "devices"].includes(argv[0] ?? "")) {
     const { CliUsageError, CliSignalExit, errorLine } = await import("./cli/http.ts");
     try {
       const commands = {
+        pair: () => import("./cli/commands/pair.ts").then((m) => m.pairCommand),
+        devices: () => import("./cli/commands/devices.ts").then((m) => m.devicesCommand),
         wait: () => import("./cli/commands/wait.ts").then((m) => m.waitCommand),
         feedback: () => import("./cli/commands/feedback.ts").then((m) => m.feedbackCommand),
         reply: () => import("./cli/commands/reply.ts").then((m) => m.replyCommand),
@@ -79,7 +83,7 @@ export async function run(argv: string[], io: Io): Promise<number> {
   }
   // Keep the version path independent of database and server startup.
   const { parseServeArgs, serveCommand, UsageError } = await import("./cli/commands/serve.ts");
-  const { CliError } = await import("./cli/http.ts");
+  const { CliError, CliSignalExit } = await import("./cli/http.ts");
   try {
     if (argv[0] === "serve") {
       const options = parseServeArgs(argv.slice(1));
@@ -90,6 +94,7 @@ export async function run(argv: string[], io: Io): Promise<number> {
     }
     return 0;
   } catch (error) {
+    if (error instanceof CliSignalExit) return error.exitCode;
     io.stderr(
       error instanceof NewerDatabaseError ||
         error instanceof StateDirModeError ||

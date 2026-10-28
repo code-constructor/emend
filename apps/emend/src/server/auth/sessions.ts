@@ -7,6 +7,9 @@ import type { Principal } from "./principal.ts";
 import { liveToken, principalFromToken, SESSION_MS, SESSION_SHAPE } from "./tokens.ts";
 
 export const SESSION_COOKIE = "emend_session";
+export function secureSessionRequest(c: Context, secureHost?: string): boolean {
+  return secureHost !== undefined && c.req.header("Host")?.toLowerCase() === secureHost;
+}
 export function writeSessionCookie(c: Context, secret: string, secure: boolean, clear = false) {
   setCookie(c, SESSION_COOKIE, secret, {
     httpOnly: true,

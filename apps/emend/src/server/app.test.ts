@@ -31,7 +31,7 @@ function makeApp(secureCookies = false, extraHost?: string) {
       allowedHosts: [host, "localhost:3636", "[::1]:3636", ...(extraHost ? [extraHost] : [])],
       appOrigins: [origin],
       baseUrl: secureCookies ? "https://example.test" : origin,
-      secureCookies,
+      secureCookieHost: secureCookies ? "example.test" : undefined,
       webRoot,
     },
   });
@@ -137,7 +137,7 @@ test("every documented API endpoint enforces its scope even before its handler e
       if (!(SCOPES_BY_KIND[kind] as readonly string[]).includes(endpoint.scope))
         await error(response, "forbidden", endpoint.method === "HEAD");
       else if (path === "/api/v1/pairings") expect(response.status).toBe(201);
-      else if (path === "/api/v1/reviews") expect(response.status).toBe(200);
+      else if (path === "/api/v1/reviews" || path === "/api/v1/devices") expect(response.status).toBe(200);
       else if (
         path === "/api/v1/publish" ||
         path.startsWith("/api/v1/blobs/") ||
@@ -202,12 +202,17 @@ test("secrets have distinct prefixes, only hashes persist and revoked bearer tok
 });
 
 test.each([false, true])("one-time device pairing creates a private cookie (secure=%s)", async (secure) => {
-  app = makeApp(secure);
+  app = makeApp(secure, secure ? "example.test" : undefined);
   const created = await issue();
   const body = { secret: new URL(created.url).hash.slice(1) };
   const responses = await Promise.all([
-    request("/session", "POST", { "User-Agent": "Synthetic <script> Browser" }, body),
-    request("/session", "POST", {}, body),
+    request(
+      "/session",
+      "POST",
+      { "User-Agent": "Synthetic <script> Browser", ...(secure ? { Host: "example.test" } : {}) },
+      body,
+    ),
+    request("/session", "POST", secure ? { Host: "example.test" } : {}, body),
   ]);
   expect(responses.map((r) => r.status).sort()).toEqual([204, 401]);
   const cookie = responses.find((r) => r.status === 204)?.headers.get("set-cookie") ?? "";
@@ -428,7 +433,7 @@ test("web files use a fixed type map, SPA fallbacks, and never escape through pa
       allowedHosts: [host],
       appOrigins: [origin],
       baseUrl: origin,
-      secureCookies: false,
+      secureCookieHost: undefined,
       webRoot: join(fixture.dir, "missing"),
     },
   });
@@ -672,7 +677,7 @@ test("public capabilities proves a fresh challenge and refuses malformed challen
       allowedHosts: [host],
       appOrigins: [origin],
       baseUrl: origin,
-      secureCookies: false,
+      secureCookieHost: undefined,
       webRoot,
       serverKey: key,
     },
@@ -687,4 +692,13 @@ test("public capabilities proves a fresh challenge and refuses malformed challen
   for (const value of ["bad", "A".repeat(44), `${"A".repeat(42)}B`]) {
     await error(await request("/capabilities", "GET", { "X-Emend-Challenge": value }), "invalid_request");
   }
+});
+
+test("root service worker is JavaScript with no-cache and the unchanged app CSP", async () => {
+  await writeFile(join(webRoot, "sw.js"), "self.addEventListener('fetch', () => {});");
+  const response = await app.request(`${origin}/sw.js`, { headers: { Host: host } });
+  expect(response.status).toBe(200);
+  expect(response.headers.get("Content-Type")).toContain("javascript");
+  expect(response.headers.get("Cache-Control")).toBe("no-cache");
+  expect(response.headers.get("Content-Security-Policy")).toBe(APP_CSP);
 });

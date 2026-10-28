@@ -4,7 +4,7 @@ import type { Db } from "../db/client.ts";
 import type { Instance } from "../state/instance.ts";
 import type { BlobStore } from "../store/blobs.ts";
 import { type AppEnv, requireScope } from "./auth/principal.ts";
-import { sessionCookie, verifySession, writeSessionCookie } from "./auth/sessions.ts";
+import { secureSessionRequest, sessionCookie, verifySession, writeSessionCookie } from "./auth/sessions.ts";
 import { verifyBearer } from "./auth/tokens.ts";
 import { contentRoutes } from "./content/route.ts";
 import { ReviewEvents } from "./events.ts";
@@ -20,6 +20,7 @@ import { blobRoutes } from "./routes/blobs.ts";
 import { capabilitiesRoutes } from "./routes/capabilities.ts";
 import { commentRoutes } from "./routes/comments.ts";
 import { deliveryRoutes } from "./routes/deliveries.ts";
+import { deviceRoutes } from "./routes/devices.ts";
 import { eventRoutes } from "./routes/events.ts";
 import { fileRoutes } from "./routes/files.ts";
 import { pairingRoutes } from "./routes/pairings.ts";
@@ -40,7 +41,7 @@ export interface AppDeps {
     serverKey: string;
     allowedHosts: string[];
     appOrigins: string[];
-    secureCookies: boolean;
+    secureCookieHost?: string;
     baseUrl: string;
     webRoot: string;
   };
@@ -120,7 +121,8 @@ export function createApp(deps: AppDeps) {
         const session = await verifySession(deps.db, secret, deps.now());
         if (session) {
           principal = session.principal;
-          if (session.renew && secret) writeSessionCookie(c, secret, deps.config.secureCookies);
+          if (session.renew && secret)
+            writeSessionCookie(c, secret, secureSessionRequest(c, deps.config.secureCookieHost));
         }
       }
       if (!principal) throw new ApiError("unauthorized");
@@ -133,6 +135,7 @@ export function createApp(deps: AppDeps) {
   });
   capabilitiesRoutes(app, deps.config.serverKey);
   pairingRoutes(app, deps);
+  deviceRoutes(app, deps);
   sessionRoutes(app, deps);
   blobRoutes(app, deps);
   publishRoutes(app, deps);

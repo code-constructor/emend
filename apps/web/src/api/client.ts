@@ -42,3 +42,12 @@ export async function pair(input: SessionRequest) {
 export async function getText(path: string, signal?: AbortSignal): Promise<string> {
   return (await request(path, { signal })).text();
 }
+
+export async function post<T>(path: string, body: unknown, schema: { parse(value: unknown): T }): Promise<T> {
+  const response = await request(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return schema.parse(await response.json());
+}

@@ -3,7 +3,7 @@ import type { Hono } from "hono";
 import type { AppDeps } from "../app.ts";
 import { codeLockout, redeemPairing } from "../auth/pairings.ts";
 import type { AppEnv } from "../auth/principal.ts";
-import { revokeSession, writeSessionCookie } from "../auth/sessions.ts";
+import { revokeSession, secureSessionRequest, writeSessionCookie } from "../auth/sessions.ts";
 import { parseBody } from "../http/body.ts";
 import { ApiError } from "../http/errors.ts";
 export function sessionRoutes(app: Hono<AppEnv>, deps: AppDeps) {
@@ -31,12 +31,12 @@ export function sessionRoutes(app: Hono<AppEnv>, deps: AppDeps) {
       );
       token = await pending;
     } else token = await redeem();
-    writeSessionCookie(c, token.secret, deps.config.secureCookies);
+    writeSessionCookie(c, token.secret, secureSessionRequest(c, deps.config.secureCookieHost));
     return c.body(null, 204);
   });
   app.delete("/api/v1/session", async (c) => {
     await revokeSession(deps.db, c.get("principal"), deps.now());
-    writeSessionCookie(c, "", deps.config.secureCookies, true);
+    writeSessionCookie(c, "", secureSessionRequest(c, deps.config.secureCookieHost), true);
     return c.body(null, 204);
   });
 }

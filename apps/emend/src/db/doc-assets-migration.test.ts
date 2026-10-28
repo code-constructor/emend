@@ -83,7 +83,7 @@ test("migration backfills only parent-listed assets and keeps them serving", asy
         baseUrl: origin,
         allowedHosts: ["127.0.0.1:3636"],
         appOrigins: [origin],
-        secureCookies: false,
+        secureCookieHost: undefined,
         serverKey: "k".repeat(43),
         webRoot: dir,
       },

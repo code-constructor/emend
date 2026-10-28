@@ -162,6 +162,8 @@ test("macOS writes the exact plist with port 4000 and XML-escaped paths", async 
   <dict>
     <key>EMEND_HOME</key>
     <string>${xmlHome}/state</string>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>
@@ -357,7 +359,7 @@ test.each(
   [
     [],
     ["unknown"],
-    ["install", "--tailscale"],
+    ["install", "--tailscale", "--tailscale"],
     ["install", "--port", "65536"],
     ["install", "--port", "4000", "--port", "4001"],
     ["status", "--port", "4000"],
@@ -712,4 +714,22 @@ test("launchd status uses the first service-level state, never nested states", a
   });
   expect(await invoke("status")).toBe(0);
   expect(stdout).toEqual([`emend: service installed but not running (${plistPath()})\n`]);
+});
+
+test.each(["linux", "darwin"])("%s service install preserves tailscale serve flags", async (platform) => {
+  options.platform = platform;
+  expect(await invoke("install", "--tailscale", "--port", "4000")).toBe(0);
+  const content = await readFile(platform === "linux" ? unitPath() : plistPath(), "utf8");
+  expect(content).toContain(platform === "linux" ? "serve --tailscale --port 4000" : "<string>--tailscale</string>");
+});
+
+test("launchd installs a fixed trusted PATH including both Homebrew locations", async () => {
+  options.platform = "darwin";
+  io.env.PATH = `${bin}:./node_modules/.bin:/synthetic/review/node_modules/.bin`;
+  expect(await invoke("install", "--tailscale")).toBe(0);
+  const content = await readFile(plistPath(), "utf8");
+  expect(content).toContain(
+    "<key>PATH</key>\n    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>",
+  );
+  expect(content).not.toContain("node_modules");
 });
