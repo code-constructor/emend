@@ -33,11 +33,19 @@ export const PublishRequest = z
     title: PublishManifest.shape.title,
     base: PublishManifest.shape.base.unwrap().nullable(),
     head: PublishManifest.shape.head.unwrap().nullable(),
+    main: PublishManifest.shape.main,
     topics: z.array(TopicMeta).max(LIMITS.topicsPerReview + 1),
     writeup: WriteupInput,
     files: z.array(PublishFile).max(LIMITS.filesPerRevision),
   })
   .superRefine((request, ctx) => {
+    if (
+      request.main !== undefined &&
+      request.main !== "writeup" &&
+      !request.files.some((file) => file.role === "doc" && file.path === request.main)
+    ) {
+      ctx.addIssue({ code: "custom", path: ["main"], message: "main is not a doc of this revision" });
+    }
     const issue = (message: string) => ctx.addIssue({ code: "custom", message });
     if ((request.base === null) !== (request.head === null)) issue("base and head must be supplied together");
     const topics = new Set(request.topics.map((topic) => topic.slug));

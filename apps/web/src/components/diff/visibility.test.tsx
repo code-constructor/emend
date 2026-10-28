@@ -49,6 +49,8 @@ const revision = (files: FileView[], threads: ThreadView[], title = "Topic"): Re
   seq: 1,
   base: null,
   head: null,
+  main: null,
+  writeupEmpty: false,
   files,
   threads,
   topics: [{ slug: "topic", title, summary: "", importance: 1 }],

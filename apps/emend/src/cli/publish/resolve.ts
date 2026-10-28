@@ -241,6 +241,7 @@ export async function resolvePublish(
     title: manifest.title,
     base: manifest.base ?? null,
     head: manifest.head ?? null,
+    main: manifest.main,
     topics,
     writeup: manifest.writeup,
     files,

@@ -113,6 +113,10 @@ read it. A doc's `path` is its published name. When the local filename differs, 
 relative to the worktree root.
 Markdown docs render as safe blocks. Use Markdown for the writeup, not an HTML page.
 
+Set optional `main` to `"writeup"` or a declared doc path to choose the opening page, even with an empty writeup.
+Without `main`, the app opens a nonempty writeup, then the first doc in manifest order, then the diff, or Writeup if nothing exists.
+An explicit visible URL tab wins; a main doc opens Docs scrolled to that document.
+
 `decisions: null` means the decisions section was not written because the original request is
 unavailable. When that request is known first-hand, replace null with Markdown describing how
 the change runs, assumptions, drift, and independent review findings. A docs-only review omits

@@ -115,6 +115,8 @@ export const revisions = sqliteTable(
     seq: integer("seq").notNull(),
     base: text("base"),
     head: text("head"),
+    main: text("main"),
+    writeupEmpty: integer("writeup_empty", { mode: "boolean" }).notNull().default(sql`0`),
     contentKey: text("content_key").notNull(),
     createdAt: createdAt(),
   },

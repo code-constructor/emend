@@ -19,9 +19,10 @@ import { Composer } from "../components/threads/Composer.tsx";
 import { ThreadList } from "../components/threads/ThreadList.tsx";
 import { Button } from "../components/ui/Button.tsx";
 import { claimDraft } from "../lib/composer-owner.ts";
-import { draftKey, type SavedDraft } from "../lib/drafts.ts";
+import { draftKey, hasDraft, type SavedDraft, subscribeDrafts } from "../lib/drafts.ts";
 import { useReviewEvents } from "../lib/events.ts";
 import { useInboxCollapsed, useLayout } from "../lib/layout.ts";
+import { openingView } from "../lib/opening-view.ts";
 import { type ReviewSearch, validateReviewSearch } from "../router.tsx";
 import { Inbox } from "./inbox.tsx";
 
@@ -97,6 +98,7 @@ function readingIntent(search: ReviewSearch, hash: string, seq: number) {
     reply,
     threadId: search.thread ?? (hash.startsWith("thread-") ? hash.slice(7) : undefined),
     routeThread: true,
+    block: "center" as ScrollLogicalPosition,
   };
 }
 function LoadedReview({ review, published }: { review: ReviewView; published: number }) {
@@ -110,10 +112,29 @@ function LoadedReview({ review, published }: { review: ReviewView; published: nu
   const navigate = useNavigate({ from: "/r/$reviewId" });
   const [collapsed, setCollapsed] = useInboxCollapsed();
   const layout = useLayout();
-  const setRevision = (rev: number) => {
-    void navigate({ search: { ...search, rev } });
-  };
   const revision = query.data;
+  const [resumed, setResumed] = useState<(SavedDraft & { tab: NonNullable<ReviewSearch["tab"]> }) | null>(null);
+  const endResume = () => setResumed((current) => (current === resumed ? null : current));
+  useEffect(() => {
+    if (!resumed) return;
+    const refresh = () => {
+      if (!hasDraft(resumed.key)) setResumed((current) => (current === resumed ? null : current));
+    };
+    refresh();
+    return subscribeDrafts(refresh);
+  }, [resumed]);
+  // A resumed editor needs its destination even when the revision has no content there.
+  const hasDocs = (revision?.docs.length ?? 0) > 0 || resumed?.tab === "docs";
+  const hasDiff = (revision?.files.some((file) => file.role === "diff") ?? false) || resumed?.tab === "diff";
+  const hasWriteup =
+    (!!revision && (!revision.writeupEmpty || revision.main === "writeup")) || resumed?.tab === "writeup";
+  const opening = revision ? openingView(revision) : { tab: "writeup" as const };
+  const useOpening = !search.tab || !{ writeup: hasWriteup, diff: hasDiff, docs: hasDocs, comments: true }[search.tab];
+  const tab = useOpening ? opening.tab : (search.tab ?? opening.tab);
+  const readingTab = tab === "diff" ? (hasWriteup ? "writeup" : hasDocs ? "docs" : "comments") : tab;
+  const setRevision = (rev: number) => {
+    void navigate({ search: { ...search, tab, rev } });
+  };
   const [requested, setRequested] = useState<ReturnType<typeof readingIntent> | null>(null);
   const [htmlNavigation, setHtmlNavigation] = useState<HtmlNavigation>();
   const pending = useRef<ReturnType<typeof readingIntent> | null>(null);
@@ -145,7 +166,6 @@ function LoadedReview({ review, published }: { review: ReviewView; published: nu
     event.preventDefault();
     navigateReading(validateReviewSearch(Object.fromEntries(url.searchParams)), url.hash.slice(1));
   };
-  const [resumed, setResumed] = useState<SavedDraft | null>(null);
   const resume = (draft: SavedDraft) => {
     if (draft.commentId && revision) {
       const thread = revision.threads.find((thread) =>
@@ -166,22 +186,25 @@ function LoadedReview({ review, published }: { review: ReviewView; published: nu
     }
     if (isDiffTarget(draft.target)) {
       claimDraft(draft.key, "diff");
-      setResumed({ ...draft });
+      setResumed({ ...draft, tab: "diff" });
       navigateReading({ ...search, tab: "diff", thread: undefined });
       return;
     }
     claimDraft(draft.key, "resumed");
-    setResumed({ ...draft });
     if (draft.target.kind === "html-span") {
+      setResumed({ ...draft, tab: "docs" });
       navigateReading({ ...search, tab: "docs", thread: undefined }, `html-doc-${draft.target.path}`);
       return;
     }
     const placement = draftPlacement(draft, revision);
-    if (placement?.status === "placed" && "blockId" in placement.location)
-      navigateReading(
-        { ...search, tab: placement.location.kind === "doc-span" ? "docs" : "writeup", thread: undefined },
-        `block-${placement.location.blockId}`,
-      );
+    if (placement?.status === "placed" && "blockId" in placement.location) {
+      const destination = placement.location.kind === "doc-span" ? "docs" : "writeup";
+      setResumed({ ...draft, tab: destination });
+      navigateReading({ ...search, tab: destination, thread: undefined }, `block-${placement.location.blockId}`);
+    } else {
+      setResumed({ ...draft, tab: readingTab });
+      navigateReading({ ...search, tab: readingTab, thread: undefined });
+    }
   };
   // Data/DOM changes may fulfill an existing intent, but only navigation creates one.
   useEffect(() => {
@@ -192,6 +215,11 @@ function LoadedReview({ review, published }: { review: ReviewView; published: nu
     previous.current = { navigation: current.navigation, requested };
     const intent = pending.current;
     if (!revision || !intent || intent.navigation !== current.navigation) return;
+    if (!intent.elementId && !intent.threadId && useOpening && opening.doc) {
+      const doc = revision.docs.find((doc) => doc.path === opening.doc);
+      intent.elementId = `${doc?.kind === "html" ? "html-doc" : "doc"}-${opening.doc}`;
+      intent.block = "start";
+    }
     const thread = revision.threads.find((thread) => thread.id === intent.threadId);
     if (intent.routeThread) {
       if (intent.threadId && !thread) return;
@@ -229,11 +257,16 @@ function LoadedReview({ review, published }: { review: ReviewView; published: nu
     const element = document.getElementById(intent.elementId);
     if (!element) return;
     pending.current = null;
-    element.scrollIntoView?.({ block: "center" });
+    element.scrollIntoView?.({ block: intent.block });
   });
-  const hasDocs = (revision?.docs.length ?? 0) > 0;
-  const tab = search.tab === "docs" && !hasDocs ? "writeup" : search.tab;
-  const tabProps = { id: review.id, search: { ...search, tab }, hasDocs, unsentCount: review.unsentCount };
+  const tabProps = {
+    id: review.id,
+    search: { ...search, tab },
+    hasDocs,
+    hasDiff,
+    hasWriteup,
+    unsentCount: review.unsentCount,
+  };
   const inbox = <Inbox compact />;
   const ready = Math.max(published, review.newestRevision);
   return (
@@ -254,6 +287,7 @@ function LoadedReview({ review, published }: { review: ReviewView; published: nu
         inbox={inbox}
         collapsed={collapsed}
         tab={tab}
+        hasDiff={hasDiff}
         phoneTabs={<PhoneTabs {...tabProps} />}
         sendBar={
           <SendBar
@@ -309,7 +343,7 @@ function LoadedReview({ review, published }: { review: ReviewView; published: nu
                 key={`${seq}:${tab}`}
                 reviewId={review.id}
                 revision={revision}
-                tab={tab}
+                tab={readingTab}
                 onResume={resume}
                 htmlNavigation={htmlNavigation}
                 composingPath={resumed?.target?.kind === "html-span" ? resumed.target.path : undefined}
@@ -324,8 +358,8 @@ function LoadedReview({ review, published }: { review: ReviewView; published: nu
                 target={resumed.target}
                 threadId={resumed.threadId}
                 storageKey={resumed.key}
-                onSaved={() => setResumed(null)}
-                onCancel={() => setResumed(null)}
+                onSaved={endResume}
+                onCancel={endResume}
                 wrap={(editor) => (
                   <section
                     aria-label="Resumed comment"
@@ -350,6 +384,7 @@ function LoadedReview({ review, published }: { review: ReviewView; published: nu
               reviewId={review.id}
               revision={revision}
               resume={resumed?.target && isDiffTarget(resumed.target) ? resumed : undefined}
+              onResumeEnd={endResume}
             />
           ) : (
             <p role={query.isError ? "alert" : "status"} className="p-5">

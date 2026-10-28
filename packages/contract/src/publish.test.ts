@@ -21,6 +21,17 @@ const doc = {
   newBlob: "b".repeat(64),
   flag: null,
 };
+test.each([undefined, "writeup", "plan.html"])("publish request retains main %s", (main) => {
+  expect(PublishRequest.parse({ ...request, files: [doc], main }).main).toBe(main);
+});
+test.each(["diff", "missing.md", "style.css"])("publish request refuses non-doc main %s", (main) => {
+  const result = PublishRequest.safeParse({ ...request, files: [doc], main });
+  expect(result.success).toBe(false);
+  if (!result.success)
+    expect(result.error.issues).toContainEqual(
+      expect.objectContaining({ path: ["main"], message: "main is not a doc of this revision" }),
+    );
+});
 test("publish accepts resolved docs and assets and rejects undeclared references", () => {
   expect(PublishRequest.parse(request)).toMatchObject(request);
   const asset = { ...doc, path: "style.css", role: "asset", assets: undefined, parent: "plan.html" };

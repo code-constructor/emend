@@ -98,6 +98,14 @@ async function computePublish(
   input: PublishRequest,
   deps: Deps,
 ): Promise<PublishResponse> {
+  const writeup = input.writeup;
+  const writeupEmpty = [
+    writeup.overview,
+    writeup.tldr,
+    writeup.decisions,
+    writeup.glossary,
+    ...Object.values(writeup.topics).flatMap((topic) => [topic.why, topic.example, topic.body]),
+  ].every((section) => !section?.trim());
   const worker = deps.executor ? undefined : workerExecutor();
   const run = deps.executor ?? worker;
   if (!run) throw new Error("Missing executor");
@@ -433,6 +441,8 @@ async function computePublish(
           seq: (previous?.seq ?? 0) + 1,
           base: input.base,
           head: input.head,
+          main: input.main ?? null,
+          writeupEmpty,
           contentKey: randomBytes(32).toString("base64url"),
         };
         await q.insert(revisions).values(revision);

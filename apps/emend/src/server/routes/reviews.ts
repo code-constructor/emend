@@ -241,6 +241,8 @@ async function revisionView(ownerId: string, q: Queries, deps: AppDeps, reviewId
     seq,
     base: revision.base,
     head: revision.head,
+    main: revision.main,
+    writeupEmpty: revision.writeupEmpty,
     topics: topicRows.map((topic) => ({
       slug: topic.slug,
       title: topic.title,

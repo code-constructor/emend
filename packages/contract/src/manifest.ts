@@ -51,6 +51,7 @@ export const PublishManifest = z
       .refine((title) => /\S/.test(title), "title must not be blank"),
     base: commit.optional(),
     head: z.union([commit, z.literal("worktree")]).optional(),
+    main: z.union([z.literal("writeup"), FilePath]).optional(),
     topics: z.array(TopicMeta).max(LIMITS.topicsPerReview),
     files: z
       .array(
@@ -65,6 +66,13 @@ export const PublishManifest = z
     writeup: WriteupInput,
   })
   .superRefine((manifest, ctx) => {
+    if (
+      manifest.main !== undefined &&
+      manifest.main !== "writeup" &&
+      !manifest.files.some((file) => file.role === "doc" && file.path === manifest.main)
+    ) {
+      ctx.addIssue({ code: "custom", path: ["main"], message: "main is not a doc of this revision" });
+    }
     if ((manifest.base === undefined) !== (manifest.head === undefined)) {
       ctx.addIssue({
         code: "custom",

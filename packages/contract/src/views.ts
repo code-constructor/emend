@@ -142,6 +142,8 @@ export const RevisionView = z
     seq: z.int().positive(),
     base: commit.nullable(),
     head: z.union([commit, z.literal("worktree")]).nullable(),
+    main: z.union([z.literal("writeup"), FilePath]).nullable(),
+    writeupEmpty: z.boolean(),
     topics: z.array(TopicMeta).max(LIMITS.topicsPerReview + 1),
     files: z.array(FileView).max(LIMITS.filesPerRevision),
     writeup: RenderedWriteup,

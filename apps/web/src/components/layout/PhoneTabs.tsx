@@ -5,24 +5,29 @@ export function ReviewTabs({
   id,
   search,
   hasDocs,
+  hasWriteup,
+  hasDiff,
   unsentCount,
   phone = false,
 }: {
   id: string;
   search: ReviewSearch;
   hasDocs: boolean;
+  hasWriteup: boolean;
+  hasDiff: boolean;
   unsentCount: number;
   phone?: boolean;
 }) {
   const tabs = phone ? (["writeup", "diff", "docs", "comments"] as const) : (["writeup", "docs", "comments"] as const);
-  const active = !phone && search.tab === "diff" ? "writeup" : search.tab;
+  const active =
+    !phone && search.tab === "diff" ? (hasWriteup ? "writeup" : hasDocs ? "docs" : "comments") : search.tab;
   return (
     <nav
       aria-label={phone ? "Review tabs" : "Reading tabs"}
       className={`flex shrink-0 border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-950 ${phone ? "border-t pb-[env(safe-area-inset-bottom)]" : "sticky top-0 border-b"}`}
     >
       {tabs
-        .filter((tab) => tab !== "docs" || hasDocs)
+        .filter((tab) => ({ writeup: hasWriteup, diff: hasDiff, docs: hasDocs, comments: true })[tab])
         .map((tab) => (
           <Link
             key={tab}

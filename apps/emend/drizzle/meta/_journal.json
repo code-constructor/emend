@@ -43,6 +43,13 @@
       "when": 1793141307107,
       "tag": "0005_sparkling_mercury",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1793155028876,
+      "tag": "0006_early_zodiak",
+      "breakpoints": true
     }
   ]
 }

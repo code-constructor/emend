@@ -56,6 +56,8 @@ const revision = (files: FileView[], values: Partial<RevisionView> = {}): Revisi
   seq: 2,
   base: null,
   head: null,
+  main: null,
+  writeupEmpty: false,
   topics: [{ slug: "first", title: "First", importance: 10, summary: "Synthetic summary" }],
   files,
   threads: [],
@@ -89,6 +91,7 @@ async function mount(view: RevisionView) {
           phoneTabs={null}
           collapsed
           tab="diff"
+          hasDiff
           diff={<DiffPane reviewId={reviewId} revision={view} parser={parser} />}
         />
       </QueryClientProvider>

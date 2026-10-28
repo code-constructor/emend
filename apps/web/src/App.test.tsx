@@ -1,5 +1,5 @@
 // @vitest-environment-options {"settings":{"disableIframePageLoading":true}}
-import type { FileView, RenderedBlock, Target, ThreadView } from "@emend/contract";
+import type { FileView, RenderedBlock, RevisionView, Target, ThreadView } from "@emend/contract";
 import { QueryClient } from "@tanstack/react-query";
 import { createMemoryHistory } from "@tanstack/react-router";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -8,6 +8,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { App } from "./App.tsx";
 import { draftKey, editDraftKey } from "./lib/drafts.ts";
 import { rememberPairingSecret, takePairingSecret } from "./lib/pairing-secret.ts";
+import { validateReviewSearch } from "./router.tsx";
 
 const id = "11111111-1111-4111-8111-111111111111";
 const item = {
@@ -25,12 +26,27 @@ const item = {
   updatedAt: "2026-01-01T00:00:00.000Z",
   movedTo: null,
 };
+const diffFile: FileView = {
+  id: "33333333-3333-4333-8333-333333333333",
+  path: "new.txt",
+  oldPath: null,
+  role: "diff",
+  status: "modified",
+  topic: "topic",
+  order: 0,
+  mediaType: "text/plain",
+  flag: "binary",
+  hasOld: false,
+  hasNew: false,
+};
 const revision = {
   seq: 1,
   base: null,
   head: null,
+  main: null,
+  writeupEmpty: false,
   topics: [],
-  files: [],
+  files: [{ ...diffFile, topic: null }],
   writeup: { sections: [{ key: "overview", label: "Overview", topic: null, blocks: [] }] },
   docs: [{ path: "plan.md", kind: "markdown", blocks: [] }],
   threads: [],
@@ -111,6 +127,157 @@ beforeEach(() => {
   });
   vi.stubGlobal("fetch", fetchMock);
   client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+});
+
+function openingRevision(change: Partial<RevisionView>, previous?: Partial<RevisionView>) {
+  const fallback = fetchMock.getMockImplementation();
+  fetchMock.mockImplementation(async (path, init) =>
+    path.includes("/revisions/")
+      ? Response.json({
+          ...revision,
+          writeupEmpty: true,
+          files: [],
+          docs: [],
+          seq: Number(path.split("/").at(-1)),
+          ...(path.endsWith("/1") && previous ? previous : change),
+        })
+      : (fallback?.(path, init) as Promise<Response>),
+  );
+}
+
+test("review search leaves an absent tab unset", () => {
+  expect(validateReviewSearch({}).tab).toBeUndefined();
+  expect(validateReviewSearch({ tab: "writeup" }).tab).toBe("writeup");
+});
+
+test.each([
+  {
+    name: "diff-only",
+    change: {
+      files: [
+        { ...diffFile, role: "diff" as const, status: "modified" as const, flag: "binary" as const, topic: null },
+      ],
+    },
+    tab: "Diff",
+  },
+  { name: "one doc", change: { docs: [{ path: "plan.md", kind: "markdown" as const, blocks: [] }] }, tab: "Docs" },
+  {
+    name: "several docs",
+    change: {
+      docs: [
+        { path: "z.md", kind: "markdown" as const, blocks: [] },
+        { path: "a.md", kind: "markdown" as const, blocks: [] },
+      ],
+    },
+    tab: "Docs",
+  },
+  { name: "writeup text", change: { writeupEmpty: false }, tab: "Writeup" },
+])("review without tab opens $name on $tab", async ({ change, tab }) => {
+  width = 390;
+  openingRevision(change);
+  mount(`/r/${id}`);
+  await waitFor(() => expect(screen.getByRole("link", { name: tab }).getAttribute("aria-current")).toBe("page"));
+  expect(screen.getByRole("link", { name: /Comments/ })).toBeTruthy();
+  expect(screen.queryByTestId("diff-pane") !== null).toBe(tab === "Diff");
+});
+
+test.each([390, 1280])("empty Writeup and absent Diff tabs are hidden at %s px", async (size) => {
+  width = size;
+  openingRevision({ docs: [{ path: "plan.md", kind: "markdown", blocks: [] }] });
+  mount(`/r/${id}?tab=writeup`);
+  await screen.findByRole("heading", { name: "plan.md" });
+  expect(screen.queryByRole("link", { name: "Writeup" })).toBeNull();
+  expect(screen.queryByRole("link", { name: "Diff" })).toBeNull();
+  expect(screen.getByRole("link", { name: "Docs" }).getAttribute("aria-current")).toBe("page");
+  expect(screen.getByRole("link", { name: /Comments/ })).toBeTruthy();
+  expect(screen.queryByTestId("diff-pane")).toBeNull();
+  expect(screen.getByTestId("reading-pane").className).toContain("flex-1");
+});
+
+test("explicit Diff stays selected even with a main doc", async () => {
+  width = 390;
+  openingRevision({
+    main: "plan.md",
+    docs: [{ path: "plan.md", kind: "markdown", blocks: [] }],
+    files: [{ ...diffFile, role: "diff", status: "modified", flag: "binary", topic: null }],
+  });
+  mount(`/r/${id}?tab=diff`);
+  await screen.findByTestId("diff-pane");
+  expect(screen.getByRole("link", { name: "Diff" }).getAttribute("aria-current")).toBe("page");
+});
+
+test("explicit empty main writeup remains visible", async () => {
+  openingRevision({ main: "writeup" });
+  mount(`/r/${id}`);
+  await waitFor(() => expect(screen.getByRole("link", { name: "Writeup" }).getAttribute("aria-current")).toBe("page"));
+});
+
+test.each(["markdown", "html"] as const)(
+  "opening main %s doc scrolls once and preserves the full doc list",
+  async (kind) => {
+    const scroll = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => {});
+    const path = kind === "html" ? "last.html" : "last.md";
+    openingRevision({
+      main: path,
+      writeupEmpty: false,
+      docs: [
+        { path: "first.md", kind: "markdown", blocks: [] },
+        ...(kind === "html" ? [{ path, kind, contentUrl: "/content/key/last.html" }] : [{ path, kind, blocks: [] }]),
+      ],
+    });
+    mount(`/r/${id}`);
+    await screen.findByRole("heading", { name: path });
+    expect(screen.getByRole("heading", { name: "first.md" })).toBeTruthy();
+    const anchor = document.getElementById(`${kind === "html" ? "html-doc" : "doc"}-${path}`);
+    await waitFor(() => expect(scroll.mock.instances).toContain(anchor));
+    expect(scroll.mock.calls[scroll.mock.instances.indexOf(anchor as HTMLElement)]).toEqual([{ block: "start" }]);
+    const calls = scroll.mock.calls.length;
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ["revision", id, 1] });
+    });
+    expect(scroll).toHaveBeenCalledTimes(calls);
+  },
+);
+
+test.each(["writeup", "docs", "diff"] as const)("revision change falls back when %s becomes hidden", async (tab) => {
+  width = 390;
+  newest = 2;
+  openingRevision(
+    { docs: [{ path: "next.md", kind: "markdown", blocks: [] }] },
+    {
+      writeupEmpty: false,
+      files: [{ ...diffFile, role: "diff", status: "modified", flag: "binary", topic: null }],
+      docs: tab === "docs" ? [{ path: "old.md", kind: "markdown", blocks: [] }] : [],
+    },
+  );
+  // The Docs case goes to a writeup-only revision instead.
+  if (tab === "docs")
+    openingRevision({ writeupEmpty: false }, { docs: [{ path: "old.md", kind: "markdown", blocks: [] }] });
+  mount(`/r/${id}?rev=1&tab=${tab}`);
+  await waitFor(() =>
+    expect(
+      screen.getByRole("link", { name: tab.charAt(0).toUpperCase() + tab.slice(1) }).getAttribute("aria-current"),
+    ).toBe("page"),
+  );
+  fireEvent.change(screen.getByLabelText("Revision 1"), { target: { value: "2" } });
+  await waitFor(() =>
+    expect(screen.getByRole("link", { name: tab === "docs" ? "Writeup" : "Docs" }).getAttribute("aria-current")).toBe(
+      "page",
+    ),
+  );
+});
+
+test("revision picker keeps the visible opening tab even when no tab was in the URL", async () => {
+  newest = 2;
+  openingRevision(
+    { writeupEmpty: false, docs: [{ path: "next.md", kind: "markdown", blocks: [] }] },
+    { docs: [{ path: "old.md", kind: "markdown", blocks: [] }] },
+  );
+  mount(`/r/${id}?rev=1`);
+  await screen.findByRole("heading", { name: "old.md" });
+  fireEvent.change(screen.getByLabelText("Revision 1"), { target: { value: "2" } });
+  await screen.findByRole("heading", { name: "next.md" });
+  expect(screen.getByRole("link", { name: "Docs" }).getAttribute("aria-current")).toBe("page");
 });
 afterEach(async () => {
   cleanup();
@@ -1022,6 +1189,7 @@ test("a resumed span draft scrolls to its block once, including after thread SSE
   await screen.findByText("Plant a seed.");
   await waitFor(() => expect(scroll).toHaveBeenCalledTimes(1));
   expect((scroll.mock.instances[0] as HTMLElement).id).toBe(`block-${draftBlock.id}`);
+  expect(scroll.mock.calls[0]).toEqual([{ block: "center" }]);
   const instructions = screen.getByLabelText("Instructions");
   act(() => instructions.focus());
   const focus = vi.spyOn(HTMLElement.prototype, "focus");
@@ -1063,6 +1231,7 @@ test("a cold thread link focuses its reply once after loading and never on an SS
   await waitFor(() => expect(document.activeElement).toBe(reply));
   expect(focus).toHaveBeenCalledTimes(1);
   expect(scroll).toHaveBeenCalledTimes(1);
+  expect(scroll.mock.calls[0]).toEqual([{ block: "center" }]);
   const instructions = screen.getByLabelText("Instructions");
   act(() => instructions.focus());
   focus.mockClear();
@@ -1130,19 +1299,6 @@ test("Inbox to Devices and Back keeps the router's default uncached scrolling", 
   await waitFor(() => expect(scroll).toHaveBeenCalledExactlyOnceWith({ top: 0, left: 0, behavior: undefined }));
 });
 
-const diffFile = {
-  id: "33333333-3333-4333-8333-333333333333",
-  path: "new.txt",
-  oldPath: null,
-  role: "diff",
-  status: "modified",
-  topic: "topic",
-  order: 0,
-  mediaType: "text/plain",
-  flag: "binary",
-  hasOld: false,
-  hasNew: false,
-};
 const diffTarget: Target = { kind: "file", path: "new.txt" };
 const diffThread: ThreadView = {
   id,
@@ -1309,4 +1465,118 @@ test("a pending edit resumes in Comments and a completed PATCH preserves newer e
   fireEvent.click(reading.getByRole("button", { name: "Save edit" }));
   await waitFor(() => expect(localStorage.getItem(editDraftKey(id, id))).toBeNull());
   expect(submitted).toEqual([JSON.stringify({ body: "First edit" }), JSON.stringify({ body: "Second unsent edit" })]);
+});
+
+test.each(
+  [390, 1280].flatMap((size) =>
+    (["file", "topic"] as const).flatMap((kind) =>
+      (["save", "cancel", "discard"] as const).map((end) => ({ size, kind, end })),
+    ),
+  ),
+)("resumed $kind draft keeps empty Diff visible at $size px until $end", async ({ size, kind, end }) => {
+  width = size;
+  openingRevision({
+    writeupEmpty: false,
+    topics: [{ slug: "retained", title: "Retained", importance: 1, summary: "" }],
+  });
+  const target: Target = kind === "file" ? { kind, path: "removed.ts" } : { kind, slug: "retained" };
+  const key = draftKey(id, target);
+  localStorage.setItem(key, "Resume this draft");
+  const fallback = fetchMock.getMockImplementation();
+  fetchMock.mockImplementation((path, init) =>
+    init?.method === "POST" ? Promise.resolve(Response.json({})) : (fallback?.(path, init) as Promise<Response>),
+  );
+  mount(`/r/${id}?tab=comments`);
+  fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+  const pane = await screen.findByTestId("diff-pane");
+  const editor = (await within(pane).findByLabelText("Comment")) as HTMLTextAreaElement;
+  expect(editor.value).toBe("Resume this draft");
+  await waitFor(() => expect(document.activeElement).toBe(editor));
+  if (size === 390) expect(screen.getByRole("link", { name: "Diff" }).getAttribute("aria-current")).toBe("page");
+  // Deleting the draft's text while editing does not mean Discard.
+  fireEvent.change(editor, { target: { value: "" } });
+  expect(screen.getByTestId("diff-pane")).toBe(pane);
+  fireEvent.change(editor, { target: { value: "Resume this draft" } });
+  if (end === "discard") {
+    fireEvent.click(screen.getByRole("link", { name: /Comments/ }));
+    const drafts = within(await screen.findByRole("region", { name: "Unsaved comments" }));
+    fireEvent.click(drafts.getByRole("button", { name: "Discard" }));
+  } else fireEvent.click(within(pane).getByRole("button", { name: end === "save" ? "Save comment" : "Cancel" }));
+  await waitFor(() => expect(screen.queryByTestId("diff-pane")).toBeNull());
+  expect(screen.queryByRole("link", { name: "Diff" })).toBeNull();
+  expect(localStorage.getItem(key)).toBe(end === "cancel" ? "Resume this draft" : null);
+  if (end === "save")
+    expect(
+      fetchMock.mock.calls.some(
+        ([path, init]) =>
+          path === `/api/v1/reviews/${id}/threads` &&
+          JSON.stringify(JSON.parse(String(init?.body))) ===
+            JSON.stringify({ revision: 1, target, body: "Resume this draft" }),
+      ),
+    ).toBe(true);
+});
+
+test.each([390, 1280])("a removed HTML draft keeps Docs visible at %s px until cancelled", async (size) => {
+  width = size;
+  openingRevision({ writeupEmpty: false });
+  const target: Target = { kind: "html-span", path: "removed.html", quote: "seed", prefix: "", suffix: "" };
+  localStorage.setItem(draftKey(id, target), "HTML draft");
+  mount(`/r/${id}?tab=comments`);
+  fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+  const composer = within(await screen.findByRole("region", { name: "Resumed comment" }));
+  expect((composer.getByLabelText("Comment") as HTMLTextAreaElement).value).toBe("HTML draft");
+  await waitFor(() => expect(screen.getByRole("link", { name: "Docs" }).getAttribute("aria-current")).toBe("page"));
+  fireEvent.click(composer.getByRole("button", { name: "Cancel" }));
+  await waitFor(() => expect(screen.queryByRole("link", { name: "Docs" })).toBeNull());
+  expect(screen.queryByRole("region", { name: "Resumed comment" })).toBeNull();
+  expect(screen.getByRole("link", { name: "Writeup" }).getAttribute("aria-current")).toBe("page");
+});
+
+test.each(["writeup", "docs"] as const)(
+  "an active %s draft keeps its tab across an empty revision until cancelled",
+  async (tab) => {
+    width = 390;
+    newest = 2;
+    const block: RenderedBlock =
+      tab === "writeup" ? draftBlock : { ...draftBlock, id: "doc-12345678-12345678", section: "doc-12345678" };
+    const target: Target =
+      tab === "writeup" ? draftTarget : { ...draftTarget, kind: "doc-span", path: "old.md", blockId: block.id };
+    openingRevision(
+      tab === "writeup"
+        ? { docs: [{ path: "next.md", kind: "markdown", blocks: [] }], writeup: { sections: [] } }
+        : { writeupEmpty: false },
+      tab === "writeup"
+        ? {
+            writeupEmpty: false,
+            writeup: { sections: [{ key: "overview", label: "Overview", topic: null, blocks: [block] }] },
+          }
+        : { docs: [{ path: "old.md", kind: "markdown", blocks: [block] }] },
+    );
+    localStorage.setItem(draftKey(id, target), "Keep editing");
+    mount(`/r/${id}?rev=1&tab=comments`);
+    fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+    const name = tab === "writeup" ? "Writeup" : "Docs";
+    await waitFor(() => expect(screen.getByRole("link", { name }).getAttribute("aria-current")).toBe("page"));
+    fireEvent.change(screen.getByLabelText("Revision 1"), { target: { value: "2" } });
+    await waitFor(() => expect(screen.queryByText("Plant a seed.")).toBeNull());
+    expect(screen.getByRole("link", { name }).getAttribute("aria-current")).toBe("page");
+    const composer = within(screen.getByRole("region", { name: "Resumed comment" }));
+    expect((composer.getByLabelText("Comment") as HTMLTextAreaElement).value).toBe("Keep editing");
+    fireEvent.click(composer.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("link", { name })).toBeNull());
+    expect(
+      screen.getByRole("link", { name: tab === "writeup" ? "Docs" : "Writeup" }).getAttribute("aria-current"),
+    ).toBe("page");
+  },
+);
+
+test("an unplaced reading draft resumed beside Diff stays visible when resized to a phone", async () => {
+  openingRevision({ files: [{ ...diffFile, topic: null }], writeup: { sections: [] } });
+  localStorage.setItem(draftKey(id, draftTarget), "Unplaced writeup draft");
+  mount(`/r/${id}?tab=diff`);
+  fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+  expect(((await screen.findByLabelText("Comment")) as HTMLTextAreaElement).value).toBe("Unplaced writeup draft");
+  act(() => resize(390));
+  expect(((await screen.findByLabelText("Comment")) as HTMLTextAreaElement).value).toBe("Unplaced writeup draft");
+  expect(screen.getByRole("link", { name: /Comments/ }).getAttribute("aria-current")).toBe("page");
 });

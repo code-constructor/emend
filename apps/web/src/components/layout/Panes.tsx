@@ -10,6 +10,7 @@ export function Panes({
   sendBar,
   collapsed,
   tab,
+  hasDiff,
 }: {
   inbox: ReactNode;
   header: ReactNode;
@@ -19,6 +20,7 @@ export function Panes({
   sendBar?: ReactNode;
   collapsed: boolean;
   tab: string;
+  hasDiff: boolean;
 }) {
   const layout = useLayout();
   return (
@@ -40,7 +42,7 @@ export function Panes({
               {reading}
             </section>
           )}
-          {(layout !== "phone" || tab === "diff") && (
+          {hasDiff && (layout !== "phone" || tab === "diff") && (
             <section
               aria-label="Diff"
               data-testid="diff-pane"

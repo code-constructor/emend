@@ -4,10 +4,13 @@ import { InboxPage } from "./routes/inbox.tsx";
 import { PairPage } from "./routes/pair.tsx";
 import { ReviewPage } from "./routes/review.tsx";
 
-export type ReviewSearch = { rev?: number; tab: "writeup" | "diff" | "docs" | "comments"; thread?: string };
+export type ReviewSearch = { rev?: number; tab?: "writeup" | "diff" | "docs" | "comments"; thread?: string };
 export function validateReviewSearch(input: Record<string, unknown>): ReviewSearch {
   const rev = typeof input.rev === "string" || typeof input.rev === "number" ? Number(input.rev) : NaN;
-  const tab = input.tab === "diff" || input.tab === "docs" || input.tab === "comments" ? input.tab : "writeup";
+  const tab =
+    input.tab === "writeup" || input.tab === "diff" || input.tab === "docs" || input.tab === "comments"
+      ? input.tab
+      : undefined;
   return {
     tab,
     // Router merges validation over the raw search: explicitly clear rejected values.

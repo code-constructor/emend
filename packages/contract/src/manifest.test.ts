@@ -16,6 +16,21 @@ const manifest = {
 };
 
 describe("publish manifest", () => {
+  test.each([undefined, "writeup", "docs/plan.md"])("accepts main %s", (main) => {
+    expect(PublishManifest.parse({ ...manifest, main, files: [{ path: "docs/plan.md", role: "doc" }] }).main).toBe(
+      main,
+    );
+  });
+
+  test.each(["src/router.ts", "missing.md", "diff"])("refuses non-doc main %s", (main) => {
+    const result = PublishManifest.safeParse({ ...manifest, main });
+    expect(result.success).toBe(false);
+    if (!result.success)
+      expect(result.error.issues).toContainEqual(
+        expect.objectContaining({ path: ["main"], message: "main is not a doc of this revision" }),
+      );
+  });
+
   test("accepts docs-only and resolved commit or worktree ranges", () => {
     expect(
       PublishManifest.parse({ ...manifest, files: [{ path: "docs/plan.md", role: "doc", source: "drafts/plan.md" }] }),

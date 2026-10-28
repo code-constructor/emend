@@ -12,6 +12,8 @@ const revision = {
   seq: 1,
   base: null,
   head: null,
+  main: null,
+  writeupEmpty: false,
   topics: [],
   files: [],
   writeup: { sections: [] },

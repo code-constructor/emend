@@ -140,10 +140,18 @@ with review id as a stable tie breaker, at most `inboxItems` (200) rows.
 `GET /api/v1/reviews/:id` returns `ReviewView = InboxItem & { revisions: { seq, createdAt }[] }`,
 with revisions ascending by sequence. Both are reviewer-only, as is the revision endpoint below.
 
-`GET /api/v1/reviews/:id/revisions/:seq` returns `RevisionView = { seq, base, head,
+`GET /api/v1/reviews/:id/revisions/:seq` returns `RevisionView = { seq, base, head, main, writeupEmpty,
 topics: TopicMeta[], files: FileView[], writeup: RenderedWriteup, docs, threads: ThreadView[],
 changedBlocks: { blockId: BlockId, revision: number }[] }`.
 Base/head are nullable full commit hashes; head also permits `worktree`.
+`main` is `"writeup" | FilePath | null`: the manifest's main page, or null when omitted.
+`writeupEmpty` is a boolean computed at publish from the source Markdown, before rendering:
+true only when overview, tldr, decisions, glossary, and every topic's why, example and body
+are missing or whitespace only. Both fields are stored on the revision; revisions predating
+these fields read as `main: null`, `writeupEmpty: false` and keep opening on Writeup.
+Without an explicit visible `tab` in the URL, the app opens the main page when set; otherwise
+it opens Writeup if it has text, the first doc in manifest order, Diff if any file has role
+`diff`, or Writeup when there is nothing. A main doc opens Docs scrolled to that document.
 `FileView = { id, path, oldPath, role, status, topic, order, mediaType, flag, hasOld, hasNew }`.
 `oldPath`, `status`, `topic` and `flag` are nullable. Files are in their stored order; assets
 are omitted. `hasOld` and `hasNew` indicate stored sides, without exposing blob hashes.
@@ -314,7 +322,8 @@ a missing or invalid JSON record, credentials, path, query or fragment falls bac
 ### Manifest and topics
 
 `PublishRequest = { reviewId?, reviewKey, repo: { key, name } | null, branch: string | null,
-title, base: commit | null, head: commit | "worktree" | null, topics, writeup, files }`.
+title, base: commit | null, head: commit | "worktree" | null, main?, topics, writeup, files }`.
+`main` follows the manifest's type and doc-membership validation below; the CLI carries it unchanged.
 The keys are lowercase 64-character SHA-256 hex; `reviewId` is a UUID. Repo names obey
 `titleChars`, branches `pathChars`, and title, commits and writeup obey the manifest limits.
 There are at most `topicsPerReview` declared topics plus the optional generated Other changes
@@ -355,7 +364,10 @@ Placement exceeding 30 seconds returns 413 `too_large` with "The placement timed
 Other placement failures return 400 `invalid_request` with "The comments could not be placed."
 These failures never leave a partial revision.
 
-`PublishManifest = { version: 1, title, base?, head?, topics: TopicMeta[], files, writeup }`.
+`PublishManifest = { version: 1, title, base?, head?, main?, topics: TopicMeta[], files, writeup }`.
+`main?: "writeup" | FilePath` declares the opening page. A path must name a file of this
+manifest with `role: "doc"`; otherwise validation issues `["main"]` with the message
+`main is not a doc of this revision`. `"writeup"` opens Writeup even if its Markdown is empty.
 `base` and `head` appear together or neither appears. Commits are fully resolved lowercase hex
 object ids (40 characters for SHA-1 or 64 for SHA-256); `head` also accepts `"worktree"`.
 Docs-only reviews can omit both. Manifest files are `{ path, role: "diff" | "doc", topic?, source? }`;

@@ -123,5 +123,14 @@ export const MIGRATIONS: readonly { tag: string; when: number; hash: string; sta
       "CREATE INDEX `agent_waiters_owner_review_expiry_idx` ON `agent_waiters` (`owner_id`,`review_id`,`expires_at`);",
       "CREATE UNIQUE INDEX `agent_waiters_owner_id_unique` ON `agent_waiters` (`owner_id`,`id`);"
     ]
+  },
+  {
+    "tag": "0006_early_zodiak",
+    "when": 1793155028876,
+    "hash": "248905441cb81f745af87cc5d0262281bfede24c48ae16f4fb29a84f68dc91b9",
+    "statements": [
+      "ALTER TABLE `revisions` ADD `main` text;",
+      "ALTER TABLE `revisions` ADD `writeup_empty` integer DEFAULT 0 NOT NULL;"
+    ]
   }
 ];

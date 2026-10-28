@@ -8,11 +8,18 @@ import type { DiffParser } from "./parse-client.ts";
 import { TopicSection } from "./TopicSection.tsx";
 import { type FileLocation, isDiffTarget, resolveFile, targetLabel } from "./targets.ts";
 
-export type DiffPaneProps = { reviewId: string; revision: RevisionView; parser?: DiffParser; resume?: SavedDraft };
-export function DiffPane({ reviewId, revision, parser, resume }: DiffPaneProps) {
+export type DiffPaneProps = {
+  reviewId: string;
+  revision: RevisionView;
+  parser?: DiffParser;
+  resume?: SavedDraft;
+  onResumeEnd?: () => void;
+};
+export function DiffPane({ reviewId, revision, parser, resume, onResumeEnd }: DiffPaneProps) {
   const [active, setActive] = useState<Target | null>(null);
   const onActive = (target: Target | null) => {
     if (target) claimDraft(draftKey(reviewId, target), "diff");
+    if (resume && (!target || draftKey(reviewId, target) !== resume.key)) onResumeEnd?.();
     setActive(target);
   };
   useEffect(() => {

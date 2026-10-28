@@ -38,6 +38,8 @@ test("review views validate their states, limits, rendered blocks and doc varian
     seq: 1,
     base: null,
     head: null,
+    main: null,
+    writeupEmpty: false,
     topics: [],
     files: [],
     writeup: { sections: [] },
