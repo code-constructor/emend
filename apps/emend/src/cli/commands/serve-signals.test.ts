@@ -46,7 +46,7 @@ beforeAll(async () => {
           builder.onLoad({ filter: /.*/, namespace: "socket-double" }, () => ({
             contents: `
 import { EventEmitter } from "node:events";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, renameSync, writeFileSync } from "node:fs";
 class Socket extends EventEmitter {
   listening = false;
   listen(options, ready) {
@@ -54,7 +54,8 @@ class Socket extends EventEmitter {
     this.listening = true;
     const marker = process.env.EMEND_TEST_LISTEN;
     if (!marker) { queueMicrotask(ready); return; }
-    writeFileSync(marker, String(process.pid));
+    writeFileSync(marker + ".tmp", String(process.pid));
+    renameSync(marker + ".tmp", marker);
     const timer = setInterval(() => {
       if (!existsSync(process.env.EMEND_TEST_RELEASE)) return;
       clearInterval(timer);
@@ -67,7 +68,8 @@ class Socket extends EventEmitter {
     if (process.env.EMEND_TEST_CLOSED) writeFileSync(process.env.EMEND_TEST_CLOSED, "closed");
     const marker = process.env.EMEND_TEST_CLOSE;
     if (!marker) { clearInterval(this.keepAlive); this.listening = false; done(); return; }
-    writeFileSync(marker, String(process.pid));
+    writeFileSync(marker + ".tmp", String(process.pid));
+    renameSync(marker + ".tmp", marker);
     const timer = setInterval(() => {
       if (!existsSync(process.env.EMEND_TEST_RELEASE)) return;
       clearInterval(timer);
@@ -157,7 +159,8 @@ process.stderr.write = () => {
 `,
   );
   const gate = `
-    printf '%s' "$$" > ${quote(enteredPath)}
+    printf '%s' "$$" > ${quote(`${enteredPath}.tmp`)}
+    /bin/mv ${quote(`${enteredPath}.tmp`)} ${quote(enteredPath)}
     while [ ! -f ${quote(releasePath)} ]; do :; done
     /bin/rm -f ${quote(enteredPath)}
   `;
@@ -172,7 +175,7 @@ printf '%s %s\\n' "$$" "$*" >> ${quote(callsPath)}
 if [ "$1" = status ]; then
   ${
     options.stubbornDescendant
-      ? `/bin/sh -c ${quote(`trap '' TERM\nprintf '%s' "$$" > ${quote(descendantPath)}\nwhile [ ! -f ${quote(releasePath)} ]; do :; done`)} &
+      ? `/bin/sh -c ${quote(`trap '' TERM\nprintf '%s' "$$" > ${quote(`${descendantPath}.tmp`)}\n/bin/mv ${quote(`${descendantPath}.tmp`)} ${quote(descendantPath)}\nwhile [ ! -f ${quote(releasePath)} ]; do :; done`)} &
   while [ ! -f ${quote(descendantPath)} ]; do :; done`
       : ""
   }
