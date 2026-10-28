@@ -1,13 +1,26 @@
 import { ErrorBody, type ErrorCode } from "@emend/contract";
+import { NewerDatabaseError } from "../db/migrate.ts";
 import type { Io } from "../main.ts";
 import { ApiError } from "../server/http/errors.ts";
+import { StateDirModeError, StateFolderWriteError } from "../state/files.ts";
 import { VERSION } from "../version.ts";
 import { discover } from "./server-client.ts";
 import type { Target } from "./target.ts";
 
+export class CliSignalExit extends Error {
+  constructor(readonly exitCode: number) {
+    super("Interrupted");
+  }
+}
 export class CliError extends Error {}
 export class CliUsageError extends CliError {}
 export function errorLine(error: unknown): string {
+  if (
+    error instanceof NewerDatabaseError ||
+    error instanceof StateDirModeError ||
+    error instanceof StateFolderWriteError
+  )
+    return `${error.message}\n`;
   return `emend: ${error instanceof CliApiError ? error.code : error instanceof CliError ? error.message : "The emend request failed."}\n`;
 }
 export async function printJson(io: Io, value: unknown): Promise<void> {
@@ -38,6 +51,7 @@ export async function apiRequest(
     signal?: AbortSignal;
   },
 ): Promise<unknown> {
+  if (target.via === "direct") throw new CliError("The emend request requires a server.");
   opts.signal?.throwIfAborted();
   if (target.via === "local" && !(await discover(stateDir, 5000, target.url)))
     throw new CliError("Could not authenticate the emend server.");

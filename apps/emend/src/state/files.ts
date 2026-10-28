@@ -13,6 +13,13 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
+export class StateFolderWriteError extends Error {
+  constructor(dir: string) {
+    super(`emend cannot write its state folder ${dir}.`);
+    this.name = "StateFolderWriteError";
+  }
+}
+
 export class StateDirModeError extends Error {
   constructor(dir: string) {
     const quoted = `'${dir.replaceAll("'", "'\\''")}'`;

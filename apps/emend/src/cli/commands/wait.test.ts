@@ -200,3 +200,51 @@ test("a wait killed before confirm loses nothing; feedback after a timed-out wai
   expect(JSON.parse(f.stdout[1] ?? "")).toMatchObject({ kind: "go", comments: [{ id: comment.commentId }] });
   expect((await mailbox.take()).kind).toBe("pending");
 });
+
+test.each(["wait", "feedback"])("%s keeps HTTP default signal behavior outside stdout flush", async (command) => {
+  const f = await commandFixture();
+  const counts = [process.listenerCount("SIGINT"), process.listenerCount("SIGTERM")];
+  f.setResponse(async () => {
+    expect([process.listenerCount("SIGINT"), process.listenerCount("SIGTERM")]).toEqual(counts);
+    return Response.json(approve);
+  });
+  expect(await run([command, reviewId], f.io)).toBe(0);
+});
+
+test.each(["wait", "feedback"])(
+  "%s skips HTTP confirmation on either signal during a stuck stdout flush",
+  async (command) => {
+    for (const [signal, code] of [
+      ["SIGINT", 130],
+      ["SIGTERM", 143],
+    ] as const) {
+      const f = await commandFixture();
+      const writing = Promise.withResolvers<void>();
+      const flush = Promise.withResolvers<void>();
+      const before = process.listenerCount(signal);
+      let confirms = 0;
+      f.io.stdoutAsync = async (line) => {
+        f.stdout.push(line);
+        writing.resolve();
+        await flush.promise;
+      };
+      f.setResponse(async (url) => {
+        if (String(url).endsWith("/take")) return Response.json(approve);
+        confirms++;
+        return new Response(null, { status: 204 });
+      });
+      const pending = run([command, reviewId], f.io);
+      await writing.promise;
+      process.emit(signal);
+      try {
+        expect(await pending).toBe(code);
+        expect(confirms).toBe(0);
+        expect(f.stdout).toHaveLength(1);
+        expect(f.stderr).toEqual([]);
+        expect(process.listenerCount(signal)).toBe(before);
+      } finally {
+        flush.resolve();
+      }
+    }
+  },
+);

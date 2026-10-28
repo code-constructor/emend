@@ -1,74 +1,13 @@
 import { randomUUID } from "node:crypto";
-import type { CreateThreadRequest, ReplyRequest } from "@emend/contract";
-import { and, desc, eq, gte, sql } from "drizzle-orm";
-import type { Principal } from "../../server/auth/principal.ts";
+import type { CreateThreadRequest } from "@emend/contract";
+import { and, eq, gte } from "drizzle-orm";
 import { ApiError } from "../../server/http/errors.ts";
 import { computePlacements, type PlacementDeps } from "../../server/mailbox/placement.ts";
 import { publishSlots } from "../../server/publish/lifecycle.ts";
-import type { Db, Queries } from "../client.ts";
-import { comments, files, placements, reviews, revisions, threads, topics, writeups } from "../schema.ts";
+import type { Db } from "../client.ts";
+import { comments, files, placements, revisions, threads, topics, writeups } from "../schema.ts";
 
-export async function requireReview(
-  ownerId: string,
-  q: Queries,
-  reviewId: string,
-  principal?: Principal,
-  mutation = true,
-  nested = false,
-) {
-  const review = await q
-    .select()
-    .from(reviews)
-    .where(
-      and(
-        eq(reviews.ownerId, ownerId),
-        eq(reviews.id, reviewId),
-        principal?.kind === "agent" ? eq(reviews.originInstanceId, principal.instanceId ?? "") : undefined,
-      ),
-    )
-    .get();
-  if (!review) throw new ApiError(nested ? "not_found" : "unknown_review");
-  if (mutation && review.movedToUrl) throw new ApiError("review_moved");
-  return review;
-}
-export async function newestRevision(ownerId: string, q: Queries, reviewId: string) {
-  const revision = await q
-    .select()
-    .from(revisions)
-    .where(and(eq(revisions.ownerId, ownerId), eq(revisions.reviewId, reviewId)))
-    .orderBy(desc(revisions.seq))
-    .get();
-  if (!revision) throw new ApiError("invalid_target");
-  return revision;
-}
-async function requireThread(ownerId: string, q: Queries, threadId: string) {
-  const thread = await q
-    .select()
-    .from(threads)
-    .where(and(eq(threads.ownerId, ownerId), eq(threads.id, threadId)))
-    .get();
-  if (!thread) throw new ApiError("not_found");
-  await requireReview(ownerId, q, thread.reviewId);
-  return thread;
-}
-async function requireComment(ownerId: string, q: Queries, commentId: string, principal?: Principal) {
-  const comment = await q
-    .select()
-    .from(comments)
-    .where(and(eq(comments.ownerId, ownerId), eq(comments.id, commentId)))
-    .get();
-  if (!comment) throw new ApiError("not_found");
-  await requireReview(ownerId, q, comment.reviewId, principal, true, true);
-  return comment;
-}
-async function eventInfo(ownerId: string, q: Queries, reviewId: string, threadId: string, commentId?: string) {
-  return {
-    reviewId,
-    threadId,
-    revision: (await newestRevision(ownerId, q, reviewId)).seq,
-    ...(commentId ? { commentId } : {}),
-  };
-}
+import { eventInfo, newestRevision, requireComment, requireReview, requireThread } from "./thread-access.ts";
 
 export async function createThread(
   ownerId: string,
@@ -215,42 +154,3 @@ export const resolveThread = (ownerId: string, db: Db, threadId: string, now: nu
   setThreadState(ownerId, db, threadId, "resolved", now);
 export const reopenThread = (ownerId: string, db: Db, threadId: string, now: number) =>
   setThreadState(ownerId, db, threadId, "open", now);
-export function replyToComment(
-  ownerId: string,
-  db: Db,
-  principal: Principal,
-  commentId: string,
-  request: ReplyRequest,
-  now: number,
-) {
-  return db.transaction(async (q) => {
-    const comment = await requireComment(ownerId, q, commentId, principal);
-    if (comment.author !== "user" || comment.sendId === null) throw new ApiError("not_found");
-    const id = randomUUID();
-    await q.insert(comments).values({
-      id,
-      ownerId,
-      reviewId: comment.reviewId,
-      threadId: comment.threadId,
-      author: "agent",
-      ...request,
-      createdAt: now,
-      updatedAt: now,
-    });
-    const updated = await q
-      .update(threads)
-      .set({ state: sql`case when ${threads.state} = 'resolved' then 'resolved' else 'answered' end`, updatedAt: now })
-      .where(and(eq(threads.ownerId, ownerId), eq(threads.id, comment.threadId)))
-      .returning({ state: threads.state })
-      .get();
-    if (!updated) throw new ApiError("not_found");
-    return {
-      ...(await eventInfo(ownerId, q, comment.reviewId, comment.threadId)),
-      commentId: id,
-      state: updated.state,
-    };
-  });
-}
-
-// Durable insertion order is independent of wall-clock adjustments.
-export const commentOrder = sql<number>`comments.rowid`;

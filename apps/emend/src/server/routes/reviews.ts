@@ -3,6 +3,7 @@ import { and, count, desc, eq, gt, inArray, isNull, lte, max, ne, sql } from "dr
 import type { Hono } from "hono";
 import type { Queries } from "../../db/client.ts";
 import {
+  agentWaiters,
   changedBlocks,
   comments,
   deliveries,
@@ -89,6 +90,18 @@ async function inbox(ownerId: string, q: Queries, deps: AppDeps, reviewId?: stri
   const draftCounts = new Map(drafts.map((row) => [row.id, row.count]));
   const openCounts = new Map(open.map((row) => [row.id, row.count]));
   const pendingIds = new Set(pending.map((row) => row.id));
+  const directWaits = await q
+    .select({ reviewId: agentWaiters.reviewId })
+    .from(agentWaiters)
+    .where(
+      and(
+        eq(agentWaiters.ownerId, ownerId),
+        inArray(agentWaiters.reviewId, ids),
+        gt(agentWaiters.expiresAt, deps.now()),
+      ),
+    )
+    .groupBy(agentWaiters.reviewId);
+  const waitingIds = new Set(directWaits.map((row) => row.reviewId));
   return rows.map(({ review, origin, repo, newestRevision }) => ({
     id: review.id,
     title: review.title,
@@ -100,7 +113,7 @@ async function inbox(ownerId: string, q: Queries, deps: AppDeps, reviewId?: stri
     unsentCount: draftCounts.get(review.id) ?? 0,
     openThreads: openCounts.get(review.id) ?? 0,
     pendingSend: pendingIds.has(review.id),
-    agentWaiting: deps.events?.agentWaiting(review.id) ?? false,
+    agentWaiting: (deps.events?.agentWaiting(review.id) ?? false) || waitingIds.has(review.id),
     updatedAt: new Date(review.updatedAt).toISOString(),
     movedTo: review.movedToUrl,
   }));

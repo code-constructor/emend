@@ -6,73 +6,15 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ERROR_STATUS, type ErrorCode } from "@emend/contract";
 import { getRequestListener } from "@hono/node-server";
-import { and, eq, inArray, isNull, ne } from "drizzle-orm";
-import { openDb } from "../db/client.ts";
-import { migrate } from "../db/migrate.ts";
-import { instances, owners, tokens } from "../db/schema.ts";
-import { ensureStateDir, writeSecretFile } from "../state/files.ts";
-import { loadOrCreateInstance } from "../state/instance.ts";
-import { readTokenFile } from "../state/token-file.ts";
-import { BlobStore } from "../store/blobs.ts";
+import { writeSecretFile } from "../state/files.ts";
 import { type AppDeps, createApp } from "./app.ts";
-import { BEARER_SHAPE, liveToken, rotateLocalToken } from "./auth/tokens.ts";
 import { errorBody } from "./http/errors.ts";
 import { headersForPath } from "./http/headers.ts";
 
-export async function initializeServerState(stateDir: string) {
-  ensureStateDir(stateDir);
-  const db = openDb(join(stateDir, "emend.db"));
-  try {
-    await migrate(db);
-    const instance = await loadOrCreateInstance(stateDir);
-    const replacements = await db.transaction(async (q) => {
-      await q
-        .insert(instances)
-        .values({ ...instance, isSelf: true })
-        .onConflictDoUpdate({ target: instances.id, set: { name: instance.name, isSelf: true } });
-      // Bootstrap has no principal yet; the local server has one owner.
-      const owner = (await q.select().from(owners).get()) ?? (await q.insert(owners).values({}).returning().get());
-      if (!owner) throw new Error("Could not initialize server state.");
-      const ownerId = owner.id;
-      const now = Date.now();
-      const earlierSelf = and(eq(instances.isSelf, true), ne(instances.id, instance.id));
-      // Retire all earlier local identities; attached instances retain their credentials.
-      await q
-        .update(tokens)
-        .set({ revokedAt: now })
-        .where(
-          and(
-            eq(tokens.ownerId, ownerId),
-            inArray(tokens.kind, ["admin", "agent"]),
-            inArray(tokens.instanceId, q.select({ id: instances.id }).from(instances).where(earlierSelf)),
-            isNull(tokens.revokedAt),
-          ),
-        );
-      await q.update(instances).set({ isSelf: false }).where(earlierSelf);
-      // Adopt local admin credentials created before admin tokens carried an instance id.
-      await q
-        .update(tokens)
-        .set({ instanceId: instance.id })
-        .where(and(eq(tokens.ownerId, ownerId), eq(tokens.kind, "admin"), isNull(tokens.instanceId)));
-      const files: { path: string; secret: string }[] = [];
-      for (const kind of ["admin", "agent"] as const) {
-        const path = join(stateDir, `${kind}.token`);
-        const secret = await readTokenFile(path, true);
-        const token = secret && BEARER_SHAPE.test(secret) ? await liveToken(q, secret, now) : null;
-        if (!token || token.ownerId !== ownerId || token.kind !== kind || token.instanceId !== instance.id) {
-          const replacement = await rotateLocalToken(q, ownerId, kind, instance.id, now);
-          files.push({ path, secret: replacement.secret });
-        }
-      }
-      return files;
-    });
-    for (const { path, secret } of replacements) writeSecretFile(path, secret, stateDir);
-    return { db, instance, blobs: new BlobStore(db, stateDir) };
-  } catch (error) {
-    await db.close();
-    throw error;
-  }
-}
+import { initializeServerState } from "./state.ts";
+
+export { initializeServerState } from "./state.ts";
+
 const urlHost = (host: string) => (host.includes(":") ? `[${host}]` : host);
 function localUrl(address: string, port: number) {
   if (!isIP(address)) throw new Error("Invalid bound address.");
@@ -151,6 +93,11 @@ export async function startServer(opts: ServerOptions): Promise<{ url: string; c
         }
       });
     });
+    writeSecretFile(
+      join(opts.stateDir, "server-url.json"),
+      JSON.stringify({ baseUrl: publicBaseUrl(opts.publicOrigin) ?? bound.url }),
+      opts.stateDir,
+    );
     const discovery = join(opts.stateDir, "server.json");
     const record = { ...bound, pid: process.pid, startedAt: new Date().toISOString(), key };
     writeSecretFile(discovery, JSON.stringify(record), opts.stateDir);

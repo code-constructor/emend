@@ -112,5 +112,16 @@ export const MIGRATIONS: readonly { tag: string; when: number; hash: string; sta
       "CREATE UNIQUE INDEX `revisions_content_key_unique` ON `revisions` (`content_key`);",
       "INSERT INTO doc_assets (owner_id, revision_id, doc_id, asset_id) SELECT owner_id, revision_id, parent_doc_id, id FROM files WHERE role = 'asset' AND parent_doc_id IS NOT NULL;"
     ]
+  },
+  {
+    "tag": "0005_sparkling_mercury",
+    "when": 1793141307107,
+    "hash": "a45768fb8bab91113eb7b652051fed92f9c594bae8deba9c282494bf6029ace7",
+    "statements": [
+      "CREATE TABLE `agent_waiters` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`owner_id` text NOT NULL,\n\t`review_id` text NOT NULL,\n\t`expires_at` integer NOT NULL,\n\tFOREIGN KEY (`owner_id`) REFERENCES `owners`(`id`) ON UPDATE no action ON DELETE no action,\n\tFOREIGN KEY (`owner_id`,`review_id`) REFERENCES `reviews`(`owner_id`,`id`) ON UPDATE no action ON DELETE no action\n);",
+      "CREATE INDEX `agent_waiters_owner_idx` ON `agent_waiters` (`owner_id`);",
+      "CREATE INDEX `agent_waiters_owner_review_expiry_idx` ON `agent_waiters` (`owner_id`,`review_id`,`expires_at`);",
+      "CREATE UNIQUE INDEX `agent_waiters_owner_id_unique` ON `agent_waiters` (`owner_id`,`id`);"
+    ]
   }
 ];

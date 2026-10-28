@@ -10,7 +10,7 @@ import {
 } from "@emend/contract";
 import { and, eq, gte, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import type { Db, Queries } from "../../db/client.ts";
-import { commentOrder, newestRevision, requireReview } from "../../db/repo/threads.ts";
+import { commentOrder, newestRevision, requireReview } from "../../db/repo/thread-access.ts";
 import { comments, deliveries, placements, reviews, revisions, sends, threads } from "../../db/schema.ts";
 import type { Principal } from "../auth/principal.ts";
 import { ApiError } from "../http/errors.ts";

@@ -51,6 +51,7 @@ test("migrations apply to an empty file and a second run applies nothing", async
     );
     expect(tables.flat()).toEqual([
       "__emend_migrations",
+      "agent_waiters",
       "blobs",
       "changed_blocks",
       "comments",
@@ -120,6 +121,31 @@ test("runtime migrations execute every statement in a supplied chunk", async () 
     ).toEqual([["synthetic_one"], ["synthetic_two"]]);
   } finally {
     migrations.pop();
+    await db.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("an unknown applied hash refuses before any pending migration can write", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "emend-migration-future-"));
+  const db = openDb(join(dir, "emend.db"));
+  try {
+    await db.query(async (q) => {
+      await q.exec(
+        "CREATE TABLE __emend_migrations (hash text primary key, tag text not null, applied_at integer not null)",
+      );
+      await q.run(sql`insert into __emend_migrations values ('synthetic-future', 'future', 1)`);
+    });
+    const before = await db.read((q) => q.values(sql`select * from sqlite_schema`));
+    await expect(migrate(db)).rejects.toMatchObject({
+      name: "NewerDatabaseError",
+      message: "The emend database is newer than this emend. Update emend, then try again.",
+    });
+    expect(await db.read((q) => q.values(sql`select * from sqlite_schema`))).toEqual(before);
+    expect(await db.read((q) => q.values(sql`select * from __emend_migrations`))).toEqual([
+      ["synthetic-future", "future", 1],
+    ]);
+  } finally {
     await db.close();
     await rm(dir, { recursive: true, force: true });
   }

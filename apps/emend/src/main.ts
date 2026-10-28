@@ -1,5 +1,7 @@
 import type { SkillsOptions } from "./cli/commands/skills.ts";
 import type { ServiceOptions } from "./cli/service/common.ts";
+import { NewerDatabaseError } from "./db/migrate.ts";
+import { StateDirModeError, StateFolderWriteError } from "./state/files.ts";
 import { defaultStateDir } from "./state/paths.ts";
 import { VERSION } from "./version.ts";
 
@@ -34,7 +36,7 @@ export async function run(argv: string[], io: Io): Promise<number> {
     return 0;
   }
   if (["wait", "feedback", "reply", "mcp", "service", "skills"].includes(argv[0] ?? "")) {
-    const { CliUsageError, errorLine } = await import("./cli/http.ts");
+    const { CliUsageError, CliSignalExit, errorLine } = await import("./cli/http.ts");
     try {
       const commands = {
         wait: () => import("./cli/commands/wait.ts").then((m) => m.waitCommand),
@@ -48,6 +50,7 @@ export async function run(argv: string[], io: Io): Promise<number> {
       await command(defaultStateDir(io.env), argv.slice(1), io);
       return 0;
     } catch (error) {
+      if (error instanceof CliSignalExit) return error.exitCode;
       io.stderr(errorLine(error));
       return error instanceof CliUsageError ? 2 : 1;
     }
@@ -60,7 +63,11 @@ export async function run(argv: string[], io: Io): Promise<number> {
       return 0;
     } catch (error) {
       io.stderr(
-        `emend: ${error instanceof CliApiError ? error.code : error instanceof CliError ? error.message : "Could not publish the review."}\n`,
+        error instanceof NewerDatabaseError ||
+          error instanceof StateDirModeError ||
+          error instanceof StateFolderWriteError
+          ? `${error.message}\n`
+          : `emend: ${error instanceof CliApiError ? error.code : error instanceof CliError ? error.message : "Could not publish the review."}\n`,
       );
       return 1;
     }
@@ -84,7 +91,11 @@ export async function run(argv: string[], io: Io): Promise<number> {
     return 0;
   } catch (error) {
     io.stderr(
-      `emend: ${error instanceof UsageError || error instanceof CliError ? error.message : "Could not start the emend server."}\n`,
+      error instanceof NewerDatabaseError ||
+        error instanceof StateDirModeError ||
+        error instanceof StateFolderWriteError
+        ? `${error.message}\n`
+        : `emend: ${error instanceof UsageError || error instanceof CliError ? error.message : "Could not start the emend server."}\n`,
     );
     return error instanceof UsageError ? 2 : 1;
   }

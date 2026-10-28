@@ -2,12 +2,13 @@ import { lstat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { LIMITS, PublishManifest, PublishResponse } from "@emend/contract";
 import type { Io } from "../../main.ts";
+import { publishDirect } from "../direct/index.ts";
 import { escapeReference } from "../escape.ts";
 import { apiRequest, CliError, printJson, publishAnswerIncomplete } from "../http.ts";
 import { GitFolderRead, inside, readRegular } from "../publish/read.ts";
 import { type PublishOptions, publishContext, resolvePublish } from "../publish/resolve.ts";
 import { upload } from "../publish/upload.ts";
-import { ensureServer } from "../server-client.ts";
+import { discover } from "../server-client.ts";
 import { localTarget } from "../target.ts";
 
 export function parsePublishArgs(args: string[]): PublishOptions {
@@ -87,26 +88,31 @@ export async function publishCommand(stateDir: string, args: string[], io: Io, c
     (line) => warnings.push(line),
     context,
   );
-  const server = await ensureServer(stateDir);
-  let instanceId: string;
-  try {
-    const instance = JSON.parse(
-      (await readRegular(join(stateDir, "instance.json"), LIMITS.publicJsonBytes)).toString(),
-    );
-    if (typeof instance.id !== "string" || !/^[a-f0-9-]{36}$/i.test(instance.id)) throw new Error("invalid");
-    instanceId = instance.id;
-  } catch {
-    throw new CliError("invalid emend instance");
-  }
-  const request = collected.forInstance(instanceId);
-  await upload(stateDir, server.url, collected.blobs);
-  const result = PublishResponse.safeParse(
-    await apiRequest(stateDir, await localTarget(stateDir, server.url), "/publish", {
+  // Publish and pairing deliberately stay local until attached publishing exists.
+  const server = await discover(stateDir, 5000);
+  const target = server ? await localTarget(stateDir, server.url) : { via: "direct" as const };
+  let response: unknown;
+  if (target.via === "direct") response = await publishDirect(stateDir, collected);
+  else {
+    let instanceId: string;
+    try {
+      const instance = JSON.parse(
+        (await readRegular(join(stateDir, "instance.json"), LIMITS.publicJsonBytes)).toString(),
+      );
+      if (typeof instance.id !== "string" || !/^[a-f0-9-]{36}$/i.test(instance.id)) throw new Error("invalid");
+      instanceId = instance.id;
+    } catch {
+      throw new CliError("invalid emend instance");
+    }
+    const request = collected.forInstance(instanceId);
+    await upload(stateDir, target, collected.blobs);
+    response = await apiRequest(stateDir, target, "/publish", {
       method: "POST",
       body: request,
       timeoutMs: publishTimeoutMs(request.files),
-    }),
-  );
+    });
+  }
+  const result = PublishResponse.safeParse(response);
   if (!result.success) throw new CliError(publishAnswerIncomplete);
   await printJson(io, result.data);
   for (const warning of warnings) io.stderr(warning);

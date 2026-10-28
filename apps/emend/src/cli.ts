@@ -26,3 +26,5 @@ process.exitCode = await run(process.argv.slice(2), {
   },
   env: process.env,
 });
+// A pending stdout write can keep the event loop alive after an interrupted flush.
+if (process.exitCode === 130 || process.exitCode === 143) process.exit(process.exitCode);

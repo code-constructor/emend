@@ -6,9 +6,10 @@ import { readTokenFile } from "../state/token-file.ts";
 import { VERSION } from "../version.ts";
 import { CliError } from "./http.ts";
 import { readRegular } from "./publish/read.ts";
-import { ensureServer } from "./server-client.ts";
+import { discover } from "./server-client.ts";
 
-export type Target = { url: string; token: string; via: "local" | "hub" };
+export type HttpTarget = { url: string; token: string; via: "local" | "hub" };
+export type Target = HttpTarget | { via: "direct" };
 
 function attachmentUrl(input: unknown): string {
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("invalid");
@@ -43,8 +44,11 @@ async function credential(stateDir: string, kind: "agent" | "admin" | "hub"): Pr
   return token;
 }
 
-/** Publish and pairing deliberately stay local, even when attached. */
-export async function localTarget(stateDir: string, url: string, kind: "agent" | "admin" = "agent"): Promise<Target> {
+export async function localTarget(
+  stateDir: string,
+  url: string,
+  kind: "agent" | "admin" = "agent",
+): Promise<HttpTarget> {
   return { url, token: await credential(stateDir, kind), via: "local" };
 }
 
@@ -58,13 +62,8 @@ export async function resolveTarget(stateDir: string): Promise<Target> {
     else throw new CliError("Could not read the emend attachment.");
   }
   if (!attached) {
-    let url: string;
-    try {
-      ({ url } = await ensureServer(stateDir));
-    } catch {
-      throw new CliError("Could not start the emend server.");
-    }
-    return localTarget(stateDir, url);
+    const server = await discover(stateDir, 5000);
+    return server ? localTarget(stateDir, server.url) : { via: "direct" };
   }
   let url: string;
   try {

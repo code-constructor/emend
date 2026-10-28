@@ -47,7 +47,7 @@ const surfaces = [
   },
   {
     name: "wait-result",
-    self: ["packages/contract/src/wait.ts", "apps/emend/src/cli/commands/wait.ts"],
+    self: ["packages/contract/src/wait.ts", "apps/emend/src/cli/commands/wait.ts", "apps/emend/src/cli/direct/**"],
     counterpart: ["bin/hunk-plan"],
   },
 ];

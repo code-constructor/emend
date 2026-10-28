@@ -5,10 +5,18 @@ import { LIMITS } from "@emend/contract";
 import { expect, test, vi } from "vitest";
 import { run } from "../main.ts";
 import { apiRequest } from "./http.ts";
+import * as discovery from "./server-client.ts";
 import { resolveTarget } from "./target.ts";
 import { commandFixture } from "./test-support.ts";
 
 const hub = { hubUrl: "https://hub.example", hubId: randomUUID(), hubName: "Synthetic hub" };
+
+test("a thrown discovery error never selects direct mode", async () => {
+  const f = await commandFixture();
+  vi.spyOn(discovery, "discover").mockRejectedValueOnce(new Error("synthetic discovery failure"));
+  await expect(resolveTarget(f.dir)).rejects.toThrow("synthetic discovery failure");
+  expect(await readdir(f.dir)).not.toContain("emend.db");
+});
 async function attached() {
   const f = await commandFixture();
   await writeFile(join(f.dir, "attach.json"), JSON.stringify(hub));

@@ -2,6 +2,7 @@ import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import { ReplyCreated, ReplyRequest } from "@emend/contract";
 import type { Io } from "../../main.ts";
+import { replyDirect } from "../direct/index.ts";
 import { apiRequest, CliError, CliUsageError, printJson } from "../http.ts";
 import { resolveTarget, type Target } from "../target.ts";
 
@@ -50,6 +51,7 @@ export async function sendReply(
   reply: ReplyRequest,
   signal?: AbortSignal,
 ): Promise<ReplyCreated> {
+  if (target.via === "direct") return replyDirect(stateDir, commentId, reply, signal);
   const result = ReplyCreated.safeParse(
     await apiRequest(stateDir, target, `/comments/${commentId}/reply`, { method: "POST", body: reply, signal }),
   );

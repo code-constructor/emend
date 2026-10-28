@@ -1,7 +1,7 @@
 import { TakeRequest } from "@emend/contract";
 import type { Hono } from "hono";
 import type { Queries } from "../../db/client.ts";
-import { newestRevision, requireReview } from "../../db/repo/threads.ts";
+import { newestRevision, requireReview } from "../../db/repo/thread-access.ts";
 import type { AppDeps } from "../app.ts";
 import type { AppEnv } from "../auth/principal.ts";
 import { principalIsLive } from "../auth/tokens.ts";

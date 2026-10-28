@@ -45,7 +45,9 @@ The CLI runs inside repos under review, so treat those repos as hostile.
   line on stderr, nothing on stdout, and exits 1.
 - Tokens come from the state directory (`agent.token`, `admin.token`, `hub.token`). Never print a
   token, and never send it anywhere but the server it belongs to.
-- When the server or the hub is down, or rejects the token, print one line on stderr and change
-  nothing.
+- When the hub is down, or the server or the hub rejects the token, print one line on stderr and
+  change nothing. A local server that is down is not an error: `publish`, `wait`, `feedback`,
+  `reply` and `mcp` then work on the state directory's database directly and never start a server.
+  Only `emend` with no arguments and the service start one.
 - `emend wait` confirms a delivery only after its stdout has flushed.
 - Tests use temporary `EMEND_HOME` folders and git repos built in the test, never real state.

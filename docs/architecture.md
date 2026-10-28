@@ -26,10 +26,23 @@ Node >=24.18.0; SQLite warning behavior has been verified on Node 24.18.0 and 26
 
 ## One machine
 
-The planned default command starts a server if needed and opens the browser with a one-time
+The default `emend` command starts a server if needed and opens the browser with a one-time
 link. `emend serve` runs without opening a browser; `emend service install` installs a systemd
 user unit or a launchd agent. The server binds `127.0.0.1:3636` unless `--host` or `--tailscale`
 explicitly widens access. There is no telemetry.
+
+Agent commands (`publish`, `wait`, `feedback`, `reply` and the MCP tools) work with or without a
+running server and never start one. They use a discovered server's API, or open the same local
+state directly when discovery finds no server. Attached wait, feedback, reply and MCP tools use
+the hub; publish and pairing stay local. Only the reviewer command `emend`, explicit
+`emend serve`, and the service start a server. Direct writes send no
+live event; the browser sees them on its next load. A direct wait polls every second, renewing a
+30-second database waiter every 10 seconds so a later server can show that the agent is waiting.
+A killed wait's row stops counting after 30 seconds and the next wait removes expired rows for
+that owner. A challenge timeout or hidden pid can select direct mode while a server is running;
+shared claims and transactions keep writes safe, but a newer CLI may migrate the database under
+a running older server.
+A signal after a hand-off is claimed leaves it unconfirmed, and it is offered again after the lease.
 
 State is one SQLite database and a content-addressed blob store with SHA-256 names. `EMEND_HOME`
 overrides the platform data location: the XDG data directory on Linux, Application Support on

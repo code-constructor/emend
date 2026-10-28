@@ -128,6 +128,21 @@ export const revisions = sqliteTable(
   ],
 );
 
+export const agentWaiters = sqliteTable(
+  "agent_waiters",
+  {
+    id: id(),
+    ownerId: ownerId(),
+    reviewId: text("review_id").notNull(),
+    expiresAt: integer("expires_at").notNull(),
+  },
+  (t) => [
+    ...owned("agent_waiters", t),
+    index("agent_waiters_owner_review_expiry_idx").on(t.ownerId, t.reviewId, t.expiresAt),
+    foreignKey({ columns: [t.ownerId, t.reviewId], foreignColumns: [reviews.ownerId, reviews.id] }),
+  ],
+);
+
 export const blobs = sqliteTable(
   "blobs",
   {

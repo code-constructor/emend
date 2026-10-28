@@ -130,7 +130,10 @@ updatedAt, movedTo: string | null }`. `repo` is the repository key, and `movedTo
 review's destination URL. Timestamps are ISO 8601 UTC strings; sequences are positive integers.
 `unsentCount` counts user comments without a Send; `openThreads` counts all unresolved threads.
 `pendingSend` means a Send is neither confirmed delivered nor set aside (an unconfirmed lease
-is still pending). `agentWaiting` uses the live waiting state, including its 35-second grace period.
+is still pending). `agentWaiting` is true for a server-held wait (including its 35-second grace
+period) or an unexpired direct-wait row for the same owner and review. Direct waits renew a
+30-second expiry every 10 seconds and delete their row when they end. They emit no live event;
+views reflect direct writes on their next load.
 
 `GET /api/v1/reviews` returns `InboxList = { items: InboxItem[] }`, newest `updatedAt` first,
 with review id as a stable tie breaker, at most `inboxItems` (200) rows.
@@ -301,8 +304,12 @@ remain unrendered. A writeup alone exceeding either budget returns 413 `too_larg
 "The writeup has too many blocks."
 The CLI warns `emend: could not render <path>` for each; the publish still succeeds.
 The URL is `<baseUrl>/r/<reviewId>` (HTTP or HTTPS);
-it is bounded by `pathChars` (4096 characters). `revision` is a positive integer sequence, and
-the placement counts are nonnegative integers.
+it is bounded by `pathChars` (4096 characters). At each start the local server saves its base URL
+(public origin when configured, otherwise its listening URL) in `server-url.json` in the state
+directory, mode 0600, and leaves it there on close. Direct publish uses that saved HTTP(S) origin;
+a missing or invalid JSON record, credentials, path, query or fragment falls back to
+`http://127.0.0.1:3636`. Publish stays local even when attached until attached publishing is built.
+`revision` is a positive integer sequence, and the placement counts are nonnegative integers.
 
 ### Manifest and topics
 
@@ -478,7 +485,8 @@ and the same fields as its SSE payload. The SSE `event` line supplies `type`; th
 
 Events contain ids and a positive revision sequence only, never text bodies or instructions.
 The waiting event signals a change: `agentWaiting(reviewId)` stays true during an open take
-and for 35 seconds after the last waiting take ends. Each owner may open 32 streams; additional
+and for 35 seconds after the last waiting take ends. Views also include unexpired direct waits,
+which do not emit waiting events. Each owner may open 32 streams; additional
 streams return `429 rate_limited`. A stream buffering over 100 events is closed.
 At each 25-second keepalive, the session is rechecked; revocation or expiry closes the stream.
 

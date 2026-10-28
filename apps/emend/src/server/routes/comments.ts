@@ -1,6 +1,7 @@
 import { EditCommentRequest, ReplyCreated, ReplyRequest } from "@emend/contract";
 import type { Hono } from "hono";
-import { deleteComment, editComment, replyToComment } from "../../db/repo/threads.ts";
+import { replyToComment } from "../../db/repo/replies.ts";
+import { deleteComment, editComment } from "../../db/repo/threads.ts";
 import type { AppDeps } from "../app.ts";
 import type { AppEnv } from "../auth/principal.ts";
 import { parseBody } from "../http/body.ts";
@@ -24,14 +25,7 @@ export function commentRoutes(app: Hono<AppEnv>, deps: AppDeps) {
   });
   app.post("/api/v1/comments/:id/reply", async (c) => {
     const principal = c.get("principal");
-    const result = await replyToComment(
-      principal.ownerId,
-      deps.db,
-      principal,
-      c.req.param("id"),
-      parseBody(c, ReplyRequest),
-      deps.now(),
-    );
+    const result = await replyToComment(deps.db, principal, c.req.param("id"), parseBody(c, ReplyRequest), deps.now());
     deps.events?.emit({ type: "thread", ...result });
     return c.json(ReplyCreated.parse(result), 201);
   });

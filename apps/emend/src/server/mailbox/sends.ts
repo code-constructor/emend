@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { DEFAULT_MODE, LIMITS, type SendRequest } from "@emend/contract";
 import { and, count, eq, inArray, isNull } from "drizzle-orm";
 import type { Db } from "../../db/client.ts";
-import { newestRevision, requireReview } from "../../db/repo/threads.ts";
+import { newestRevision, requireReview } from "../../db/repo/thread-access.ts";
 import { comments, reviews, sends, threads } from "../../db/schema.ts";
 import { ApiError } from "../http/errors.ts";
 import { commentReserve, envelopeBytes, jsonBytes } from "./payload.ts";

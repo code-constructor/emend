@@ -40,12 +40,14 @@ export class BlobStore {
     ensurePrivateDir(dirname(file), this.dir);
     const valid = tightenSecretFile(file) && createHash("sha256").update(readFileSync(file)).digest("hex") === sha;
     if (!valid) writeSecretFile(file, content, this.dir);
-    await this.query(scope, async (q) => {
+    const record = async (q: Queries) => {
       await q
         .insert(blobs)
         .values({ ownerId, sha256: sha, size: content.length, mediaType })
         .onConflictDoNothing({ target: [blobs.ownerId, blobs.sha256] });
-    });
+    };
+    if (scope) await record(scope);
+    else await this.db.transaction(record, { offThread: true });
     return sha;
   }
 
