@@ -30,7 +30,7 @@ here **before** writing the route. This includes `PublishRequest` (plan task 1.6
   `Max-Age=2592000` (30 days), and `Secure` on HTTPS. Sessions renew at most once daily.
 - JSON bodies use `Content-Type: application/json`. Routes reject bodies over their JSON byte
   limit with `413 too_large` before parsing, then validate with the contract schemas:
-  `POST /api/v1/publish` permits at most `publishJsonBytes` (8388608 bytes); `POST /session` and
+  `POST /api/v1/publish` and `POST /api/v1/import` permit at most `publishJsonBytes` (8388608 bytes); `POST /session` and
   `POST /machines` permit `publicJsonBytes` (4096 bytes); other JSON routes permit at most
   `requestJsonBytes` (1048576 bytes).
 - Every request checks `Host` against `127.0.0.1:<port>`, `localhost:<port>`, `[::1]:<port>`, and
@@ -83,12 +83,12 @@ a machine token reaches only reviews from its own instance.
 | POST | `/api/v1/pairings` | Admin, reviewer | Create from `PairingRequest`; return `PairingCreated` (201). |
 | GET | `/api/v1/devices` | Admin, reviewer | Return `DeviceList` (200); live devices owned by the principal, newest first. |
 | DELETE | `/api/v1/devices/:id` | Admin, reviewer | Revoke the device and every bound token atomically (204); missing, foreign or revoked is 404. |
-| POST | `/api/v1/machines` | Anyone with a pairing secret or code | Register `{secret, instance: {id, name}}` or `{code, instance: {id, name}}`; refuses device pairings (task 1.14). |
-| DELETE | `/api/v1/machines/self` | Agent | Detach the current machine. |
+| POST | `/api/v1/machines` | Anyone with a pairing secret or code | Register `MachineRegistration`; return `MachineRegistered` (201); refuses device pairings. |
+| DELETE | `/api/v1/machines/self` | Agent | Revoke the current machine device and all its tokens (204); local agents get 404. |
 | HEAD | `/api/v1/blobs/:sha256` | Agent | Check whether the owner's blob exists. |
 | PUT | `/api/v1/blobs/:sha256` | Agent | Upload a blob; verify its size and hash. |
 | POST | `/api/v1/publish` | Agent | Create a review or add a revision. |
-| POST | `/api/v1/import` | Agent | Import reviews when attaching a machine. |
+| POST | `/api/v1/import` | Agent | Copy one `ImportBundle`; return `ImportResult` (201, or 200 when skipped); machine tokens only. |
 | GET | `/api/v1/reviews` | Reviewer | List reviews in the inbox. |
 | GET | `/api/v1/reviews/:id` | Reviewer | Read a review. |
 | GET | `/api/v1/reviews/:id/revisions/:seq` | Reviewer | Read one revision. |
@@ -137,7 +137,7 @@ views reflect direct writes on their next load.
 
 `GET /api/v1/reviews` returns `InboxList = { items: InboxItem[] }`, newest `updatedAt` first,
 with review id as a stable tie breaker, at most `inboxItems` (200) rows.
-`GET /api/v1/reviews/:id` returns `ReviewView = InboxItem & { revisions: { seq, createdAt }[] }`,
+`GET /api/v1/reviews/:id` returns `ReviewView = InboxItem & { revisions: { seq, createdAt }[], importedAt: string | null }`,
 with revisions ascending by sequence. Both are reviewer-only, as is the revision endpoint below.
 
 `GET /api/v1/reviews/:id/revisions/:seq` returns `RevisionView = { seq, base, head, main, writeupEmpty,
@@ -262,7 +262,7 @@ to make a read fit a per-Send or per-revision limit. The limits below apply to t
 These fields deliberately remain unbounded because their write side has no matching cap:
 
 - `InboxItem.origin.name`: instance loading validates a string without a length limit; machine
-  registration has no implemented name cap yet. A title limit would reject valid stored names.
+  registration now requires 1–200 characters. Legacy local names remain unbounded.
 - `InboxItem.movedTo`: the stored moved-to URL has no write-side length cap yet; its HTTP(S) URL
   format is still validated. HTML `contentUrl` has no independent URL-length cap; its decoded doc
   path uses `FilePath`, each segment must be canonically encoded, and the stored content key has no
@@ -319,6 +319,129 @@ confirmed base URL there on close. Direct publish uses that saved HTTP(S) origin
 a missing or invalid JSON record, credentials, path, query or fragment falls back to
 `http://127.0.0.1:3636`. Publish stays local even when attached until attached publishing is built.
 `revision` is a positive integer sequence, and the placement counts are nonnegative integers.
+
+### Machines and import
+
+`POST /machines` accepts `MachineRegistration`: exactly one of `secret` and `code`, with
+`instance: { id: UUID, name: string }` (1–200 characters). Secret and code formats and
+normalization match `SessionRequest`. Machine names must use the browser device-name allowlist: ASCII letters, digits, spaces and
+`._()/;-`. Other characters are rejected with `400 invalid_request`. Names are then trimmed
+and must contain 1–200 characters; blank names are rejected. Only a live unused machine pairing can redeem it;
+wrong-purpose, expired, used and unknown pairings all return `401 unauthorized`. Code entry
+shares the session endpoint's serialized server-wide lockout. Secret redemption remains available.
+The current or any earlier self instance gives `400 wrong_origin`. An instance with a live
+machine device gives `409 instance_attached`, with exactly: "This machine is already attached.
+Revoke it in the hub's devices, or run emend detach on it." Neither refusal consumes the pairing.
+Consumption, instance insertion (or name/attachedAt update), machine device creation and its
+instance-bound agent token creation are one transaction. `201 MachineRegistered = { token,
+hub: { id, name, url } }` returns the token once and the hub's self identity and pairing-link base URL.
+
+`DELETE /machines/self` atomically revokes the calling machine's device and all its live bound
+tokens, returning 204. Other agent tokens receive `404 not_found`. The instance and reviews remain.
+
+`POST /import` accepts one `ImportBundle`, bounded by `publishJsonBytes`. Only a live machine
+agent token may import; other agents receive `404 not_found`. Owner comes from that token and
+`review.originInstanceId` must match it (`400 wrong_origin`). A review id already held by that
+owner and origin returns `200 ImportResult = { skipped: true }` without writing. Any other owner
+or origin holding that id gives the identical `400 wrong_origin`. A new copy returns
+`201 { skipped: false }`. The copy uses the publish database writer lock and one transaction. Imports have their own
+one-at-a-time validation/rendering slot, independent of publishing and reviewer thread creation.
+A concurrent import receives `429 rate_limited` immediately with "The server is busy importing;
+try again." Connection aborts stop rendering, release the slot, and prevent any review commit,
+with the message "The import was cancelled." Inserts use batches of at most 500 rows and
+check cancellation between batches.
+
+Import-only count ceilings are `importRevisions` (1000), `importThreads` (1000),
+`importComments` (10000), `importSends` (1000), and `importDeliveries` (1000). Writeups are limited to one per revision (at most 1000).
+Over a count ceiling is `400 invalid_request`; the existing JSON byte ceiling still rejects
+oversized bodies first with `413 too_large`. These bound one atomic import, not local review
+lifetimes, which remain unbounded; histories exceeding these import ceilings cannot be attached
+through this endpoint and stay local (part B reports this). There is no pagination or truncation of reviewer history.
+`importRows` (50000) bounds all inserted rows, including the review, any repo and generated blob
+metadata, revisions, topics, files, doc assets, writeups, threads, hub-computed placements and
+changed blocks, comments, Sends and retained deliveries. Potential repo/blob inserts are counted
+conservatively even when already present. An excess is `400 invalid_request` before the writer
+transaction starts. `importRenderedBytes` (1073741824, 1 GiB) bounds cumulative rendered writeup
+and Markdown output, counting each rendering even when content hashes repeat. Exceeding it stops
+the import with `413 too_large`, without database rows; immutable files already staged may remain.
+
+`importDerivedBytes` (67108864, 64 MiB) bounds the bytes of the hub-derived placement and
+changed-block rows as stored: the UTF-8 byte lengths of every text and serialized JSON column
+value, including ids, renamed paths and JSON escaping, plus 64 bytes per row. That allowance
+excludes SQLite's index overhead. The hub counts
+these values as each revision's rows are computed and stops immediately on excess with
+`413 too_large`, before the writer transaction and without database rows. The pure contract
+helper `importRowCount(bundle)` accepts a validated bundle and gives the known row count
+(including derived placements) for CLI preflight. The hub adds generated blob metadata and
+changed-block rows after rendering; derived storage bytes require the hub's computed rows.
+
+`importPlacementBytes` (1073741824, 1 GiB) bounds placement inputs and repeated text work.
+Document and writeup input bytes are charged each time they are parsed, plus their text's UTF-8
+bytes once per relevant span thread per revision, including cache hits. Markdown and writeup
+placement parse hub-rendered blocks and count their combined text; HTML uses source bytes and
+extracted text. Parsed content is reused by format and blob hash, retaining at most content used
+by the current and previous revision. Each lines thread charges the UTF-8 bytes of its next
+side on every revision, and its previous side only when the two hashes differ, matching the
+equal-hash placement shortcut. Each unique side buffer read/transferred per revision is also
+charged. The worker encodes parsed docs/writeups as bytes and reports their encoded and text
+sizes; the hub keeps those bytes and sends transferred copies for placement. Each shared parsed
+payload's encoded size is charged once per job that sends it, including cache hits.
+Other worker metadata is counted incrementally as each string's UTF-8 length, plus fixed
+overhead per object (16 bytes), entry (8 bytes) and scalar (8 bytes), including field names,
+targets, anchors, carried paths, rename maps, file paths/hashes, topic slugs and document paths.
+Shared objects are counted once per job, as structured clone sends them; accounting never
+builds the job's JSON or parses its content on the main thread. Raw buffers are counted
+separately. Each addition checks the remaining budget first; excess stops with `413 too_large`
+and no database rows.
+
+Bundle fields are required arrays (empty where appropriate), with UUID row ids kept. All dates
+are ISO UTC strings; nullable fields are explicitly null. Arrays preserve durable insertion order
+for comments, threads and Sends; revisions are complete and ordered by sequence starting at 1.
+Unknown keys, including owner ids, moved-to URLs, content keys, media types, `placements` and
+`changedBlocks`, are stripped. Placements and changed blocks are derived by the hub, not supplied.
+
+| Bundle field | Row fields |
+| --- | --- |
+| `review` | `id, originInstanceId, reviewKey: Sha256, repo: {key: Sha256, name} or null, branch, title, state, approvedRevision: UUID or null, createdAt, updatedAt` |
+| `revisions` | `id, reviewId, seq, base, head, main, writeupEmpty, createdAt` |
+| `topics` | `id, revisionId` plus `TopicMeta` (optional door and blastRadius) |
+| `files` | `id, revisionId, path, oldPath, role, status, topicSlug, ord, oldBlob, newBlob, renderedBlob, flag, parentDocId`; nullable sides, status, topic, flag, parent |
+| `docAssets` | `revisionId, docId, assetId` |
+| `writeups` | `id, revisionId, sourceBlob, renderedBlob` |
+| `threads` | `id, reviewId, target, state, createdRevisionId, createdAt, updatedAt` |
+| `comments` | `id, reviewId, threadId, author, body, outcome, sendId, createdAt, updatedAt`; user outcome is null; agent outcome is required and sendId null |
+| `sends` | `id, reviewId, revisionId, kind, mode, instruction, deliveryId, setAsideAt, createdAt`; Go requires mode; Approve has null mode/instruction |
+| `deliveries` | `id, reviewId, leaseUntil, confirmedAt, createdAt` |
+
+All ids are unique across the bundle and all references stay within it. The hub computes each
+thread’s creation placement from its target, refusing an unplaceable original target with
+`400 invalid_request`, then carries it through every later revision as publish does. Changed
+blocks are computed from consecutive hub renderings, with fresh row ids. Asset parent ids must name an HTML doc in the same revision.
+A diff never receives a rendered doc blob even when its path matches a Markdown doc. Existing non-review ids
+anywhere on the hub give `400 invalid_request`; no partial copy is written. Paths, topics, files,
+writeup source, comment bodies, instructions, blocks and content sizes use the existing publish
+and comment limits. Each revision has exactly one writeup. Blob references are owner-scoped:
+upload them first using HEAD/PUT blobs. A missing reference gives `400 blob_missing` without writing.
+Media types are chosen on the hub. Rendered writeup and Markdown blobs are untrusted derived
+content: the hub regenerates them from source through the normal sanitizer and rendering budgets.
+HTML content capability keys are freshly minted. `agent_waiters` and event state are not copied.
+Confirmed deliveries are retained; unconfirmed deliveries are dropped and their Sends have both
+`deliveryId` and `setAsideAt` cleared, making them available to the next take.
+
+All imported timestamps are clamped to at most the hub clock at commit; historical values remain
+unchanged. A different review id with the same owner/origin/review key is `400 invalid_request`
+before rendering. Placement timeouts are `413 too_large`; other placement worker failures are
+`400 invalid_request`, matching publish. Each writeup source is decoded, parsed and validated as
+`WriteupInput` in the worker, once per source hash while it stays in use; a malformed or invalid
+source, a worker failure or a timeout of that step is `400 invalid_request`. Generated immutable bytes are written as produced; only
+hashes/sizes and one revision’s rendered buffers remain in memory, and owner blob references commit
+with the review. Failed imports may leave unreferenced immutable bytes, as publishing does.
+
+The hub records its copy time in nullable `ReviewView.importedAt`; ordinary local reviews use
+null (older responses lacking this additive field parse as null). Imported `movedTo` is ignored.
+The review page displays: "Copied from <origin name> on <date>. Comments, Sends and approvals
+before then were made there." Machine import copies existing reviewer records; it does not grant
+agent tokens the ability to create new user comments, Sends or approvals through ordinary routes.
 
 ### Devices
 
@@ -618,6 +741,15 @@ limit with `413 too_large` before parsing. Upload content also has the role's by
 | Constant key | Maximum |
 | --- | ---: |
 | `inboxItems` | 200 reviews returned in the inbox |
+| `importRevisions` | 1000 revisions per import |
+| `importThreads` | 1000 threads per import |
+| `importComments` | 10000 comments per import |
+| `importSends` | 1000 Sends per import |
+| `importDeliveries` | 1000 deliveries per import |
+| `importRows` | 50000 inserted rows per import, including derived rows |
+| `importRenderedBytes` | 1073741824 bytes cumulative rendered output per import |
+| `importDerivedBytes` | 67108864 stored text/JSON bytes plus row overhead for hub-derived rows per import |
+| `importPlacementBytes` | 1073741824 placement input and repeated text-work bytes per import |
 | `publicJsonBytes` | 4096 bytes per public session or machine registration JSON request body |
 | `commentBodyChars` | 20000 characters |
 | `instructionChars` | 4000 characters |
@@ -654,7 +786,7 @@ limit with `413 too_large` before parsing. Upload content also has the role's by
 | `featuresCount` | 64 capability features |
 | `featureChars` | 64 characters per capability feature |
 | `errorMessageChars` | 1000 characters per error message |
-| `publishJsonBytes` | 8388608 bytes per publish JSON request body |
+| `publishJsonBytes` | 8388608 bytes per publish or import JSON request body |
 | `requestJsonBytes` | 1048576 bytes per other JSON request body |
 
 Binary and oversized diff sides are listed as not shown; publishing still succeeds. The CLI
@@ -707,10 +839,11 @@ All errors use `ErrorBody`, with no stack traces or another owner's ids:
 | `empty_send` | 400 | A Go has no unsent comments and no instruction. |
 | `blob_mismatch` | 400 | Uploaded content does not match the supplied blob hash. |
 | `blob_missing` | 400 | A referenced blob is absent from the owner's blob store. |
-| `wrong_origin` | 400 | Origin metadata conflicts with the authenticated instance; review-id lookups always use `unknown_review` instead. |
+| `wrong_origin` | 400 | Origin metadata conflicts with the authenticated instance, or an import review id belongs to another owner/origin; ordinary review-id lookups use `unknown_review`. |
 | `stale_revision` | 409 | A Send or Approve names a revision older than the newest. |
 | `comment_frozen` | 409 | An edit or deletion targets a user comment already bound to a Send. |
 | `unsent_comments` | 409 | An Approve is attempted while unsent comments remain. |
+| `instance_attached` | 409 | The instance already has a live machine device; the pairing remains usable. |
 | `review_moved` | 409 | A mutation targets a local review moved to a hub. |
 | `publish_conflict` | 409 | The revision or thread set changed during publish computation on three attempts; retry publishing. |
 | `too_large` | 413 | A JSON request body or uploaded content exceeds its byte limit; reject before parsing. |

@@ -12,6 +12,7 @@ export async function renderRevision(
   read: (hash: string) => Promise<ArrayBuffer>,
   put: (bytes: Buffer) => Promise<string>,
   signal?: AbortSignal,
+  onRendered?: (bytes: number) => void,
 ) {
   let rendered: RenderedBytes;
   try {
@@ -25,6 +26,7 @@ export async function renderRevision(
   }
   const ids = [rendered.ids];
   const renderedBytes = Buffer.from(rendered.bytes);
+  onRendered?.(renderedBytes.length);
   let count = rendered.count;
   let bytes = renderedBytes.length;
   if (count > LIMITS.blocksPerRevision || bytes > LIMITS.renderedBytesPerRevision)
@@ -69,6 +71,7 @@ export async function renderRevision(
       continue;
     }
     const json = Buffer.from(result.bytes);
+    onRendered?.(json.length);
     if (count + result.count > LIMITS.blocksPerRevision || bytes + json.length > LIMITS.renderedBytesPerRevision) {
       exhausted = true;
       unrendered.push(file.path);

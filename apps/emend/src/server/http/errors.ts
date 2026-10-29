@@ -18,6 +18,7 @@ const MESSAGES: Record<ErrorCode, string> = {
   stale_revision: "The revision is out of date.",
   comment_frozen: "The comment has already been sent.",
   unsent_comments: "Unsent comments remain.",
+  instance_attached: "This machine is already attached. Revoke it in the hub's devices, or run emend detach on it.",
   review_moved: "The review has moved.",
   publish_conflict: "The review changed during publish. Try again.",
   too_large: "The request is too large.",
@@ -25,6 +26,8 @@ const MESSAGES: Record<ErrorCode, string> = {
   rate_limited: "Code entry is temporarily locked.",
 };
 const DETAILS = {
+  import_aborted: { code: "invalid_request", message: "The import was cancelled." },
+  import_busy: { code: "rate_limited", message: "The server is busy importing; try again." },
   waiting_takes: { code: "rate_limited", message: "Too many waiting takes." },
   event_streams: { code: "rate_limited", message: "Too many open event streams." },
   publish_busy: { code: "rate_limited", message: "The server is busy publishing; try again." },

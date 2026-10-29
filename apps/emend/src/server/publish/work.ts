@@ -1,4 +1,4 @@
-import type { Placement, PlacementLocation, Target, TopicMeta, WriteupInput } from "@emend/contract";
+import { type Placement, type PlacementLocation, type Target, type TopicMeta, WriteupInput } from "@emend/contract";
 import {
   type Block,
   blockHash,
@@ -15,7 +15,12 @@ import {
 
 export type SharedSides = { oldHash?: string; newHash?: string };
 export type WorkLast = { location: PlacementLocation; sides?: SharedSides } | null;
+export type PlacementDoc = PlaceContext["docs"] extends Map<string, infer T> ? T : never;
+/** Import caches opaque worker output; parsed content never crosses by structured clone. */
+export type EncodedPlacementDoc = { bytes: ArrayBuffer; textBytes: number; encodedBytes: number };
 export type Work =
+  | { kind: "writeup-source"; bytes: ArrayBuffer }
+  | { kind: "placement-doc"; format: "html" | "markdown" | "writeup"; bytes: ArrayBuffer }
   | { kind: "writeup"; source: WriteupInput; topics: TopicMeta[] }
   | { kind: "doc"; path: string; source: ArrayBuffer }
   | { kind: "resection"; path: string; bytes: ArrayBuffer }
@@ -24,6 +29,8 @@ export type Work =
       kind: "place";
       writeup: string | null;
       docs: Map<string, { kind: "markdown"; hash: string | null } | { kind: "html"; hash: string }>;
+      parsedDocs?: Map<string, EncodedPlacementDoc>;
+      parsedWriteup?: EncodedPlacementDoc;
       texts: Map<string, ArrayBuffer>;
       files: Map<string, SharedSides>;
       topics: Set<string>;
@@ -36,6 +43,8 @@ export type Work =
       }[];
     };
 export type WorkResult =
+  | { kind: "writeup-source"; source: WriteupInput }
+  | ({ kind: "placement-doc" } & EncodedPlacementDoc)
   | ({ kind: "writeup" | "doc" } & RenderedBytes)
   | { kind: "changed"; bytes: ArrayBuffer }
   | { kind: "place"; placements: { id: string; placement: Placement }[] };
@@ -55,6 +64,21 @@ export function serializeRendered(value: RenderedWriteup | Block[]): RenderedByt
 }
 export type Executor = (work: Work) => Promise<WorkResult>;
 export const executeWork: Executor = async (work) => {
+  if (work.kind === "writeup-source")
+    return { kind: "writeup-source", source: WriteupInput.parse(JSON.parse(decode(work.bytes))) };
+  if (work.kind === "placement-doc") {
+    const doc: PlacementDoc =
+      work.format === "html"
+        ? { kind: "html", text: docText(decode(work.bytes)) }
+        : { kind: "markdown", blocks: parse(work.bytes, work.format === "writeup" ? "writeup" : "doc") };
+    const encoder = new TextEncoder();
+    const textBytes =
+      doc.kind === "html"
+        ? encoder.encode(doc.text ?? "").byteLength
+        : doc.blocks.reduce((total, block) => total + encoder.encode(block.text).byteLength, 0);
+    const bytes = encoder.encode(JSON.stringify(doc)).buffer;
+    return { kind: "placement-doc", bytes, textBytes, encodedBytes: bytes.byteLength };
+  }
   if (work.kind === "writeup")
     return { kind: "writeup", ...serializeRendered(await renderWriteup(work.source, work.topics)) };
   if (work.kind === "doc")
@@ -81,7 +105,17 @@ export const executeWork: Executor = async (work) => {
       bytes: new TextEncoder().encode(changed.map((id) => JSON.stringify(id)).join("\n")).buffer,
     };
   }
+  const parsed = new Map<ArrayBuffer, PlacementDoc>();
+  const placementDoc = ({ bytes }: EncodedPlacementDoc): PlacementDoc => {
+    let doc = parsed.get(bytes);
+    if (!doc) {
+      doc = JSON.parse(decode(bytes)) as PlacementDoc;
+      parsed.set(bytes, doc);
+    }
+    return doc;
+  };
   const docs: PlaceContext["docs"] = new Map();
+  for (const [path, encoded] of work.parsedDocs ?? []) docs.set(path, placementDoc(encoded));
   const decoded = new Map<string, string>();
   const text = (hash: string) => {
     const cached = decoded.get(hash);
@@ -108,7 +142,13 @@ export const executeWork: Executor = async (work) => {
         blocks: doc.hash ? parse(work.texts.get(doc.hash) ?? new ArrayBuffer(0), "doc") : [],
       });
   }
-  const writeup = work.writeup ? parse(work.texts.get(work.writeup) ?? new ArrayBuffer(0), "writeup") : [];
+  const parsedWriteup = work.parsedWriteup ? placementDoc(work.parsedWriteup) : undefined;
+  const writeup =
+    parsedWriteup?.kind === "markdown"
+      ? parsedWriteup.blocks
+      : work.writeup
+        ? parse(work.texts.get(work.writeup) ?? new ArrayBuffer(0), "writeup")
+        : [];
   const files = new Map([...work.files].map(([path, value]) => [path, sides(value)]));
   return {
     kind: "place",

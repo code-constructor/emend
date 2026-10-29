@@ -1580,3 +1580,19 @@ test("an unplaced reading draft resumed beside Diff stays visible when resized t
   expect(((await screen.findByLabelText("Comment")) as HTMLTextAreaElement).value).toBe("Unplaced writeup draft");
   expect(screen.getByRole("link", { name: /Comments/ }).getAttribute("aria-current")).toBe("page");
 });
+
+test.each([null, "2026-01-02T00:00:00.000Z"])("shows provenance only for copied reviews (%s)", async (importedAt) => {
+  const fallback = fetchMock.getMockImplementation();
+  fetchMock.mockImplementation(async (path, init) =>
+    path === `/api/v1/reviews/${id}`
+      ? Response.json({ ...item, importedAt, revisions: [{ seq: 1, createdAt: item.updatedAt }] })
+      : (fallback?.(path, init) as Promise<Response>),
+  );
+  mount(`/r/${id}`);
+  await screen.findByRole("heading", { name: item.title });
+  if (importedAt)
+    expect(
+      await screen.findByText(/Copied from Workshop on .*Comments, Sends and approvals before then were made there\./),
+    ).toBeTruthy();
+  else expect(screen.queryByText(/Copied from/)).toBeNull();
+});

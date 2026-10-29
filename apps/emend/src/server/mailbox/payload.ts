@@ -65,13 +65,13 @@ function placementReserve(target: Target) {
   return Math.max(jsonBytes({ status: "placed", location }), jsonBytes({ status: "unplaced", reason: "not-placed" }));
 }
 
-export function commentReserve(target: Target, body: string) {
+export function commentTargetReserve(target: Target) {
   return (
     jsonBytes({
       id: placeholder,
       threadId: placeholder,
       target,
-      body,
+      body: "",
       placement: null,
       history: [],
       historyTrimmed: true,
@@ -80,6 +80,10 @@ export function commentReserve(target: Target, body: string) {
     placementReserve(target) +
     1
   );
+}
+
+export function commentReserve(target: Target, body: string) {
+  return commentTargetReserve(target) + jsonBytes(body) - 2;
 }
 
 const trimmedFieldBytes = Buffer.byteLength(',"historyTrimmed":true');

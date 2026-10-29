@@ -116,6 +116,7 @@ async function inbox(ownerId: string, q: Queries, deps: AppDeps, reviewId?: stri
     agentWaiting: (deps.events?.agentWaiting(review.id) ?? false) || waitingIds.has(review.id),
     updatedAt: new Date(review.updatedAt).toISOString(),
     movedTo: review.movedToUrl,
+    importedAt: review.importedAt === null ? null : new Date(review.importedAt).toISOString(),
   }));
 }
 

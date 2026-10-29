@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import type { Db } from "../db/client.ts";
 import type { Instance } from "../state/instance.ts";
 import type { BlobStore } from "../store/blobs.ts";
+import { pairingRedemptions } from "./auth/pairings.ts";
 import { type AppEnv, requireScope } from "./auth/principal.ts";
 import { secureSessionRequest, sessionCookie, verifySession, writeSessionCookie } from "./auth/sessions.ts";
 import { verifyBearer } from "./auth/tokens.ts";
@@ -23,6 +24,8 @@ import { deliveryRoutes } from "./routes/deliveries.ts";
 import { deviceRoutes } from "./routes/devices.ts";
 import { eventRoutes } from "./routes/events.ts";
 import { fileRoutes } from "./routes/files.ts";
+import { importRoutes } from "./routes/import.ts";
+import { machineRoutes } from "./routes/machines.ts";
 import { pairingRoutes } from "./routes/pairings.ts";
 import { publishRoutes } from "./routes/publish.ts";
 import { reviewRoutes } from "./routes/reviews.ts";
@@ -105,12 +108,11 @@ export function createApp(deps: AppDeps) {
         ? endpointMatchers.find((entry) => entry.method === "GET" && entry.match.test(c.req.path))
         : undefined);
     const json = endpoint && ["POST", "PATCH"].includes(c.req.method);
-    const limit =
-      c.req.path === "/api/v1/publish"
-        ? LIMITS.publishJsonBytes
-        : ["/api/v1/session", "/api/v1/machines"].includes(c.req.path)
-          ? LIMITS.publicJsonBytes
-          : LIMITS.requestJsonBytes;
+    const limit = ["/api/v1/publish", "/api/v1/import"].includes(c.req.path)
+      ? LIMITS.publishJsonBytes
+      : ["/api/v1/session", "/api/v1/machines"].includes(c.req.path)
+        ? LIMITS.publicJsonBytes
+        : LIMITS.requestJsonBytes;
     if (json) checkContentLength(c, limit);
     if (c.req.method === "PUT" && c.req.path.startsWith("/api/v1/blobs/")) checkContentLength(c, LIMITS.htmlDocBytes);
     if (endpoint?.scope !== "public") {
@@ -136,7 +138,10 @@ export function createApp(deps: AppDeps) {
   capabilitiesRoutes(app, deps.config.serverKey);
   pairingRoutes(app, deps);
   deviceRoutes(app, deps);
-  sessionRoutes(app, deps);
+  const redemptions = pairingRedemptions(deps.now);
+  sessionRoutes(app, deps, redemptions);
+  machineRoutes(app, deps, redemptions);
+  importRoutes(app, deps);
   blobRoutes(app, deps);
   publishRoutes(app, deps);
   reviewRoutes(app, deps);

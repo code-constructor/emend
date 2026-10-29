@@ -132,5 +132,15 @@ export const MIGRATIONS: readonly { tag: string; when: number; hash: string; sta
       "ALTER TABLE `revisions` ADD `main` text;",
       "ALTER TABLE `revisions` ADD `writeup_empty` integer DEFAULT 0 NOT NULL;"
     ]
+  },
+  {
+    "tag": "0007_remarkable_kid_colt",
+    "when": 1793175607067,
+    "hash": "49271a2989ccbf99362ef0f5522e7609df72948dfd2690bf3d6d3b4faab81f74",
+    "statements": [
+      "ALTER TABLE `instances` ADD `was_self` integer DEFAULT false NOT NULL;",
+      "ALTER TABLE `reviews` ADD `imported_at` integer;",
+      "UPDATE `instances` SET `was_self` = 1;"
+    ]
   }
 ];

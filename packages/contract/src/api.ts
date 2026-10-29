@@ -63,3 +63,25 @@ export const PairingCreated = z.object({
   expiresAt: z.iso.datetime(),
 });
 export type PairingCreated = z.infer<typeof PairingCreated>;
+
+export const MachineRegistration = z.union(
+  SessionRequest.options.map((option) =>
+    option.extend({
+      instance: z.object({
+        id: z.uuid(),
+        name: z
+          .string()
+          .regex(/^[a-zA-Z0-9 ._()/;-]*$/)
+          .trim()
+          .min(1)
+          .max(200),
+      }),
+    }),
+  ),
+);
+export type MachineRegistration = z.infer<typeof MachineRegistration>;
+export const MachineRegistered = z.object({
+  token: z.string().regex(/^em_[A-Za-z0-9_-]{43}$/),
+  hub: z.object({ id: z.uuid(), name: z.string(), url: z.url({ protocol: /^https?$/ }) }),
+});
+export type MachineRegistered = z.infer<typeof MachineRegistered>;

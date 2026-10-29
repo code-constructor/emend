@@ -59,6 +59,7 @@ export const instances = sqliteTable("instances", {
   id: id(),
   name: text("name").notNull(),
   isSelf: integer("is_self", { mode: "boolean" }).notNull().default(false),
+  wasSelf: integer("was_self", { mode: "boolean" }).notNull().default(false),
   attachedAt: integer("attached_at"),
   lastSeenAt: integer("last_seen_at"),
 });
@@ -91,6 +92,7 @@ export const reviews = sqliteTable(
       .default("open"),
     approvedRevision: text("approved_revision"),
     movedToUrl: text("moved_to_url"),
+    importedAt: integer("imported_at"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

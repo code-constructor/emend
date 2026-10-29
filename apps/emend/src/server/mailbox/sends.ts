@@ -5,7 +5,7 @@ import type { Db } from "../../db/client.ts";
 import { newestRevision, requireReview } from "../../db/repo/thread-access.ts";
 import { comments, reviews, sends, threads } from "../../db/schema.ts";
 import { ApiError } from "../http/errors.ts";
-import { commentReserve, envelopeBytes, jsonBytes } from "./payload.ts";
+import { commentTargetReserve, envelopeBytes, jsonBytes } from "./payload.ts";
 
 export function createSend(ownerId: string, db: Db, reviewId: string, request: SendRequest, now: number) {
   return db.transaction(async (q) => {
@@ -25,15 +25,21 @@ export function createSend(ownerId: string, db: Db, reviewId: string, request: S
     if (request.kind === "go") {
       let bytes = envelopeBytes + (request.instruction?.trim() ? jsonBytes(request.instruction) + 1 : 0);
       const pending = await q
-        .select({ body: comments.body, target: threads.target })
+        .select({ threadId: threads.id, body: comments.body, target: threads.target })
         .from(comments)
         .innerJoin(
           threads,
           and(eq(threads.ownerId, ownerId), eq(threads.reviewId, reviewId), eq(threads.id, comments.threadId)),
         )
         .where(unsent);
+      const targetReserves = new Map<string, number>();
       for (const comment of pending) {
-        bytes += commentReserve(comment.target, comment.body);
+        let targetBytes = targetReserves.get(comment.threadId);
+        if (targetBytes === undefined) {
+          targetBytes = commentTargetReserve(comment.target);
+          targetReserves.set(comment.threadId, targetBytes);
+        }
+        bytes += targetBytes + jsonBytes(comment.body) - 2;
         if (bytes > LIMITS.handoffBytes) throw new ApiError("too_large");
       }
     }

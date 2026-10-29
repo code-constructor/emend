@@ -561,9 +561,9 @@ test("assets get server-chosen content types and external index symlinks are ref
   await error(response, "not_found");
 });
 
-test("unimplemented routes return 404 after a successful scope check without parsing a body", async () => {
+test("import refuses local agents before parsing; registration validates its public body", async () => {
   await error(await request("/import", "POST", bearer(agent)), "not_found");
-  await error(await request("/machines", "POST"), "not_found");
+  await error(await request("/machines", "POST"), "invalid_request");
 });
 
 test("an ambiguous code cannot redeem pairings belonging to different owners", async () => {

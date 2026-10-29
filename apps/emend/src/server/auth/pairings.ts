@@ -89,3 +89,28 @@ export function codeLockout() {
     },
   };
 }
+
+// One queue and lockout per app, shared by browser and machine redemption.
+export function pairingRedemptions(now: () => number) {
+  const lock = codeLockout();
+  let queue = Promise.resolve();
+  return <T>(code: boolean, redeem: (at: number) => Promise<T>): Promise<T> => {
+    const run = async () => {
+      const at = now();
+      if (code) lock.check(at);
+      try {
+        return await redeem(at);
+      } catch (error) {
+        if (code && error instanceof ApiError && error.code === "unauthorized") lock.fail(at);
+        throw error;
+      }
+    };
+    if (!code) return run();
+    const pending = queue.then(run);
+    queue = pending.then(
+      () => {},
+      () => {},
+    );
+    return pending;
+  };
+}

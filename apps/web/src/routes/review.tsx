@@ -306,6 +306,12 @@ function LoadedReview({ review, published }: { review: ReviewView; published: nu
               <span className="text-xs text-neutral-500 dark:text-neutral-400">{review.state}</span>
             </div>
             <h1 className="mt-2 break-words text-xl font-semibold tracking-tight">{review.title}</h1>
+            {review.importedAt && (
+              <p className="mt-2 break-words text-sm">
+                Copied from {review.origin.name} on {new Date(review.importedAt).toLocaleDateString()}. Comments, Sends
+                and approvals before then were made there.
+              </p>
+            )}
             <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-neutral-600 dark:text-neutral-400">
               {(review.repo || review.branch) && (
                 <span className="break-words">{[review.repo, review.branch].filter(Boolean).join(" · ")}</span>

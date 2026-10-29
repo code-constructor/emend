@@ -20,8 +20,8 @@ export async function initializeServerState(stateDir: string, options: { tokens?
       async (q) => {
         await q
           .insert(instances)
-          .values({ ...instance, isSelf: true })
-          .onConflictDoUpdate({ target: instances.id, set: { name: instance.name, isSelf: true } });
+          .values({ ...instance, isSelf: true, wasSelf: true })
+          .onConflictDoUpdate({ target: instances.id, set: { name: instance.name, isSelf: true, wasSelf: true } });
         // Bootstrap has no principal yet; the local server has one owner.
         const owner = (await q.select().from(owners).get()) ?? (await q.insert(owners).values({}).returning().get());
         if (!owner) throw new Error("Could not initialize server state.");

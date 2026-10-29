@@ -91,3 +91,25 @@ test("blob reuse tightens folders and files, refuses truncated reads and repairs
     await ctx.cleanup();
   }
 });
+
+test("staging generated content retains only metadata and grants no owner access before commit", async () => {
+  const ctx = await testDb();
+  const store = new BlobStore(ctx.db, ctx.dir);
+  try {
+    const bytes = Buffer.from("Synthetic staged content");
+    const staged = store.stage(bytes);
+    expect(staged).toEqual({ sha256: createHash("sha256").update(bytes).digest("hex"), size: bytes.length });
+    expect(await readFile(join(ctx.dir, "blobs", staged.sha256.slice(0, 2), staged.sha256))).toEqual(bytes);
+    expect(await store.get(ctx.ownerId, staged.sha256)).toBeNull();
+    expect(await store.get(ctx.otherOwnerId, staged.sha256)).toBeNull();
+    await ctx.db.transaction((q) =>
+      q
+        .insert(blobs)
+        .values({ ...staged, ownerId: ctx.ownerId, mediaType: "text/plain" })
+        .then(() => {}),
+    );
+    expect(await store.get(ctx.ownerId, staged.sha256)).toEqual(new Uint8Array(bytes));
+  } finally {
+    await ctx.cleanup();
+  }
+});

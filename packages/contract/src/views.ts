@@ -38,6 +38,7 @@ export type InboxItem = z.infer<typeof InboxItem>;
 export const InboxList = z.object({ items: z.array(InboxItem).max(LIMITS.inboxItems) });
 export type InboxList = z.infer<typeof InboxList>;
 export const ReviewView = InboxItem.extend({
+  importedAt: z.iso.datetime().nullable().default(null),
   revisions: z.array(z.object({ seq: z.int().positive(), createdAt: z.iso.datetime() })),
 });
 export type ReviewView = z.infer<typeof ReviewView>;

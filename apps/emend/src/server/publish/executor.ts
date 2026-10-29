@@ -58,7 +58,7 @@ export function workerExecutor(timeouts = { render: 10000, place: 30000 }): Work
           void close();
           reject(new WorkTimeout());
         },
-        work.kind === "place" ? timeouts.place : timeouts.render,
+        work.kind === "place" || work.kind === "placement-doc" ? timeouts.place : timeouts.render,
       );
       current.once("message", message);
       current.once("error", failed);
@@ -68,12 +68,16 @@ export function workerExecutor(timeouts = { render: 10000, place: 30000 }): Work
         const buffers =
           work.kind === "doc"
             ? [work.source]
-            : work.kind === "resection"
+            : work.kind === "resection" || work.kind === "placement-doc" || work.kind === "writeup-source"
               ? [work.bytes]
               : work.kind === "changed"
                 ? [...work.previous.map((blob) => blob.bytes), ...work.next]
                 : work.kind === "place"
-                  ? [...work.texts.values()]
+                  ? [
+                      ...work.texts.values(),
+                      ...[...(work.parsedDocs?.values() ?? [])].map((doc) => doc.bytes),
+                      ...(work.parsedWriteup ? [work.parsedWriteup.bytes] : []),
+                    ]
                   : [];
         current.postMessage(work, [...new Set(buffers)]);
       } catch {

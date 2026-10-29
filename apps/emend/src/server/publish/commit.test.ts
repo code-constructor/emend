@@ -31,6 +31,7 @@ test("publishing at the block cap over a cap-sized previous revision keeps beare
   const loop = monitorEventLoopDelay({ resolution: 1 });
   let monitoring = false;
   let phase = "idle";
+  let writerMs = 0;
   let monitor: Promise<void> | undefined;
   const preparations: Promise<void>[] = [];
   const samples: { phase: string; get: number; head: number }[] = [];
@@ -69,7 +70,16 @@ test("publishing at the block cap over a cap-sized previous revision keeps beare
     const db: Db = {
       ...f.db,
       query: (callback) => during("snapshot", () => f.db.query(callback)),
-      transaction: (callback, options) => during("commit", () => f.db.transaction(callback, options)),
+      transaction: (callback, options) =>
+        during("commit", async () => {
+          let entered = 0;
+          const value = await f.db.transaction((q) => {
+            entered = performance.now();
+            return callback(q);
+          }, options);
+          if (monitoring) writerMs += performance.now() - entered;
+          return value;
+        }),
     };
     for (const method of ["get", "put"] as const) {
       // Store probes include main-thread byte hashing and persistence between worker phases.
@@ -175,8 +185,8 @@ test("publishing at the block cap over a cap-sized previous revision keeps beare
     await Promise.all(preparations);
     const worst: Record<string, number> = {};
     for (const sample of samples) worst[sample.phase] = Math.max(worst[sample.phase] ?? 0, sample.get, sample.head);
-    const margin = JSON.stringify({ worstMs: worst, eventLoopMaxMs: loop.max / 1e6 });
-    process.stdout.write(`publish responsiveness: ${margin}\n`);
+    const margin = JSON.stringify({ worstMs: worst, eventLoopMaxMs: loop.max / 1e6, writerMs });
+    console.info(`publish responsiveness: ${margin}`);
     if (process.env.EMEND_TIMING_STRICT === "1") expect(loop.max / 1e6, margin).toBeLessThan(50);
     expect(response.status).toBe(200);
     expect(PublishResponse.parse(await response.json()).unrendered).toEqual([]);

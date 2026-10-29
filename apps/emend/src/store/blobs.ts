@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { open, readFile, rename, rm } from "node:fs/promises";
+import { open, readFile, rename, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { and, eq } from "drizzle-orm";
 import type { Db, Queries } from "../db/client.ts";
@@ -32,6 +32,20 @@ export class BlobStore {
     expectedSha?: string,
     scope?: Queries,
   ): Promise<string> {
+    const { sha256: sha, size } = this.stage(bytes, expectedSha);
+    const record = async (q: Queries) => {
+      await q
+        .insert(blobs)
+        .values({ ownerId, sha256: sha, size, mediaType })
+        .onConflictDoNothing({ target: [blobs.ownerId, blobs.sha256] });
+    };
+    if (scope) await record(scope);
+    else await this.db.transaction(record, { offThread: true });
+    return sha;
+  }
+
+  /** Persist immutable content without publishing an owner reference; the caller commits metadata later. */
+  stage(bytes: Uint8Array, expectedSha?: string): { sha256: string; size: number } {
     // Snapshot caller-owned bytes before hashing or awaiting anything.
     const content = Uint8Array.from(bytes);
     const sha = createHash("sha256").update(content).digest("hex");
@@ -40,15 +54,7 @@ export class BlobStore {
     ensurePrivateDir(dirname(file), this.dir);
     const valid = tightenSecretFile(file) && createHash("sha256").update(readFileSync(file)).digest("hex") === sha;
     if (!valid) writeSecretFile(file, content, this.dir);
-    const record = async (q: Queries) => {
-      await q
-        .insert(blobs)
-        .values({ ownerId, sha256: sha, size: content.length, mediaType })
-        .onConflictDoNothing({ target: [blobs.ownerId, blobs.sha256] });
-    };
-    if (scope) await record(scope);
-    else await this.db.transaction(record, { offThread: true });
-    return sha;
+    return { sha256: sha, size: content.length };
   }
 
   async has(ownerId: string, sha: string, scope?: Queries): Promise<boolean> {
@@ -77,14 +83,33 @@ export class BlobStore {
         .get(),
     );
     if (!row) return null;
+    return this.readStaged(sha, row.size);
+  }
+
+  /** Trusted callers must hold metadata for bytes they staged themselves; no owner access is granted. */
+  async readStaged(sha: string, size: number): Promise<Uint8Array | null> {
+    if (!/^[0-9a-f]{64}$/.test(sha)) return null;
     try {
       const file = this.path(sha);
       ensurePrivateDir(dirname(file), this.dir);
       if (!tightenSecretFile(file)) return null;
       const bytes = new Uint8Array(await readFile(file));
-      return bytes.byteLength === row.size && createHash("sha256").update(bytes).digest("hex") === sha ? bytes : null;
+      return bytes.byteLength === size && createHash("sha256").update(bytes).digest("hex") === sha ? bytes : null;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+  }
+
+  /** Presence-only check for an already owner-validated reference; does not load its contents. */
+  async hasContent(ownerId: string, sha: string, size: number): Promise<boolean> {
+    if (!(await this.has(ownerId, sha))) return false;
+    try {
+      const file = this.path(sha);
+      ensurePrivateDir(dirname(file), this.dir);
+      return tightenSecretFile(file) && (await stat(file)).size === size;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
       throw error;
     }
   }

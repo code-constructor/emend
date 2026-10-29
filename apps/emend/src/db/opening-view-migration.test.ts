@@ -35,7 +35,10 @@ test("opening view migration preserves an existing revision's writeup default", 
         sql`INSERT INTO revisions (id, owner_id, review_id, seq, content_key, created_at) VALUES (${revision}, ${owner}, ${review}, 1, 'synthetic', 0)`,
       );
     });
-    expect(await migrate(db)).toBe(1);
+    const firstPending = MIGRATIONS.findIndex((migration) =>
+      migration.statements.some((s) => s.includes("writeup_empty")),
+    );
+    expect(await migrate(db)).toBe(MIGRATIONS.length - firstPending);
     expect(await getRevision(owner, db, review, 1)).toMatchObject({ id: revision, main: null, writeupEmpty: false });
     expect(await db.read((q) => q.values(sql`PRAGMA foreign_key_check`))).toEqual([]);
   } finally {

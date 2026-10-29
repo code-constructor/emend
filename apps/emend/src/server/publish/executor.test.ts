@@ -16,6 +16,37 @@ vi.mock("node:worker_threads", async (original) => {
   };
 });
 
+test("breaker: writeup source is transferred, parsed and stripped in the worker", async () => {
+  const execute = workerExecutor();
+  try {
+    const source = { overview: "Synthetic", tldr: "", decisions: null, topics: {} };
+    const bytes = new TextEncoder().encode(JSON.stringify({ ...source, junk: [[[]]] })).buffer;
+    const result = await execute({ kind: "writeup-source", bytes });
+    expect(bytes.byteLength).toBe(0);
+    expect(result).toEqual({ kind: "writeup-source", source });
+    for (const text of ["{", "{}", JSON.stringify({ ...source, overview: 1 })])
+      await expect(execute({ kind: "writeup-source", bytes: new TextEncoder().encode(text).buffer })).rejects.toThrow(
+        "Worker failed",
+      );
+  } finally {
+    await execute.close();
+  }
+});
+
+test("breaker: writeup source uses the render timeout", async () => {
+  const execute = workerExecutor({ render: 1, place: 30000 });
+  try {
+    await expect(
+      execute({
+        kind: "writeup-source",
+        bytes: new TextEncoder().encode('{"overview":"","tldr":"","decisions":null,"topics":{}}').buffer,
+      }),
+    ).rejects.toBeInstanceOf(WorkTimeout);
+  } finally {
+    await execute.close();
+  }
+});
+
 test("real worker reuses jobs with bounded memory and is replaced after failure or timeout", async () => {
   const work = () => ({
     kind: "doc" as const,
@@ -79,5 +110,112 @@ test("real worker reuses jobs with bounded memory and is replaced after failure 
     expect((await slow(work())).kind).toBe("doc");
   } finally {
     await slow.close();
+  }
+});
+
+test("fix5: real worker transfers parsed doc bytes in both directions and preserves cached bytes", async () => {
+  const execute = workerExecutor();
+  try {
+    const bytes = new TextEncoder().encode("<p>needle 界</p>").buffer;
+    const parsed = await execute({ kind: "placement-doc", format: "html", bytes });
+    expect(bytes.byteLength).toBe(0);
+    expect(parsed).toMatchObject({
+      kind: "placement-doc",
+      bytes: expect.any(ArrayBuffer),
+      textBytes: 10,
+      encodedBytes: expect.any(Number),
+    });
+    expect(parsed).not.toHaveProperty("doc");
+    if (parsed.kind !== "placement-doc") throw new Error("Missing parsed document");
+    expect(parsed.encodedBytes).toBe(parsed.bytes.byteLength);
+    expect(JSON.parse(new TextDecoder().decode(parsed.bytes))).toEqual({ kind: "html", text: "needle 界" });
+    for (let i = 0; i < 2; i++) {
+      const copy = { ...parsed, bytes: parsed.bytes.slice(0) };
+      const placed = await execute({
+        kind: "place",
+        docs: new Map(),
+        parsedDocs: new Map([
+          ["doc.html", copy],
+          ["alias.html", copy],
+        ]),
+        files: new Map(),
+        texts: new Map(),
+        writeup: null,
+        topics: new Set(),
+        threads: [
+          {
+            id: "synthetic",
+            target: { kind: "html-span", path: "doc.html", quote: "needle 界", prefix: "", suffix: "" },
+            last: null,
+            renames: [],
+          },
+        ],
+      });
+      expect(copy.bytes.byteLength).toBe(0);
+      expect(parsed.bytes.byteLength).toBe(parsed.encodedBytes);
+      expect(placed).toMatchObject({
+        kind: "place",
+        placements: [{ placement: { status: "placed", location: { path: "doc.html", start: 0, end: 8 } } }],
+      });
+    }
+  } finally {
+    await execute.close();
+  }
+});
+
+test("fix5: real worker transfers parsed writeup bytes and reuses them for placement", async () => {
+  const execute = workerExecutor();
+  try {
+    const block = {
+      id: "overview-00000000",
+      kind: "paragraph",
+      section: "overview",
+      text: "needle 界",
+      html: "<p>needle 界</p>",
+    };
+    const bytes = new TextEncoder().encode(JSON.stringify({ sections: [{ key: "overview", blocks: [block] }] })).buffer;
+    const parsed = await execute({ kind: "placement-doc", format: "writeup", bytes });
+    expect(bytes.byteLength).toBe(0);
+    expect(parsed).toMatchObject({
+      kind: "placement-doc",
+      bytes: expect.any(ArrayBuffer),
+      textBytes: 10,
+      encodedBytes: expect.any(Number),
+    });
+    expect(parsed).not.toHaveProperty("doc");
+    if (parsed.kind !== "placement-doc") throw new Error("Missing writeup");
+    expect(parsed.encodedBytes).toBe(parsed.bytes.byteLength);
+    expect(JSON.parse(new TextDecoder().decode(parsed.bytes))).toEqual({ kind: "markdown", blocks: [block] });
+    for (let i = 0; i < 2; i++) {
+      const copy = { ...parsed, bytes: parsed.bytes.slice(0) };
+      expect(
+        await execute({
+          kind: "place",
+          writeup: null,
+          parsedWriteup: copy,
+          docs: new Map(),
+          texts: new Map(),
+          files: new Map(),
+          topics: new Set(),
+          threads: [
+            {
+              id: "synthetic",
+              target: { kind: "writeup-span", blockId: block.id, quote: "needle 界", prefix: "", suffix: "" },
+              last: null,
+              renames: [],
+            },
+          ],
+        }),
+      ).toMatchObject({
+        kind: "place",
+        placements: [
+          { placement: { status: "placed", location: { kind: "writeup-span", blockId: block.id, start: 0, end: 8 } } },
+        ],
+      });
+      expect(copy.bytes.byteLength).toBe(0);
+      expect(parsed.bytes.byteLength).toBe(parsed.encodedBytes);
+    }
+  } finally {
+    await execute.close();
   }
 });
