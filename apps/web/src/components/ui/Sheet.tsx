@@ -1,25 +1,94 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { type ReactNode, useState } from "react";
-import { Button } from "./Button.tsx";
+import { X } from "lucide-react";
+import { type ComponentProps, type ReactNode, useRef } from "react";
+import { IconButton } from "./IconButton.tsx";
+import { isToastInteraction, overlayClass } from "./overlay.ts";
+import { cn } from "./utils.ts";
+import "./Sheet.css";
 
-export function Sheet({ title, trigger, children }: { title: string; trigger: ReactNode; children: ReactNode }) {
-  const [open, setOpen] = useState(false);
+export interface SheetProps {
+  side?: "right" | "left" | "bottom";
+  title: ReactNode;
+  description?: ReactNode;
+  footer?: ReactNode;
+  children?: ReactNode;
+  trigger?: ReactNode;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  onInteractOutside?: ComponentProps<typeof Dialog.Content>["onInteractOutside"];
+}
+
+const sides = {
+  right:
+    "inset-y-0 right-0 w-[min(400px,92%)] rounded-l-xl border-l border-line-1 animate-[em-sheet-right_var(--dur-3)_var(--ease-out)]",
+  left: "inset-y-0 left-0 w-[min(340px,92%)] rounded-r-xl border-r border-line-1 animate-[em-sheet-left_var(--dur-3)_var(--ease-out)]",
+  bottom:
+    "inset-x-0 bottom-0 max-h-[85dvh] rounded-t-xl pb-[env(safe-area-inset-bottom)] animate-[em-sheet-up_var(--dur-3)_var(--ease-out)]",
+};
+
+export function Sheet({
+  side = "right",
+  title,
+  description,
+  footer,
+  trigger,
+  children,
+  open,
+  onOpenChange,
+  onInteractOutside,
+}: SheetProps) {
+  const content = useRef<HTMLDivElement>(null);
+  const opener = useRef<HTMLElement | null>(null);
   return (
-    <Dialog.Root open={open} onOpenChange={setOpen}>
-      <Dialog.Trigger asChild>{trigger}</Dialog.Trigger>
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      {trigger && <Dialog.Trigger asChild>{trigger}</Dialog.Trigger>}
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-40 bg-black/40" />
+        <Dialog.Overlay className={overlayClass} />
         <Dialog.Content
-          aria-describedby={undefined}
-          className="fixed inset-y-0 right-0 z-50 flex w-full max-w-sm flex-col gap-4 overflow-y-auto border-l border-neutral-200 bg-white p-5 shadow-xl dark:border-neutral-800 dark:bg-neutral-950"
+          ref={content}
+          onInteractOutside={(event) => {
+            if (isToastInteraction(event)) event.preventDefault();
+            else onInteractOutside?.(event);
+          }}
+          onOpenAutoFocus={(event) => {
+            opener.current =
+              !trigger && open !== undefined && document.activeElement instanceof HTMLElement
+                ? document.activeElement
+                : null;
+            event.preventDefault();
+            content.current?.focus();
+          }}
+          onCloseAutoFocus={(event) => {
+            if (!trigger && opener.current?.isConnected) {
+              event.preventDefault();
+              opener.current.focus();
+            }
+          }}
+          {...(description ? {} : { "aria-describedby": undefined })}
+          className={cn("fixed z-[calc(var(--z-sheet)+1)] flex flex-col bg-surface text-fg-1 shadow-3", sides[side])}
         >
-          <div className="flex items-center justify-between gap-4">
-            <Dialog.Title className="text-lg font-semibold">{title}</Dialog.Title>
+          {side === "bottom" && (
+            <div data-sheet-grab aria-hidden="true" className="mx-auto mt-2 h-1 w-9 shrink-0 rounded-[2px] bg-line-2" />
+          )}
+          <header className="flex min-h-[52px] shrink-0 items-center gap-2 border-b border-line-1 py-1.5 pr-2 pl-4">
+            <Dialog.Title className="m-0 flex-1 font-sans text-15 font-semibold leading-(--lh-snug) text-fg-1">
+              {title}
+            </Dialog.Title>
             <Dialog.Close asChild>
-              <Button aria-label="Close">×</Button>
+              <IconButton label="Close" icon={X} size={side === "bottom" ? "lg" : "md"} tooltip={false} />
             </Dialog.Close>
+          </header>
+          <div className="min-h-0 flex-1 space-y-4 overflow-auto p-4">
+            {description && (
+              <Dialog.Description className="m-0 font-sans text-14 font-normal leading-(--lh-body) text-fg-2">
+                {description}
+              </Dialog.Description>
+            )}
+            {children}
           </div>
-          <div className="space-y-4">{children}</div>
+          {footer && (
+            <footer className="flex shrink-0 justify-end gap-2 border-t border-line-1 px-4 py-3">{footer}</footer>
+          )}
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

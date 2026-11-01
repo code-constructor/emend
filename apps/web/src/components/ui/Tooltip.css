@@ -1,0 +1,10 @@
+@keyframes em-tooltip {
+  from {
+    transform: translateY(var(--tooltip-offset, 2px));
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}

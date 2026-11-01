@@ -96,11 +96,7 @@ export function PairPage() {
               placeholder="XXXX-XXXX"
               className="min-h-12 w-full rounded-md border border-neutral-300 bg-transparent px-3 font-mono text-lg focus-visible:outline-blue-600 dark:border-neutral-700"
             />
-            <Button
-              type="submit"
-              disabled={busy}
-              className="w-full border-blue-600 bg-blue-600 text-white hover:bg-blue-700 dark:border-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700"
-            >
+            <Button type="submit" disabled={busy} variant="primary" size="lg" fullWidth>
               Pair
             </Button>
             {busy && <p role="status">Pairing…</p>}

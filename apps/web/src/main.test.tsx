@@ -1,4 +1,4 @@
-import { act, screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import * as reactDom from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
@@ -147,7 +147,7 @@ test.each([
   expect(replaced).toHaveBeenCalledWith(null, "", "/pair");
   expectRouterHasNoSecret(secret);
   await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
-  expect(screen.getByRole("status").textContent).toBe("Pairing…");
+  expect(within(screen.getByRole("main")).getByRole("status").textContent).toBe("Pairing…");
   expect(screen.queryByLabelText("Pairing code")).toBeNull();
   expect(screen.queryByRole("button", { name: "Pair" })).toBeNull();
   const { takePairingSecret } = await import("./lib/pairing-secret.ts");

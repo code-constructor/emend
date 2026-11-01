@@ -1,0 +1,10 @@
+@keyframes em-sheet-left {
+  from {
+    transform: translateX(-16px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}

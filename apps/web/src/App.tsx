@@ -1,6 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { type RouterHistory, RouterProvider } from "@tanstack/react-router";
 import { useState } from "react";
+import { ToastProvider } from "./components/ui/Toast.tsx";
+import { TooltipProvider } from "./components/ui/Tooltip.tsx";
 import { createWebRouter } from "./router.tsx";
 
 export function App({ queryClient, history }: { queryClient?: QueryClient; history?: RouterHistory } = {}) {
@@ -8,7 +10,11 @@ export function App({ queryClient, history }: { queryClient?: QueryClient; histo
   const [router] = useState(() => createWebRouter(history));
   return (
     <QueryClientProvider client={client}>
-      <RouterProvider router={router} />
+      <TooltipProvider>
+        <ToastProvider>
+          <RouterProvider router={router} />
+        </ToastProvider>
+      </TooltipProvider>
     </QueryClientProvider>
   );
 }
