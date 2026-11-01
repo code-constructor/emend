@@ -66,26 +66,17 @@ If `handled.txt` is absent, no deliveries are recorded as handled.
 Check comment ids and earlier outcomes; repeat a reply rather than skip one when resuming partly handled feedback.
 The CLI confirms receipt only after the full JSON is written; a confirmed hand-off will not be offered again.
 
-Save each new `emend wait` or `emend feedback` result as `wait-<UTC time>.json`.
-Get the time with `date -u +%Y%m%dT%H%M%SZ` (GNU and BSD `date`).
-Each result-writing subshell sets `umask 077` before the redirect, creating mode-0600 files even under umask 002.
-A group member cannot open them for writing later.
-Noclobber in the subshell refuses an existing file before emend runs, so no hand-off is confirmed into nothing.
-A name clash creates nothing.
-If the shell refuses the name because the file exists, that command created no file and ran nothing.
-Delete nothing, and run the command again a second later.
-Delete only what you saw fail.
-Right after an `emend wait` or `emend feedback` command you ran exits non-zero, inspect the file its redirect created.
-If that file is empty, delete it: the CLI printed nothing and confirmed nothing.
-The server offers that feedback again later. Then report the error line and stop.
-Keep a non-empty file after a non-zero exit.
-A command stopped by a signal can exit non-zero after it printed and confirmed a hand-off.
-Read it like any saved result; if it is not complete JSON, keep it and tell the user its name.
-Never write a result with plain `>` over a name that might exist. Use the command the loop needs:
+Save each new `emend wait` or `emend feedback` result with `--save "<review-folder>"`.
+emend writes it as `wait-<UTC time>.json` in that folder, with mode 0600, and never replaces an existing file.
+The file is complete or absent. emend confirms receipt only after it saved the file and printed the JSON.
+A command that exits non-zero may have saved a file without confirming it; the server then offers the same feedback again later under a new `deliveryId`.
+After any non-zero exit, list the folder again, read any new file like any saved result, and skip comments you already answered.
+
+Use the command the loop needs:
 
 ```sh
-(umask 077; set -C; emend wait <review-id> --timeout 540 > "<review-folder>/wait-$(date -u +%Y%m%dT%H%M%SZ).json")
-(umask 077; set -C; emend feedback <review-id> > "<review-folder>/wait-$(date -u +%Y%m%dT%H%M%SZ).json")
+emend wait <review-id> --timeout 540 --save "<review-folder>"
+emend feedback <review-id> --save "<review-folder>"
 ```
 
 On success, repeat the folder-entry check and ownership listing above, then read the file you just wrote.
@@ -110,7 +101,7 @@ and use real changed paths and accurate writeup text. `head` may also be a full 
 
 The PRD is included as a diff because it changed, and as a doc because the reviewer needs to
 read it. A doc's `path` is its published name. When the local filename differs, set `source`
-relative to the worktree root.
+relative to the worktree root. It must end in the same kind of extension as `path`.
 Markdown docs render as safe blocks. Use Markdown for the writeup, not an HTML page.
 
 Set optional `main` to `"writeup"` or a declared doc path to choose the opening page, even with an empty writeup.

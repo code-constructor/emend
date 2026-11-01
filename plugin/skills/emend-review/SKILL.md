@@ -93,6 +93,11 @@ Write `review.json` in the private folder. Never use a fixed shared
 path or put manifests, saved hand-offs or reply files inside the worktree.
 With `head: "worktree"`, those worktree files publish themselves under Other changes.
 Before taking another hand-off, check saved-file ownership and handle saved results as described in the wait loop below.
+
+If an emend error line mentions an agent sandbox, show the user that line and stop.
+Do not run emend another way, retry it outside the sandbox, ask for escalated permissions,
+change sandbox or agent settings, or touch emend's state folder.
+
 Run publish from the repository being reviewed:
 
 ```sh
@@ -157,25 +162,14 @@ If `handled.txt` is absent, no deliveries are recorded as handled.
 Check comment ids and earlier outcomes; repeat a reply rather than skip one when resuming partly handled feedback.
 The CLI confirms receipt only after the full JSON is written; a confirmed hand-off will not be offered again.
 
-Save each new `emend wait` or `emend feedback` result as `wait-<UTC time>.json`.
-Get the time with `date -u +%Y%m%dT%H%M%SZ` (GNU and BSD `date`).
-Each result-writing subshell sets `umask 077` before the redirect, creating mode-0600 files even under umask 002.
-A group member cannot open them for writing later.
-Noclobber in the subshell refuses an existing file before emend runs, so no hand-off is confirmed into nothing.
-A name clash creates nothing.
-If the shell refuses the name because the file exists, that command created no file and ran nothing.
-Delete nothing, and run the command again a second later.
-Delete only what you saw fail.
-Right after an `emend wait` or `emend feedback` command you ran exits non-zero, inspect the file its redirect created.
-If that file is empty, delete it: the CLI printed nothing and confirmed nothing.
-The server offers that feedback again later. Then report the error line and stop.
-Keep a non-empty file after a non-zero exit.
-A command stopped by a signal can exit non-zero after it printed and confirmed a hand-off.
-Read it like any saved result; if it is not complete JSON, keep it and tell the user its name.
-Never write a result with plain `>` over a name that might exist.
+Save each new `emend wait` or `emend feedback` result with `--save "<review-folder>"`.
+emend writes it as `wait-<UTC time>.json` in that folder, with mode 0600, and never replaces an existing file.
+The file is complete or absent. emend confirms receipt only after it saved the file and printed the JSON.
+A command that exits non-zero may have saved a file without confirming it; the server then offers the same feedback again later under a new `deliveryId`.
+After any non-zero exit, list the folder again, read any new file like any saved result, and skip comments you already answered.
 
 ```sh
-(umask 077; set -C; emend wait <review-id> --timeout 540 > "<review-folder>/wait-$(date -u +%Y%m%dT%H%M%SZ).json")
+emend wait <review-id> --timeout 540 --save "<review-folder>"
 ```
 
 Keep the wait alive using the current harness's supported long-command mechanism.
@@ -202,6 +196,6 @@ This subshell turns noclobber off so zsh can append even when `handled.txt` does
 It sets `umask 077` so a newly created record is mode 0600.
 A saved result whose `deliveryId` is listed there is handled. Keep the original JSON intact.
 
-On a non-zero exit, apply the "Delete only what you saw fail" rules above, report the error line, and stop the loop. Do not infer
+On a non-zero exit, report the error line and stop the loop. Do not infer
 feedback or approval from silence. A delegated preparation task returns the URL, literal folder path and review id
 to its caller and makes clear that the caller owns the wait loop.

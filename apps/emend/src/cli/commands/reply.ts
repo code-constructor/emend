@@ -1,14 +1,18 @@
 import { constants } from "node:fs";
-import { open } from "node:fs/promises";
+import { lstat, open } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import { ReplyCreated, ReplyRequest } from "@emend/contract";
 import type { Io } from "../../main.ts";
 import { replyDirect } from "../direct/index.ts";
 import { apiRequest, CliError, CliUsageError, printJson } from "../http.ts";
 import { movedError } from "../moved.ts";
+import { assertSaveFolder, checkSaveFolder } from "../save-feedback.ts";
 import { resolveTarget, type Target } from "../target.ts";
 
 const maxBodyBytes = 80000;
-export async function readReplyBody(path: string, io: Io): Promise<string> {
+const invalidBodyFile = () =>
+  new CliError("--body-file must be a .md or .txt file in a private folder you own (mode 0700).");
+export async function readReplyBody(path: string, io: Io, stateDir: string): Promise<string> {
   const bytes = Buffer.alloc(maxBodyBytes + 1);
   let length = 0;
   try {
@@ -24,21 +28,55 @@ export async function readReplyBody(path: string, io: Io): Promise<string> {
         if (length > maxBodyBytes) throw new Error("too large");
       }
     } else {
-      const file = await open(path, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
+      const filePath = resolve(path);
+      if (!/\.(md|txt)$/i.test(filePath)) throw invalidBodyFile();
+      const folder = await checkSaveFolder(dirname(filePath), stateDir).catch(() => {
+        throw invalidBodyFile();
+      });
       try {
-        if (!(await file.stat()).isFile()) throw new Error("not regular");
-        while (length < bytes.length) {
-          const { bytesRead } = await file.read(bytes, length, bytes.length - length, null);
-          if (!bytesRead) break;
-          length += bytesRead;
+        const file = await open(
+          filePath,
+          constants.O_RDONLY | constants.O_NONBLOCK | (constants.O_NOFOLLOW ?? 0),
+        ).catch(() => {
+          throw invalidBodyFile();
+        });
+        try {
+          const info = await file.stat().catch(() => {
+            throw invalidBodyFile();
+          });
+          const entry = await lstat(filePath).catch(() => {
+            throw invalidBodyFile();
+          });
+          if (
+            !info.isFile() ||
+            !entry.isFile() ||
+            entry.dev !== info.dev ||
+            entry.ino !== info.ino ||
+            (process.getuid && info.uid !== process.getuid())
+          )
+            throw invalidBodyFile();
+          await assertSaveFolder(folder).catch(() => {
+            throw invalidBodyFile();
+          });
+          while (length < bytes.length) {
+            const { bytesRead } = await file.read(bytes, length, bytes.length - length, null);
+            if (!bytesRead) break;
+            length += bytesRead;
+          }
+          await assertSaveFolder(folder).catch(() => {
+            throw invalidBodyFile();
+          });
+        } finally {
+          await file.close();
         }
       } finally {
-        await file.close();
+        await folder.handle.close();
       }
     }
     if (length > maxBodyBytes) throw new Error("too large");
     return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes.subarray(0, length));
-  } catch {
+  } catch (error) {
+    if (error instanceof CliError) throw error;
     throw new CliError(
       "Could not read the reply body; expected UTF-8 text of at most 80000 bytes from a regular file or stdin.",
     );
@@ -84,7 +122,7 @@ export async function replyCommand(stateDir: string, args: string[], io: Io) {
     throw usage();
   const body = options.has("--body")
     ? options.get("--body")
-    : await readReplyBody(options.get("--body-file") ?? "", io);
+    : await readReplyBody(options.get("--body-file") ?? "", io, stateDir);
   const reply = ReplyRequest.safeParse({ outcome: options.get("--status"), body });
   if (!reply.success) throw new CliUsageError("Invalid reply outcome or body.");
   const target = await resolveTarget(stateDir);

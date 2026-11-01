@@ -1,6 +1,7 @@
 import { constants, type Stats } from "node:fs";
 import { lstat, open, stat as pathStat, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
+import { stateFileError } from "../../state/files.ts";
 import { escapeReference } from "../escape.ts";
 import { CliError } from "../http.ts";
 
@@ -96,7 +97,11 @@ export async function readRegular(
     }
     if ((await handle.read(Buffer.alloc(1), 0, 1, offset)).bytesRead) throw new CliError("file changed while reading");
     return bytes;
+  } catch (error) {
+    throw stateFileError(file, error);
   } finally {
-    await handle.close();
+    await handle.close().catch((error: unknown) => {
+      throw stateFileError(file, error);
+    });
   }
 }

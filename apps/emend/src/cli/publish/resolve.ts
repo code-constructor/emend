@@ -3,6 +3,7 @@ import { realpath, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, posix, resolve } from "node:path";
 import { LIMITS, OTHER_TOPIC, type PublishFile, type PublishManifest, PublishRequest } from "@emend/contract";
 import { UnchangedFilesError, withOtherChanges } from "@emend/core";
+import { StateFolderWriteError, stateAccessError } from "../../state/files.ts";
 import { escapeReference } from "../escape.ts";
 import { createGitSession, GitFailed } from "../git.ts";
 import { CliError } from "../http.ts";
@@ -22,6 +23,8 @@ async function docRoots(stateDir: string): Promise<string[]> {
     value = JSON.parse((await readRegular(join(stateDir, "config.json"), LIMITS.publicJsonBytes)).toString());
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    const mapped = stateAccessError(stateDir, error);
+    if (mapped instanceof StateFolderWriteError) throw mapped;
     throw new CliError("invalid emend configuration");
   }
   if (
@@ -167,15 +170,20 @@ export async function resolvePublish(
     const html = /\.html?$/i.test(file.path);
     if (!html && !/\.(md|markdown)$/i.test(file.path))
       throw new CliError("doc path must end in .md, .markdown, .html or .htm");
-    const readDoc = async () =>
-      readRegular(
-        await sourcePath(original, roots, gitDirs),
-        html ? LIMITS.htmlDocBytes : LIMITS.markdownDocBytes,
-        roots,
-        undefined,
-        gitDirs,
-      );
-    const bytes = await readDoc();
+    const checkExtension = (path: string) => {
+      if (!(html ? /\.html?$/i : /\.(md|markdown)$/i).test(path))
+        throw new CliError("doc source must end in .md, .markdown, .html or .htm, like its path.");
+    };
+    if (file.source !== undefined) checkExtension(file.source);
+    checkExtension(source);
+    const readResolvedDoc = (actual: string) =>
+      readRegular(actual, html ? LIMITS.htmlDocBytes : LIMITS.markdownDocBytes, roots, undefined, gitDirs);
+    const readDoc = async () => {
+      const actual = await sourcePath(original, roots, gitDirs);
+      checkExtension(actual);
+      return readResolvedDoc(actual);
+    };
+    const bytes = await readResolvedDoc(source);
     const resolvedDoc: PublishFile = {
       path: file.path,
       oldPath: null,

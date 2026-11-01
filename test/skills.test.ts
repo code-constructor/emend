@@ -50,7 +50,13 @@ const surfaces = [
   },
   {
     name: "wait-result",
-    self: ["packages/contract/src/wait.ts", "apps/emend/src/cli/commands/wait.ts", "apps/emend/src/cli/direct/**"],
+    self: [
+      "packages/contract/src/wait.ts",
+      "apps/emend/src/cli/commands/wait.ts",
+      "apps/emend/src/cli/commands/feedback.ts",
+      "apps/emend/src/cli/save-feedback.ts",
+      "apps/emend/src/cli/direct/**",
+    ],
     counterpart: ["bin/hunk-plan"],
   },
 ];
@@ -106,20 +112,16 @@ test.each([">", ">>", ">|", "1>", "2>"])("the fixed wait.json guard rejects %s r
 
 test("the fixed wait.json guard allows ownership listings and timestamped results", () => {
   expect('find "<review-folder>" -maxdepth 1 -type f -user "$(id -u)" -name wait.json').not.toMatch(fixedWaitRedirect);
-  expect(
-    '(umask 077; set -C; emend wait <review-id> --timeout 540 > "<review-folder>/wait-$(date -u +%Y%m%dT%H%M%SZ).json")',
-  ).not.toMatch(fixedWaitRedirect);
+  expect('emend wait <review-id> --timeout 540 --save "<review-folder>"').not.toMatch(fixedWaitRedirect);
 });
 
 test.each(skillFiles)("%s saves private hand-offs without clobbering and checks saved-file ownership", (path) => {
   const text = read(path);
   const shellLines = [...text.matchAll(/```sh\n([\s\S]*?)\n```/g)].flatMap((match) => match[1]?.split("\n") ?? []);
-  const redirects = shellLines.filter((line) => /\bemend (?:wait|feedback)\b/.test(line));
-  expect(redirects.length).toBeGreaterThan(0);
-  for (const line of redirects) {
-    expect(line).toMatch(
-      /^\(umask 077; set -C; emend (?:wait <review-id> --timeout 540|feedback <review-id>) > "<review-folder>\/wait-\$\(date -u \+%Y%m%dT%H%M%SZ\)\.json"\)$/,
-    );
+  const commands = shellLines.filter((line) => /\bemend (?:wait|feedback)\b/.test(line));
+  expect(commands.length).toBeGreaterThan(0);
+  for (const line of commands) {
+    expect(line).toMatch(/^emend (?:wait <review-id> --timeout 540|feedback <review-id>) --save "<review-folder>"$/);
   }
   expect(shellLines.filter((line) => line.includes("handled.txt") && !line.startsWith("find "))).toEqual([
     String.raw`(set +C; umask 077; printf '%s\n' '<deliveryId>' >> "<review-folder>/handled.txt")`,
@@ -143,36 +145,42 @@ test.each(skillFiles)("%s saves private hand-offs without clobbering and checks 
   );
 });
 
-test.each(skillFiles)("%s deletes only empty output from an observed failure and preserves saved results", (path) => {
+test.each(skillFiles)("%s saves atomically and preserves legacy results", (path) => {
   const text = read(path);
-  expect(text).not.toMatch(/came from a failed command/i);
-  expect(text).not.toContain("Delete it instead of reading it.");
-  expect(text).not.toContain(
-    "If `emend wait` or `emend feedback` exits non-zero, it prints one stderr line and nothing on stdout.",
-  );
-  expect(text).not.toContain("On a non-zero exit, delete the empty file that command created");
-  expect(text).toContain("Delete only what you saw fail.");
+  expect(text).not.toContain("Delete only what you saw fail.");
+  expect(text).not.toContain("date -u");
+  expect(text).not.toContain("inspect the file its redirect created");
+  expect(text).toContain('Save each new `emend wait` or `emend feedback` result with `--save "<review-folder>"`.');
   expect(text).toContain(
-    "Right after an `emend wait` or `emend feedback` command you ran exits non-zero, inspect the file its redirect created.",
+    "emend writes it as `wait-<UTC time>.json` in that folder, with mode 0600, and never replaces an existing file.",
   );
-  expect(text).toContain("If that file is empty, delete it: the CLI printed nothing and confirmed nothing.");
-  expect(text).toContain("The server offers that feedback again later. Then report the error line and stop.");
-  expect(text).toContain("Keep a non-empty file after a non-zero exit.");
-  expect(text).toContain("A command stopped by a signal can exit non-zero after it printed and confirmed a hand-off.");
   expect(text).toContain(
-    "Read it like any saved result; if it is not complete JSON, keep it and tell the user its name.",
+    "The file is complete or absent. emend confirms receipt only after it saved the file and printed the JSON.",
   );
-  expect(text).toContain("A name clash creates nothing.");
   expect(text).toContain(
-    "If the shell refuses the name because the file exists, that command created no file and ran nothing.",
+    "A command that exits non-zero may have saved a file without confirming it; the server then offers the same feedback again later under a new `deliveryId`.",
   );
-  expect(text).toContain("Delete nothing, and run the command again a second later.");
+  expect(text).toContain(
+    "After any non-zero exit, list the folder again, read any new file like any saved result, and skip comments you already answered.",
+  );
   expect(text).toContain("Never delete a saved file you did not see fail.");
   expect(text).toContain("When listing, skip a `wait-*.json` that is empty or not complete JSON.");
   expect(text).toContain("A wait may still be writing it, in this session or another.");
   expect(text).toContain("Do not read or delete it; list it again later.");
   expect(text).toContain("Tell the user its name if it stays empty after the waits you started have finished.");
   expect(text).toContain("Apply the same rule to legacy `wait.json`.");
+});
+
+test.each(names)("%s stops on a sandbox error before running another command", (name) => {
+  const text = read(`plugin/skills/${name}/SKILL.md`);
+  const guidance =
+    "If an emend error line mentions an agent sandbox, show the user that line and stop.\nDo not run emend another way, retry it outside the sandbox, ask for escalated permissions,\nchange sandbox or agent settings, or touch emend's state folder.";
+  const lead =
+    name === "emend-review"
+      ? "Run publish from the repository being reviewed:"
+      : "When no saved `go` needs handling, fetch feedback with:";
+  expect(text.split(guidance)).toHaveLength(2);
+  expect(text).toContain(["", guidance, lead, "```sh\nemend "].join("\n\n"));
 });
 
 function safeSkillFrontmatter(text: string, name: string): boolean {
@@ -246,7 +254,10 @@ test.each(skillFiles)("%s has no command markers", (path) => {
 test.each(names)("%s has only safe frontmatter and registered commands", async (name) => {
   const text = read(`plugin/skills/${name}/SKILL.md`);
   expect(safeSkillFrontmatter(text, name)).toBe(true);
-  const commands = [...text.matchAll(/(?:^|`)emend ([a-z][a-z-]*)/gm)].map((match) => match[1] as string);
+  const shell = [...text.matchAll(/```sh\n([\s\S]*?)\n```/g)].map((match) => match[1]).join("\n");
+  const commands = [...shell.matchAll(/^emend ([a-z][a-z-]*)/gm), ...text.matchAll(/`emend ([a-z][a-z-]*)/g)].map(
+    (match) => match[1] as string,
+  );
   expect(commands.length).toBeGreaterThan(0);
   for (const command of new Set(commands)) {
     const stderr = vi.fn();

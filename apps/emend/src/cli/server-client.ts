@@ -12,7 +12,7 @@ import {
   ServerProof,
 } from "@emend/contract";
 import { serverProof } from "../server/auth/server-proof.ts";
-import { ensureStateDir } from "../state/files.ts";
+import { ensureStateDir, StateFolderWriteError, stateAccessError } from "../state/files.ts";
 import { VERSION } from "../version.ts";
 import { cliRuntime } from "./runtime.ts";
 
@@ -66,7 +66,9 @@ export async function discover(
       return null;
     if (!response.ok || !Capabilities.safeParse(await response.json()).success) return null;
     return { url: url.origin };
-  } catch {
+  } catch (error) {
+    const mapped = stateAccessError(stateDir, error);
+    if (mapped instanceof StateFolderWriteError) throw mapped;
     return null;
   }
 }

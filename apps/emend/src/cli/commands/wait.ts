@@ -1,9 +1,16 @@
 import { MAX_TAKE_WAIT_SECONDS, WaitResult } from "@emend/contract";
 import type { Io } from "../../main.ts";
 import { confirmDirect, takeDirect } from "../direct/index.ts";
-import { apiRequest, CliError, CliSignalExit, CliUsageError, printJson } from "../http.ts";
+import { apiRequest, CliError, CliSignalExit, CliUsageError, jsonLine, printJson } from "../http.ts";
 import { movedError } from "../moved.ts";
 import { pause } from "../pause.ts";
+import {
+  type CheckedFolder,
+  checkSaveFolder,
+  cleanupFeedback,
+  saveFeedback,
+  verifySavedFeedback,
+} from "../save-feedback.ts";
 import { resolveTarget, type Target } from "../target.ts";
 
 export const ReviewId = WaitResult.options[2].shape.reviewId;
@@ -104,31 +111,81 @@ export async function deliverFeedback(
   result: WaitResult,
   io: Io,
   signal?: AbortSignal,
+  saveFolder?: CheckedFolder,
 ) {
   signal?.throwIfAborted();
-  await withSignals(async (flushSignal) => {
-    await printJson(io, result);
-    flushSignal.throwIfAborted();
-  }, true);
+  const canConfirm = await withSignals(async (saveSignal) => {
+    const saved = saveFolder ? await saveFeedback(saveFolder, jsonLine(result), saveSignal) : undefined;
+    try {
+      saveSignal.throwIfAborted();
+      if (saved && saveFolder) await verifySavedFeedback(saveFolder, saved);
+      await withSignals(async (flushSignal) => {
+        await printJson(io, result);
+        flushSignal.throwIfAborted();
+      }, true);
+      saveSignal.throwIfAborted();
+    } catch (error) {
+      if (saved && saveFolder && !(error instanceof CliSignalExit))
+        await cleanupFeedback(saveFolder, saved.path, saved.identity);
+      throw error;
+    }
+    if (saved && saveFolder) {
+      try {
+        await verifySavedFeedback(saveFolder, saved);
+      } catch {
+        if (result.kind !== "pending") io.stderr(confirmWarning);
+        return false;
+      }
+    }
+    return true;
+  });
   signal?.throwIfAborted();
-  if (result.kind !== "pending") await confirmFeedback(stateDir, target, result.deliveryId, io.stderr);
+  if (canConfirm && result.kind !== "pending") await confirmFeedback(stateDir, target, result.deliveryId, io.stderr);
 }
 
-export async function waitCommand(stateDir: string, args: string[], io: Io) {
-  const [id, flag, seconds] = args;
-  if (
-    !ReviewId.safeParse(id).success ||
-    (args.length !== 1 && (args.length !== 3 || flag !== "--timeout" || !/^\d+$/.test(seconds ?? "")))
-  )
-    throw new CliUsageError("Usage: emend wait <review> [--timeout <seconds>].");
+export function parseFeedbackArgs(command: "wait" | "feedback", args: string[]) {
+  const usage = () =>
+    new CliUsageError(
+      command === "wait"
+        ? "Usage: emend wait <review> [--timeout <seconds>] [--save <folder>]."
+        : "Usage: emend feedback <review> [--save <folder>].",
+    );
+  const review = ReviewId.safeParse(args[0]);
+  if (!review.success) throw usage();
+  const options = new Map<string, string>();
+  for (let i = 1; i < args.length; i += 2) {
+    const flag = args[i];
+    const value = args[i + 1];
+    if (
+      !flag ||
+      (flag !== "--save" && !(command === "wait" && flag === "--timeout")) ||
+      !value ||
+      value.includes("\0") ||
+      value.startsWith("--") ||
+      options.has(flag)
+    )
+      throw usage();
+    options.set(flag, value);
+  }
+  const seconds = options.get("--timeout");
+  if (seconds !== undefined && !/^\d+$/.test(seconds)) throw usage();
   const timeout = seconds === undefined ? 540 : Number(seconds);
   if (!Number.isInteger(timeout) || timeout < 1 || timeout > 86400)
     throw new CliUsageError("Timeout must be an integer from 1 to 86400.");
-  const reviewId = ReviewId.parse(id);
-  const target = await resolveTarget(stateDir);
-  const result =
-    target.via === "direct"
-      ? await withSignals((signal) => takeFeedback(stateDir, target, reviewId, timeout, { signal }))
-      : await takeFeedback(stateDir, target, reviewId, timeout);
-  await deliverFeedback(stateDir, target, result, io);
+  return { reviewId: review.data, timeout, saveFolder: options.get("--save") };
+}
+
+export async function waitCommand(stateDir: string, args: string[], io: Io) {
+  const { reviewId, timeout, saveFolder } = parseFeedbackArgs("wait", args);
+  const folder = saveFolder ? await checkSaveFolder(saveFolder, stateDir) : undefined;
+  try {
+    const target = await resolveTarget(stateDir);
+    const result =
+      target.via === "direct"
+        ? await withSignals((signal) => takeFeedback(stateDir, target, reviewId, timeout, { signal }))
+        : await takeFeedback(stateDir, target, reviewId, timeout);
+    await deliverFeedback(stateDir, target, result, io, undefined, folder);
+  } finally {
+    await folder?.handle.close().catch(() => {});
+  }
 }

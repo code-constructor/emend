@@ -12,6 +12,45 @@ maintained alongside it.
 
 Status: nothing built yet.
 
+## Use with sandboxed agents
+
+An agent's sandbox keeps `emend` from reaching its server and writing its state folder, so
+`emend publish` and `emend wait` fail inside it, and emend prints a line that points here. Let the
+four commands agents run leave the sandbox, once per machine, in your own settings. `emend attach`,
+`emend detach` and `emend pair` stay inside it, so an agent cannot attach your machine to a hub.
+
+These commands run with your full rights: they read the manifest, the docs it names and their
+assets, every changed or new file git does not ignore, and any `--body-file`; they write
+`--save` results; and they store that content in emend's state folder or send it to your emend
+server or hub. Add these rules only when `emend` on your `PATH` is an install no agent can
+write, never a development checkout that agents work in.
+
+Claude Code: merge this into `~/.claude/settings.json`.
+
+```json
+{
+  "sandbox": {
+    "excludedCommands": ["emend publish *", "emend wait *", "emend feedback *", "emend reply *"]
+  }
+}
+```
+
+Claude Code still asks before it runs each of them. To skip that question, also add
+`Bash(emend publish *)`, `Bash(emend wait *)`, `Bash(emend feedback *)` and `Bash(emend reply *)`
+to `permissions.allow`.
+
+Codex: add a file `~/.codex/rules/emend.rules`.
+
+```python
+prefix_rule(
+    pattern = ["emend", ["publish", "wait", "feedback", "reply"]],
+    decision = "allow",
+)
+```
+
+Codex then runs these four commands outside its sandbox without asking. The MCP server
+(`emend mcp`) needs nothing: agents start MCP servers outside their sandbox.
+
 ## Development
 
 Work from a checkout to try changes before they are released. Use these steps instead of the

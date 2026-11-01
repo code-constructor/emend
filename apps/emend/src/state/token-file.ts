@@ -1,5 +1,6 @@
 import { constants } from "node:fs";
 import { lstat, open } from "node:fs/promises";
+import { stateFileError } from "./files.ts";
 
 export async function readTokenFile(path: string, tighten = false): Promise<string | null> {
   try {
@@ -15,6 +16,6 @@ export async function readTokenFile(path: string, tighten = false): Promise<stri
     }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw error;
+    throw stateFileError(path, error);
   }
 }

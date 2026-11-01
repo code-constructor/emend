@@ -1,7 +1,7 @@
 import type { SkillsOptions } from "./cli/commands/skills.ts";
 import type { ServiceOptions } from "./cli/service/common.ts";
 import { NewerDatabaseError } from "./db/migrate.ts";
-import { StateDirModeError, StateFolderWriteError } from "./state/files.ts";
+import { StateDirModeError, StateFolderWriteError, stateAccessError } from "./state/files.ts";
 import { defaultStateDir } from "./state/paths.ts";
 import { VERSION } from "./version.ts";
 
@@ -25,8 +25,8 @@ export async function run(argv: string[], io: Io): Promise<number> {
   emend detach                   Detach this machine
   emend devices [--revoke <id>]  List or revoke devices
   emend publish --manifest <file> [--review <id>] [--key <name>]
-  emend wait <review> [--timeout <seconds>]
-  emend feedback <review>
+  emend wait <review> [--timeout <seconds>] [--save <folder>]
+  emend feedback <review> [--save <folder>]
   emend reply <comment> --status <outcome> (--body <text> | --body-file <path | ->)
   emend mcp
   emend service install [serve options] | uninstall | status
@@ -63,23 +63,25 @@ export async function run(argv: string[], io: Io): Promise<number> {
       return 0;
     } catch (error) {
       if (error instanceof CliSignalExit) return error.exitCode;
-      io.stderr(errorLine(error));
+      io.stderr(errorLine(stateAccessError(defaultStateDir(io.env), error), argv[0]));
       return error instanceof CliUsageError ? 2 : 1;
     }
   }
   if (argv[0] === "publish") {
     const { publishCommand } = await import("./cli/commands/publish.ts");
-    const { CliError, CliApiError } = await import("./cli/http.ts");
+    const { CliError, errorLine } = await import("./cli/http.ts");
     try {
       await publishCommand(defaultStateDir(io.env), argv.slice(1), io);
       return 0;
-    } catch (error) {
+    } catch (caught) {
+      const error = stateAccessError(defaultStateDir(io.env), caught);
       io.stderr(
         error instanceof NewerDatabaseError ||
           error instanceof StateDirModeError ||
-          error instanceof StateFolderWriteError
-          ? `${error.message}\n`
-          : `emend: ${error instanceof CliApiError ? error.code : error instanceof CliError ? error.message : "Could not publish the review."}\n`,
+          error instanceof StateFolderWriteError ||
+          error instanceof CliError
+          ? errorLine(error, "publish")
+          : "emend: Could not publish the review.\n",
       );
       return 1;
     }
@@ -91,7 +93,7 @@ export async function run(argv: string[], io: Io): Promise<number> {
   }
   // Keep the version path independent of database and server startup.
   const { parseServeArgs, serveCommand, UsageError } = await import("./cli/commands/serve.ts");
-  const { CliError, CliSignalExit } = await import("./cli/http.ts");
+  const { CliError, CliSignalExit, errorLine } = await import("./cli/http.ts");
   try {
     if (argv[0] === "serve") {
       const options = parseServeArgs(argv.slice(1));
@@ -101,13 +103,14 @@ export async function run(argv: string[], io: Io): Promise<number> {
       await openCommand(defaultStateDir(io.env), io);
     }
     return 0;
-  } catch (error) {
+  } catch (caught) {
+    const error = stateAccessError(defaultStateDir(io.env), caught);
     if (error instanceof CliSignalExit) return error.exitCode;
     io.stderr(
       error instanceof NewerDatabaseError ||
         error instanceof StateDirModeError ||
         error instanceof StateFolderWriteError
-        ? `${error.message}\n`
+        ? errorLine(error)
         : `emend: ${error instanceof UsageError || error instanceof CliError ? error.message : "Could not start the emend server."}\n`,
     );
     return error instanceof UsageError ? 2 : 1;

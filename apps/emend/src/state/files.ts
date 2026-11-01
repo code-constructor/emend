@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
   chmodSync,
   closeSync,
+  constants,
   fchmodSync,
   fsyncSync,
   mkdirSync,
@@ -12,11 +13,66 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-
 export class StateFolderWriteError extends Error {
+  readonly dir: string;
   constructor(dir: string) {
     super(`emend cannot write its state folder ${dir}.`);
+    this.dir = dir;
     this.name = "StateFolderWriteError";
+  }
+}
+
+/** Map only permission failures at the state folder, its parents or its contents. */
+export function stateAccessError(dir: string, error: unknown): unknown {
+  if (!error || typeof error !== "object") return error;
+  const { code, path, cause } = error as NodeJS.ErrnoException;
+  if (["EACCES", "EPERM", "EROFS"].includes(code ?? "") && typeof path === "string") {
+    const contains = (parent: string, child: string) => {
+      const suffix = relative(resolve(parent), resolve(child));
+      return suffix !== ".." && !suffix.startsWith(`..${sep}`) && !isAbsolute(suffix);
+    };
+    // A denied ancestor also prevents access to the state folder below it.
+    if (contains(dir, path) || contains(path, dir)) return new StateFolderWriteError(dir);
+  }
+  if (cause && cause !== error) {
+    const mapped = stateAccessError(dir, cause);
+    if (mapped instanceof StateFolderWriteError) return mapped;
+  }
+  return error;
+}
+
+/** Descriptor operations omit path; retain the known file without classifying unrelated errors. */
+export function stateFileError(path: string, error: unknown): unknown {
+  if (
+    error instanceof Error &&
+    typeof (error as NodeJS.ErrnoException).code === "string" &&
+    (error as NodeJS.ErrnoException).path === undefined
+  )
+    Object.assign(error, { path });
+  return error;
+}
+
+/** Probe only when reporting a hub failure; successful requests never need this write. */
+export function stateFolderWritable(dir: string): boolean {
+  const path = join(dir, `.emend-probe-${randomUUID()}.tmp`);
+  let created = false;
+  try {
+    const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+    created = true;
+    closeSync(fd);
+    rmSync(path);
+    created = false;
+    return true;
+  } catch (error) {
+    return !["EACCES", "EPERM", "EROFS"].includes((error as NodeJS.ErrnoException).code ?? "");
+  } finally {
+    if (created) {
+      try {
+        rmSync(path);
+      } catch {
+        /* The folder may have become unwritable during the probe. */
+      }
+    }
   }
 }
 
@@ -79,9 +135,13 @@ export function tightenSecretFile(path: string): boolean {
 export function syncDirectory(dir: string): void {
   const fd = openSync(dir, "r");
   try {
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
+    try {
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+  } catch (error) {
+    throw stateFileError(dir, error);
   }
 }
 
@@ -92,11 +152,15 @@ export function writeSecretFile(path: string, data: string | Uint8Array, stateDi
   try {
     const fd = openSync(temporary, "wx", 0o600);
     try {
-      fchmodSync(fd, 0o600);
-      writeFileSync(fd, data);
-      fsyncSync(fd);
-    } finally {
-      closeSync(fd);
+      try {
+        fchmodSync(fd, 0o600);
+        writeFileSync(fd, data);
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
+    } catch (error) {
+      throw stateFileError(temporary, error);
     }
     renameSync(temporary, path);
     syncDirectory(dir);

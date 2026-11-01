@@ -2,8 +2,9 @@ import { ERROR_STATUS, ErrorBody, type ErrorCode } from "@emend/contract";
 import { NewerDatabaseError } from "../db/migrate.ts";
 import type { Io } from "../main.ts";
 import { ApiError } from "../server/http/errors.ts";
-import { StateDirModeError, StateFolderWriteError } from "../state/files.ts";
+import { StateDirModeError, StateFolderWriteError, stateFolderWritable } from "../state/files.ts";
 import { VERSION } from "../version.ts";
+import { escapeReference } from "./escape.ts";
 import { discover } from "./server-client.ts";
 import type { Target } from "./target.ts";
 
@@ -12,13 +13,23 @@ export class CliSignalExit extends Error {
     super("Interrupted");
   }
 }
-export class CliError extends Error {}
+export const sandboxHint =
+  "If an agent sandbox runs emend, let emend run outside it: https://github.com/shllg/emend#use-with-sandboxed-agents";
+
+export class CliError extends Error {
+  constructor(
+    message: string,
+    readonly sandboxStateDir?: string,
+  ) {
+    super(message);
+  }
+}
 export class CliUsageError extends CliError {}
 export class CliConnectionError extends CliError {}
 function hubUnanswered(url: string): string {
   return `the hub at ${url} did not answer. The request may have reached it; check before trying again.`;
 }
-export function hubFailure(url: string, error?: unknown, signal?: AbortSignal): CliError {
+export function hubFailure(url: string, error?: unknown, signal?: AbortSignal, stateDir?: string): CliError {
   const cause = error instanceof Error ? (error.cause as { code?: string } | undefined) : undefined;
   const reason =
     signal?.aborted || (error instanceof Error && error.name === "TimeoutError")
@@ -26,21 +37,30 @@ export function hubFailure(url: string, error?: unknown, signal?: AbortSignal): 
       : cause?.code === "ECONNREFUSED"
         ? "connection refused"
         : "connection failed";
-  return new CliError(`cannot reach the hub at ${url}: ${reason}. Nothing was changed.`);
+  return hubFailureReason(url, reason, stateDir);
 }
 
-export function errorLine(error: unknown): string {
-  if (
-    error instanceof NewerDatabaseError ||
-    error instanceof StateDirModeError ||
-    error instanceof StateFolderWriteError
-  )
-    return `${error.message}\n`;
-  return `emend: ${error instanceof CliApiError ? error.code : error instanceof CliError ? error.message : "The emend request failed."}\n`;
+export function hubFailureReason(url: string, reason: string, stateDir?: string): CliError {
+  return new CliError(`cannot reach the hub at ${url}: ${reason}. Nothing was changed.`, stateDir);
 }
+
+export function errorLine(error: unknown, command?: string): string {
+  const hint =
+    ["publish", "wait", "feedback", "reply"].includes(command ?? "") &&
+    (error instanceof StateFolderWriteError ||
+      (error instanceof CliError && error.sandboxStateDir !== undefined && !stateFolderWritable(error.sandboxStateDir)))
+      ? ` ${sandboxHint}`
+      : "";
+  if (error instanceof StateFolderWriteError)
+    return `emend cannot write its state folder ${escapeReference(error.dir)}.${hint}\n`;
+  if (error instanceof NewerDatabaseError || error instanceof StateDirModeError) return `${error.message}\n`;
+  return `emend: ${error instanceof CliApiError ? error.code : error instanceof CliError ? error.message : "The emend request failed."}${hint}\n`;
+}
+export const jsonLine = (value: unknown): string => `${JSON.stringify(value)}\n`;
+
 export async function printJson(io: Io, value: unknown): Promise<void> {
   try {
-    await (io.stdoutAsync ?? io.stdout)(`${JSON.stringify(value)}\n`);
+    await (io.stdoutAsync ?? io.stdout)(jsonLine(value));
   } catch {
     throw new CliError("Could not write to stdout.");
   }
@@ -119,9 +139,12 @@ export async function apiRequest(
     if (!unconnected) opts.onSend?.();
     opts.signal?.throwIfAborted();
     if (target.via === "hub") {
-      if (unconnected) throw new CliConnectionError(hubFailure(target.url, error, signal).message);
+      if (unconnected) {
+        const failure = hubFailure(target.url, error, signal, stateDir);
+        throw new CliConnectionError(failure.message, failure.sandboxStateDir);
+      }
       if (!["GET", "HEAD"].includes(opts.method)) throw new CliUnansweredError(target.url);
-      throw hubFailure(target.url, error, signal);
+      throw hubFailure(target.url, error, signal, stateDir);
     }
     if (path === "/publish" && signal.aborted)
       throw new CliError("the server did not answer in time; nothing was published");

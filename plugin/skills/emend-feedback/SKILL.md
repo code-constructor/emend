@@ -76,26 +76,20 @@ If `handled.txt` is absent, no deliveries are recorded as handled.
 Check comment ids and earlier outcomes; repeat a reply rather than skip one when resuming partly handled feedback.
 The CLI confirms receipt only after the full JSON is written; a confirmed hand-off will not be offered again.
 
-Save each new `emend wait` or `emend feedback` result as `wait-<UTC time>.json`.
-Get the time with `date -u +%Y%m%dT%H%M%SZ` (GNU and BSD `date`).
-Each result-writing subshell sets `umask 077` before the redirect, creating mode-0600 files even under umask 002.
-A group member cannot open them for writing later.
-Noclobber in the subshell refuses an existing file before emend runs, so no hand-off is confirmed into nothing.
-A name clash creates nothing.
-If the shell refuses the name because the file exists, that command created no file and ran nothing.
-Delete nothing, and run the command again a second later.
-Delete only what you saw fail.
-Right after an `emend wait` or `emend feedback` command you ran exits non-zero, inspect the file its redirect created.
-If that file is empty, delete it: the CLI printed nothing and confirmed nothing.
-The server offers that feedback again later. Then report the error line and stop.
-Keep a non-empty file after a non-zero exit.
-A command stopped by a signal can exit non-zero after it printed and confirmed a hand-off.
-Read it like any saved result; if it is not complete JSON, keep it and tell the user its name.
-Never write a result with plain `>` over a name that might exist.
+Save each new `emend wait` or `emend feedback` result with `--save "<review-folder>"`.
+emend writes it as `wait-<UTC time>.json` in that folder, with mode 0600, and never replaces an existing file.
+The file is complete or absent. emend confirms receipt only after it saved the file and printed the JSON.
+A command that exits non-zero may have saved a file without confirming it; the server then offers the same feedback again later under a new `deliveryId`.
+After any non-zero exit, list the folder again, read any new file like any saved result, and skip comments you already answered.
+
+If an emend error line mentions an agent sandbox, show the user that line and stop.
+Do not run emend another way, retry it outside the sandbox, ask for escalated permissions,
+change sandbox or agent settings, or touch emend's state folder.
+
 When no saved `go` needs handling, fetch feedback with:
 
 ```sh
-(umask 077; set -C; emend feedback <review-id> > "<review-folder>/wait-$(date -u +%Y%m%dT%H%M%SZ).json")
+emend feedback <review-id> --save "<review-folder>"
 ```
 
 On success, repeat the folder-entry check and ownership listing above, then read the file you just wrote before editing.
@@ -145,7 +139,7 @@ emend reply <comment-id> --status fixed --body "The retry now stops when its bud
 emend reply <comment-id> --status explained --body-file "<review-folder>/reply.md"
 ```
 
-Write reply body files only in that folder, or use `--body-file -` to read the reply from stdin.
+Write reply body files as `.md` files only in that folder, or use `--body-file -` to read the reply from stdin.
 
 For replies and writeup text, answer first, then give the reason and relevant validation.
 Use one fact per sentence and short sentences of 20 words or fewer. Give a short summary in the
@@ -183,14 +177,14 @@ This subshell turns noclobber off so zsh can append even when `handled.txt` does
 It sets `umask 077` so a newly created record is mode 0600.
 A saved result whose `deliveryId` is listed there is handled. Keep the original JSON intact.
 Before waiting again, repeat the folder-entry check and ownership listing above, then handle every remaining saved `go` oldest first.
-Use a new UTC timestamp and the same noclobber subshell; on a name clash, retry a second later:
+Save the next result with:
 
 ```sh
-(umask 077; set -C; emend wait <review-id> --timeout 540 > "<review-folder>/wait-$(date -u +%Y%m%dT%H%M%SZ).json")
+emend wait <review-id> --timeout 540 --save "<review-folder>"
 ```
 
 On success, repeat the folder-entry check and ownership listing, then read the file you just wrote before acting. Repeat on `go`.
 On `pending`, delete that file, then wait again or leave the review id and literal folder path for a later invocation.
 On `approve`, report the approved revision and outcomes, record its `deliveryId` as above, and stop.
-On a non-zero exit, apply the "Delete only what you saw fail" rules above, report the error line, and stop the loop.
+On a non-zero exit, report the error line and stop the loop.
 An error or timeout never counts as approval.

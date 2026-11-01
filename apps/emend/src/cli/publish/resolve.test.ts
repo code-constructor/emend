@@ -1,11 +1,17 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, rm, symlink, truncate, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import * as fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { LIMITS, type PublishManifest } from "@emend/contract";
 import { expect, test, vi } from "vitest";
 import { resolvePublish } from "./resolve.ts";
+
+const { mkdir, mkdtemp, rm, symlink, truncate, writeFile } = fs;
+
+// Expose configurable exports so the realpath spy can replace the built-in function.
+vi.mock("node:fs/promises", async (original) => ({ ...(await original<typeof import("node:fs/promises")>()) }));
 
 vi.mock("../git.ts", async (original) => ({
   ...(await original<typeof import("../git.ts")>()),
@@ -100,6 +106,59 @@ test("HTML docs sharing an asset publish it once under its first parent", async 
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test.each(["data", "first.html"])(
+  "HTML doc and assets share the checked first resolution when an alias swaps from %s",
+  async (name) => {
+    const root = await mkdtemp(join(tmpdir(), "emend-doc-asset-swap-"));
+    const realpath = fs.realpath;
+    const probe = vi.spyOn(fs, "realpath");
+    try {
+      await mkdir(join(root, ".git"));
+      await mkdir(join(root, ".private"));
+      await writeFile(join(root, ".private", name), '<script src="first.js"></script>');
+      await writeFile(join(root, ".private", "first.js"), "Synthetic first doc asset");
+      const wrongContent = "Synthetic content from the wrong folder";
+      await writeFile(join(root, ".private", "secret.js"), wrongContent);
+      await writeFile(join(root, "real.html"), '<script src="secret.js"></script>');
+      await writeFile(join(root, "secret.js"), "Synthetic second doc asset");
+      const alias = join(root, "notes.html");
+      await symlink(`.private/${name}`, alias);
+      let resolutions = 0;
+      probe.mockImplementation(async (path, ...args) => {
+        const actual = await realpath(path, ...args);
+        if (String(path) === alias) {
+          await rm(alias);
+          await symlink(++resolutions % 2 ? "real.html" : `.private/${name}`, alias);
+        }
+        return actual;
+      });
+      const publishing = resolvePublish(
+        { ...manifest(), files: [{ path: "notes.html", role: "doc" }] },
+        { manifest: "synthetic", key: "docs" },
+        root,
+        "instance",
+        root,
+        () => {},
+      );
+      if (name === "data") {
+        await expect(publishing).rejects.toThrow(
+          "doc source must end in .md, .markdown, .html or .htm, like its path.",
+        );
+      } else {
+        const result = await publishing;
+        expect(result.blobs.has(createHash("sha256").update(wrongContent).digest("hex"))).toBe(false);
+        expect(result.request.files.map((file) => file.path)).toEqual(["notes.html", "first.js"]);
+        const asset = result.request.files.find((file) => file.role === "asset");
+        expect((await result.blobs.get(asset?.newBlob ?? "")?.read())?.toString()).toBe("Synthetic first doc asset");
+      }
+      expect(resolutions).toBe(1);
+    } finally {
+      probe.mockRestore();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
 
 test.each([".git/config", ".GIT./config", ".g\u206ait/config", "link/config", "leaf.md"])(
   "doc source %j cannot expose Git metadata",

@@ -15,6 +15,7 @@ import { ApiError } from "../../server/http/errors.ts";
 import { confirmDelivery, takeDelivery } from "../../server/mailbox/take.ts";
 import { ingest } from "../../server/publish/ingest.ts";
 import { initializeServerState } from "../../server/state.ts";
+import { StateFolderWriteError, stateAccessError } from "../../state/files.ts";
 import { CliApiError } from "../http.ts";
 import { pause } from "../pause.ts";
 import { readRegular } from "../publish/read.ts";
@@ -34,6 +35,14 @@ function localPrincipal(state: State): Principal {
 }
 
 async function withState<T>(stateDir: string, operation: (state: State, principal: Principal) => Promise<T>) {
+  try {
+    return await operateWithState(stateDir, operation);
+  } catch (error) {
+    throw stateAccessError(stateDir, error);
+  }
+}
+
+async function operateWithState<T>(stateDir: string, operation: (state: State, principal: Principal) => Promise<T>) {
   const state = await initializeServerState(stateDir, { tokens: false });
   try {
     // A separate writer connection may hold the WAL lock while this process is
@@ -61,7 +70,9 @@ async function savedBaseUrl(stateDir: string): Promise<string> {
         if (!url.username && !url.password && !value.includes("@")) return url.origin;
       }
     }
-  } catch {
+  } catch (error) {
+    const mapped = stateAccessError(stateDir, error);
+    if (mapped instanceof StateFolderWriteError) throw mapped;
     // Old state directories and malformed records use the default local origin.
   }
   return "http://127.0.0.1:3636";

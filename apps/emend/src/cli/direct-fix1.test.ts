@@ -12,6 +12,7 @@ import { initializeServerState } from "../server/state.ts";
 import * as tokenFiles from "../state/token-file.ts";
 import { takeFeedback } from "./commands/wait.ts";
 import { directFixture } from "./direct-test-support.ts";
+import { sandboxHint } from "./http.ts";
 import * as timers from "./pause.ts";
 
 vi.mock("../db/client.ts", async (original) => ({ ...(await original<typeof import("../db/client.ts")>()) }));
@@ -242,31 +243,34 @@ test.each([
   expect(process.listenerCount(signal)).toBe(before);
 });
 
-test.each(["publish", "wait"])("%s reports an unwritable state parent in one exact line", async (command) => {
-  const f = await directFixture();
-  const parent = join(f.dir, "readonly");
-  await mkdir(parent, { mode: 0o500 });
-  const stateDir = join(parent, "missing", "state");
-  const manifest = JSON.parse(await readFile(f.manifest, "utf8"));
-  await writeFile(f.manifest, JSON.stringify({ ...manifest, files: [] }));
-  vi.spyOn(process, "cwd").mockReturnValue(f.source);
-  const out = f.output();
-  out.io.env.EMEND_HOME = stateDir;
-  try {
-    expect(
-      await run(
-        command === "publish"
-          ? ["publish", "--manifest", f.manifest, "--key", "synthetic"]
-          : ["wait", randomUUID(), "--timeout", "1"],
-        out.io,
-      ),
-    ).toBe(1);
-    expect(out.stdout).toEqual([]);
-    expect(out.stderr).toEqual([`emend cannot write its state folder ${stateDir}.\n`]);
-  } finally {
-    await chmod(parent, 0o700);
-  }
-});
+test.skipIf(process.getuid?.() === 0).each(["publish", "wait"])(
+  "%s reports an unwritable state parent in one exact line",
+  async (command) => {
+    const f = await directFixture();
+    const parent = join(f.dir, "readonly");
+    await mkdir(parent, { mode: 0o500 });
+    const stateDir = join(parent, "missing", "state");
+    const manifest = JSON.parse(await readFile(f.manifest, "utf8"));
+    await writeFile(f.manifest, JSON.stringify({ ...manifest, files: [] }));
+    vi.spyOn(process, "cwd").mockReturnValue(f.source);
+    const out = f.output();
+    out.io.env.EMEND_HOME = stateDir;
+    try {
+      expect(
+        await run(
+          command === "publish"
+            ? ["publish", "--manifest", f.manifest, "--key", "synthetic"]
+            : ["wait", randomUUID(), "--timeout", "1"],
+          out.io,
+        ),
+      ).toBe(1);
+      expect(out.stdout).toEqual([]);
+      expect(out.stderr).toEqual([`emend cannot write its state folder ${stateDir}. ${sandboxHint}\n`]);
+    } finally {
+      await chmod(parent, 0o700);
+    }
+  },
+);
 
 test.each(["publish", "wait"])("%s preserves the state-mode chmod diagnostic", async (command) => {
   const f = await directFixture();

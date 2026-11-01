@@ -1,7 +1,7 @@
 import { closeSync, existsSync, openSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { ensureStateDir } from "../../state/files.ts";
+import { ensureStateDir, StateFolderWriteError, stateAccessError } from "../../state/files.ts";
 import { CliError } from "../http.ts";
 
 export function lockAttach(stateDir: string): () => void {
@@ -21,6 +21,8 @@ export function lockAttach(stateDir: string): () => void {
     try {
       db?.close();
     } catch {}
+    const mapped = stateAccessError(stateDir, error);
+    if (mapped instanceof StateFolderWriteError) throw mapped;
     if (error instanceof Error && "errcode" in error && error.errcode === 5)
       throw new CliError("another emend attach is running. Nothing was changed.");
     throw new CliError("could not lock the emend state folder.");

@@ -2,9 +2,10 @@ import { lstat } from "node:fs/promises";
 import { isIP } from "node:net";
 import { join } from "node:path";
 import { Capabilities, LIMITS, ReplyCreated } from "@emend/contract";
+import { StateFolderWriteError, stateAccessError } from "../state/files.ts";
 import { readTokenFile } from "../state/token-file.ts";
 import { VERSION } from "../version.ts";
-import { CliError, hubFailure } from "./http.ts";
+import { CliError, hubFailure, hubFailureReason } from "./http.ts";
 import { readRegular } from "./publish/read.ts";
 import { discover } from "./server-client.ts";
 
@@ -37,7 +38,9 @@ async function credential(stateDir: string, kind: "agent" | "admin" | "hub"): Pr
   let token: string | null;
   try {
     token = await readTokenFile(join(stateDir, `${kind}.token`));
-  } catch {
+  } catch (error) {
+    const mapped = stateAccessError(stateDir, error);
+    if (mapped instanceof StateFolderWriteError) throw mapped;
     throw new CliError("Could not read the emend credential.");
   }
   if (!token || !/^em_[A-Za-z0-9_-]{43}$/.test(token)) throw new CliError("The emend credential is invalid.");
@@ -76,11 +79,15 @@ async function attachmentBytes(stateDir: string): Promise<Buffer | null> {
     await lstat(path);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    const mapped = stateAccessError(stateDir, error);
+    if (mapped instanceof StateFolderWriteError) throw mapped;
     throw new CliError("Could not read the emend attachment.");
   }
   try {
     return await readRegular(path, LIMITS.publicJsonBytes);
-  } catch {
+  } catch (error) {
+    const mapped = stateAccessError(stateDir, error);
+    if (mapped instanceof StateFolderWriteError) throw mapped;
     throw new CliError("The emend attachment is invalid or unreadable.");
   }
 }
@@ -117,17 +124,23 @@ export async function readAttachmentPair(stateDir: string): Promise<AttachmentPa
   let after: Buffer | null;
   try {
     after = await attachmentBytes(stateDir);
-  } catch {
+  } catch (error) {
+    if (error instanceof StateFolderWriteError) throw error;
     throw new AttachmentChangedError();
   }
   if (before === null ? after !== null : after === null || !before.equals(after)) throw new AttachmentChangedError();
+  if (tokenError instanceof StateFolderWriteError) throw tokenError;
   if (attachment && tokenError) throw new AttachmentCredentialError(attachment, tokenError);
   return attachment && token ? { attachment, token } : null;
 }
 
-export async function hubCapabilities(url: string, callerSignal?: AbortSignal): Promise<Capabilities> {
+export async function hubCapabilities(
+  url: string,
+  callerSignal?: AbortSignal,
+  stateDir?: string,
+): Promise<Capabilities> {
   callerSignal?.throwIfAborted();
-  const failure = (reason: string) => new CliError(`cannot reach the hub at ${url}: ${reason}. Nothing was changed.`);
+  const failure = (reason: string) => hubFailureReason(url, reason, stateDir);
   const timeout = AbortSignal.timeout(5000);
   const signal = callerSignal ? AbortSignal.any([callerSignal, timeout]) : timeout;
   let response: Response;
@@ -139,7 +152,7 @@ export async function hubCapabilities(url: string, callerSignal?: AbortSignal): 
     });
   } catch (error) {
     callerSignal?.throwIfAborted();
-    throw hubFailure(url, error, signal);
+    throw hubFailure(url, error, signal, stateDir);
   }
   if (!response.ok) throw failure("not an emend hub");
   try {
@@ -179,6 +192,6 @@ export async function resolveTarget(stateDir: string, pair?: AttachmentPair | nu
     return server ? localTarget(stateDir, server.url) : { via: "direct" };
   }
   const target = attachedTarget(pair);
-  await hubCapabilities(target.url);
+  await hubCapabilities(target.url, undefined, stateDir);
   return target;
 }

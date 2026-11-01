@@ -4,7 +4,7 @@ import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
 import { drizzle, type SqliteRemoteDatabase } from "drizzle-orm/sqlite-proxy";
-import { ensureStateDir, tightenSecretFile } from "../state/files.ts";
+import { ensureStateDir, stateFileError, tightenSecretFile } from "../state/files.ts";
 import * as schema from "./schema.ts";
 
 // Raw all/get assume object rows; use typed builders or values() for positional SQL.
@@ -132,9 +132,13 @@ export function openDb(file: string): Db {
   ensureStateDir(dirname(file));
   const fd = openSync(file, "a", 0o600);
   try {
-    fchmodSync(fd, 0o600);
-  } finally {
-    closeSync(fd);
+    try {
+      fchmodSync(fd, 0o600);
+    } finally {
+      closeSync(fd);
+    }
+  } catch (error) {
+    throw stateFileError(file, error);
   }
   for (const sidecar of [`${file}-wal`, `${file}-shm`]) tightenSecretFile(sidecar);
   const raw = new DatabaseSync(file);
