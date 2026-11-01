@@ -7,6 +7,7 @@ import { renderWriteup } from "../../../../../packages/core/src/render/writeup.t
 import { blockAnchor } from "../../lib/selection.ts";
 import { ToastProvider } from "../ui/Toast.tsx";
 import { DocView } from "./DocView.tsx";
+import { HtmlDocFrame } from "./HtmlDocFrame.tsx";
 import { Writeup } from "./Writeup.tsx";
 
 const reviewId = "11111111-1111-4111-8111-111111111111";
@@ -217,6 +218,10 @@ test.each(["writeup", "doc"])(
         <DocView
           {...props}
           docs={[{ path: "garden.md", kind: "markdown", blocks }]}
+          openDoc={{ path: "garden.md", kind: "markdown", blocks }}
+          search={{ tab: "docs", doc: "garden.md" }}
+          targeted={false}
+          onOpenDoc={() => {}}
           changedBlocks={[{ blockId: block.id, revision: 2 }]}
         />
       ),
@@ -256,14 +261,9 @@ test.each(["writeup", "doc"])(
   },
 );
 
-test("HTML docs keep a sandbox note under each frame", () => {
-  const { container } = mount(
-    <DocView
-      {...props}
-      docs={["one.html", "two.html"].map((path) => ({ kind: "html", path, contentUrl: `/content/synthetic/${path}` }))}
-    />,
-  );
-  expect(screen.getAllByText("Shown in a sandbox. Scripts in this doc never run.")).toHaveLength(2);
+test("an HTML doc keeps its sandbox note under the frame", () => {
+  const { container } = mount(<HtmlDocFrame {...props} path="one.html" contentUrl="/content/synthetic/one.html" />);
+  expect(screen.getAllByText("Shown in a sandbox. Scripts in this doc never run.")).toHaveLength(1);
   for (const frame of container.querySelectorAll("iframe")) {
     expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
     expect(frame.getAttribute("referrerpolicy")).toBe("no-referrer");
@@ -294,7 +294,14 @@ test("hostile metadata stays React text and server-sanitized Markdown remains in
   const { container } = mount(
     <>
       <Writeup {...props} topics={[evilTopic]} writeup={RenderedWriteup.parse(writeup)} />
-      <DocView {...props} docs={[{ path: hostile, kind: "markdown", blocks: [] }]} />
+      <DocView
+        {...props}
+        docs={[{ path: hostile, kind: "markdown", blocks: [] }]}
+        openDoc={{ path: hostile, kind: "markdown", blocks: [] }}
+        search={{ tab: "docs" }}
+        targeted={false}
+        onOpenDoc={() => {}}
+      />
     </>,
   );
   expect(screen.getAllByText(hostile).length).toBeGreaterThanOrEqual(3);

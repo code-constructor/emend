@@ -13,8 +13,8 @@ export type ThreadProps = {
   thread: ThreadView;
   changedBlocks: RevisionView["changedBlocks"];
 };
-export function blockLink(reviewId: string, revision: number, blockId: string, doc = false) {
-  return `/r/${encodeURIComponent(reviewId)}?rev=${revision}&tab=${doc ? "docs" : "writeup"}#block-${encodeURIComponent(blockId)}`;
+export function blockLink(reviewId: string, revision: number, blockId: string, doc?: string) {
+  return `/r/${encodeURIComponent(reviewId)}?rev=${revision}&tab=${doc ? `docs&doc=${encodeURIComponent(doc)}` : "writeup"}#block-${encodeURIComponent(blockId)}`;
 }
 function answeredBefore(thread: ThreadView, revision: number) {
   let newestSent = 0;
@@ -44,7 +44,12 @@ export function ThreadCard({ reviewId, revision, thread, changedBlocks, surface 
       {changed && location && "blockId" in location && answeredBefore(thread, changed.revision) && (
         <a
           className="text-blue-700 underline dark:text-blue-300"
-          href={blockLink(reviewId, revision, location.blockId, location.kind === "doc-span")}
+          href={blockLink(
+            reviewId,
+            revision,
+            location.blockId,
+            location.kind === "doc-span" ? location.path : undefined,
+          )}
         >
           Changed in revision {changed.revision}
         </a>

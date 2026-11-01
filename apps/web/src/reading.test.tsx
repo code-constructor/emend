@@ -352,22 +352,23 @@ test("reading shows server blocks and change badges, rejects cross-block selecti
   fireEvent.click(screen.getByRole("button", { name: "Comment on diagram" }));
   expect(screen.getByLabelText("Comment")).toBeTruthy();
 });
-test("Markdown docs render blocks alongside isolated HTML doc frames", () => {
+test("an open Markdown doc renders its blocks under the doc bar", () => {
   const { container } = mount(
     <DocView
       reviewId={id}
       revision={2}
-      docs={[
-        { path: "plan.md", kind: "markdown", blocks: [block] },
-        { path: "demo.html", kind: "html", contentUrl: "/content/synthetic/demo.html" },
-      ]}
+      docs={[{ path: "plan.md", kind: "markdown", blocks: [block] }]}
+      openDoc={{ path: "plan.md", kind: "markdown", blocks: [block] }}
+      search={{ tab: "docs", doc: "plan.md" }}
+      targeted={false}
+      onOpenDoc={() => {}}
       changedBlocks={[]}
       threads={[]}
     />,
   );
   expect(screen.getByText("seed")).toBeTruthy();
-  expect(screen.getByText("demo.html")).toBeTruthy();
-  expect(container.querySelector("iframe")?.getAttribute("sandbox")).toBe("allow-scripts");
+  expect(screen.getByRole("heading", { name: "plan.md" })).toBeTruthy();
+  expect(container.querySelector("iframe")).toBeNull();
 });
 test("thread groups are ordered, unplaced quotes link to their original revision, and answered changes link to the block", async () => {
   const answered = {

@@ -28,7 +28,12 @@ export function Panes({
         {header}
         <div className="flex min-h-0 flex-1">
           {(layout !== "phone" || tab !== "diff") && (
-            <section aria-label="Reading" data-testid="reading-pane" className="min-w-0 flex-1 overflow-y-auto">
+            <section
+              aria-label="Reading"
+              data-testid="reading-pane"
+              data-reading-scroll
+              className="min-w-0 flex-1 overflow-y-auto"
+            >
               {reading}
             </section>
           )}

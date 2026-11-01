@@ -1,3 +1,4 @@
+import { FilePath } from "@emend/contract";
 import { createRootRoute, createRoute, createRouter, Link, Outlet, type RouterHistory } from "@tanstack/react-router";
 import { DevicesPage } from "./routes/devices.tsx";
 import { InboxPage } from "./routes/inbox.tsx";
@@ -5,7 +6,12 @@ import { PairPage } from "./routes/pair.tsx";
 import { PairDevicePage } from "./routes/pair-device.tsx";
 import { ReviewPage } from "./routes/review.tsx";
 
-export type ReviewSearch = { rev?: number; tab?: "writeup" | "diff" | "docs" | "comments"; thread?: string };
+export type ReviewSearch = {
+  rev?: number;
+  tab?: "writeup" | "diff" | "docs" | "comments";
+  thread?: string;
+  doc?: string;
+};
 export function validateReviewSearch(input: Record<string, unknown>): ReviewSearch {
   const rev = typeof input.rev === "string" || typeof input.rev === "number" ? Number(input.rev) : NaN;
   const tab =
@@ -16,6 +22,7 @@ export function validateReviewSearch(input: Record<string, unknown>): ReviewSear
     tab,
     // Router merges validation over the raw search: explicitly clear rejected values.
     rev: Number.isSafeInteger(rev) && rev > 0 ? rev : undefined,
+    doc: FilePath.safeParse(input.doc).data,
     thread:
       typeof input.thread === "string" && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(input.thread)
         ? input.thread

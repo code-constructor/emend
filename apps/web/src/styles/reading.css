@@ -1,4 +1,32 @@
 @layer components {
+  .em-doc-path {
+    font: var(--type-path);
+  }
+  .em-doc-view {
+    /* A sole doc has only the path line; otherwise the small button sets the bar height. */
+    --doc-bar-height: calc(var(--text-12) * var(--lh-snug) + 2 * var(--space-1-5) + var(--space-px));
+  }
+  .em-doc-view[data-multiple-docs] {
+    --doc-bar-height: calc(var(--space-10) + var(--space-px));
+  }
+  .em-doc-bar {
+    top: 0;
+  }
+  .em-doc-view :is([id], h1, h2, h3, h4, h5, h6) {
+    scroll-margin-top: var(--doc-bar-height);
+  }
+  @media (min-width: 768px) {
+    /* Reading tabs: 40px controls and their bottom border. */
+    .em-doc-bar {
+      top: calc(var(--space-10) + var(--space-px));
+    }
+    .em-doc-row {
+      scroll-margin-top: calc(var(--space-10) + var(--space-px));
+    }
+    .em-doc-view :is([id], h1, h2, h3, h4, h5, h6) {
+      scroll-margin-top: calc(var(--space-10) + var(--space-px) + var(--doc-bar-height));
+    }
+  }
   .em-reading-block + .em-reading-block {
     margin-top: var(--space-3);
   }

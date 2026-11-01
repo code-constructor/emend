@@ -203,8 +203,8 @@ another HTML or Markdown doc under this doc key send
 `{ type: "emend:navigate", path: FilePath, fragment: string }` to the parent. The path and fragment
 are decoded; the fragment excludes `#` and is at most 1024 characters. The parent accepts this
 strict message only from the current trusted frame and only for another doc in the same revision.
-It scrolls to that doc's section. For an HTML target with a fragment, it sets that frame's src to
-its own content URL plus `#` and the percent-encoded fragment. Same-doc fragment links remain
+It opens that doc as a new history entry. For an HTML target with a fragment, the newly mounted frame's src is its own
+content URL plus `#` and the percent-encoded fragment. Same-doc fragment links remain
 normal hash navigation. The app's `frame-src 'self'` blocks a clicked external link or a meta
 refresh to an outside URL; the frame then shows `This doc navigated away.` with Reload. An asset
 link opens the asset in the frame and triggers the same state.

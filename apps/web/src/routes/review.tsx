@@ -36,6 +36,9 @@ function Reading({
   resumedBlockId,
   search,
   phone,
+  openDoc,
+  targeted,
+  onOpenDoc,
 }: {
   reviewId: string;
   revision: RevisionView;
@@ -46,6 +49,9 @@ function Reading({
   resumedBlockId?: string;
   search: ReviewSearch;
   phone: boolean;
+  openDoc?: RevisionView["docs"][number];
+  targeted: boolean;
+  onOpenDoc: (path: string) => void;
 }) {
   const props = { reviewId, revision: revision.seq, threads: revision.threads, changedBlocks: revision.changedBlocks };
   if (tab === "comments") return <ThreadList {...props} onResume={onResume} />;
@@ -54,6 +60,10 @@ function Reading({
       <DocView
         {...props}
         docs={revision.docs}
+        openDoc={openDoc}
+        search={search}
+        targeted={targeted}
+        onOpenDoc={onOpenDoc}
         navigation={htmlNavigation}
         composingPath={composingPath}
         resumedBlockId={resumedBlockId}
@@ -88,13 +98,39 @@ function draftPlacement(draft: SavedDraft, revision: RevisionView) {
 function readingIntent(search: ReviewSearch, hash: string, seq: number) {
   const reply = search.tab === "comments" && !!search.thread;
   return {
-    navigation: JSON.stringify([seq, search.tab, search.thread, hash]),
+    navigation: JSON.stringify([seq, search.tab, search.doc, search.thread, hash]),
     elementId: reply ? `thread-${search.thread}` : hash,
     reply,
     threadId: search.thread ?? (hash.startsWith("thread-") ? hash.slice(7) : undefined),
     routeThread: true,
     block: "center" as ScrollLogicalPosition,
   };
+}
+function resolveOpenDoc(
+  revision: RevisionView,
+  search: ReviewSearch,
+  intent: ReturnType<typeof readingIntent>,
+  openingDoc: string | undefined,
+  docsVisible: boolean,
+) {
+  const selected = revision.docs.find((doc) => doc.path === search.doc);
+  if (selected) return selected;
+  const thread = revision.threads.find((thread) => thread.id === intent.threadId);
+  const placement = thread?.placement.status === "placed" ? thread.placement.location : undefined;
+  const target = revision.docs.find(
+    (doc) =>
+      intent.elementId === `doc-${doc.path}` ||
+      intent.elementId === `html-doc-${doc.path}` ||
+      (doc.kind === "markdown" && doc.blocks.some((block) => intent.elementId === `block-${block.id}`)) ||
+      ((placement?.kind === "doc-span" || placement?.kind === "html-span") &&
+        placement.path === doc.path &&
+        doc.kind === (placement.kind === "html-span" ? "html" : "markdown")),
+  );
+  return (
+    target ??
+    revision.docs.find((doc) => doc.path === openingDoc) ??
+    (docsVisible && revision.docs.length === 1 ? revision.docs[0] : undefined)
+  );
 }
 function LoadedReview({
   review,
@@ -147,6 +183,16 @@ function LoadedReview({
   const useOpening = !search.tab || !{ writeup: hasWriteup, diff: hasDiff, docs: hasDocs, comments: true }[search.tab];
   const tab = useOpening ? opening.tab : (search.tab ?? opening.tab);
   const readingTab = tab === "diff" ? (hasWriteup ? "writeup" : hasDocs ? "docs" : "comments") : tab;
+  const docsVisible = readingTab === "docs" && (layout !== "phone" || tab !== "diff");
+  const openDoc = revision
+    ? resolveOpenDoc(
+        revision,
+        search,
+        readingIntent(search, hash, seq),
+        useOpening ? opening.doc : undefined,
+        docsVisible,
+      )
+    : undefined;
   const setRevision = (rev: number) => {
     void navigate({ search: { ...search, tab, rev } });
   };
@@ -194,9 +240,16 @@ function LoadedReview({
       return;
     }
     if (!draft.target || !revision) return;
-    if (draft.threadId && revision.threads.some((thread) => thread.id === draft.threadId)) {
+    const thread = draft.threadId ? revision.threads.find((thread) => thread.id === draft.threadId) : undefined;
+    if (thread) {
+      const location = thread.placement.status === "placed" ? thread.placement.location : undefined;
       setResumed(null);
-      navigateReading({ ...search, tab: "comments", thread: draft.threadId });
+      navigateReading({
+        ...search,
+        tab: "comments",
+        doc: location?.kind === "doc-span" || location?.kind === "html-span" ? location.path : search.doc,
+        thread: draft.threadId,
+      });
       return;
     }
     if (isDiffTarget(draft.target)) {
@@ -208,17 +261,34 @@ function LoadedReview({
     claimDraft(draft.key, "resumed");
     if (draft.target.kind === "html-span") {
       setResumed({ ...draft, tab: "docs" });
-      navigateReading({ ...search, tab: "docs", thread: undefined }, `html-doc-${draft.target.path}`);
+      navigateReading(
+        { ...search, tab: "docs", doc: draft.target.path, thread: undefined },
+        `html-doc-${draft.target.path}`,
+      );
       return;
     }
     const placement = draftPlacement(draft, revision);
     if (placement?.status === "placed" && "blockId" in placement.location) {
       const destination = placement.location.kind === "doc-span" ? "docs" : "writeup";
       setResumed({ ...draft, tab: destination });
-      navigateReading({ ...search, tab: destination, thread: undefined }, `block-${placement.location.blockId}`);
+      navigateReading(
+        {
+          ...search,
+          tab: destination,
+          doc: draft.target.kind === "doc-span" ? draft.target.path : search.doc,
+          thread: undefined,
+        },
+        `block-${placement.location.blockId}`,
+      );
     } else {
-      setResumed({ ...draft, tab: readingTab });
-      navigateReading({ ...search, tab: readingTab, thread: undefined });
+      const destination = draft.target.kind === "doc-span" ? "docs" : readingTab;
+      setResumed({ ...draft, tab: destination });
+      navigateReading({
+        ...search,
+        tab: destination,
+        doc: draft.target.kind === "doc-span" ? draft.target.path : search.doc,
+        thread: undefined,
+      });
     }
   };
   // Data/DOM changes may fulfill an existing intent, but only navigation creates one.
@@ -230,10 +300,11 @@ function LoadedReview({
     previous.current = { navigation: current.navigation, requested };
     const intent = pending.current;
     if (!revision || !intent || intent.navigation !== current.navigation) return;
-    if (!intent.elementId && !intent.threadId && useOpening && opening.doc) {
-      const doc = revision.docs.find((doc) => doc.path === opening.doc);
-      intent.elementId = `${doc?.kind === "html" ? "html-doc" : "doc"}-${opening.doc}`;
-      intent.block = "start";
+    if (docsVisible && search.doc !== openDoc?.path) {
+      const next: ReviewSearch = { ...search, doc: openDoc?.path };
+      intent.navigation = readingIntent(next, hash, seq).navigation;
+      void navigate({ search: next, hash, replace: true });
+      return;
     }
     const thread = revision.threads.find((thread) => thread.id === intent.threadId);
     if (intent.routeThread) {
@@ -241,17 +312,21 @@ function LoadedReview({
       // Placement selects the destination once for this navigation, never on a refetch.
       intent.routeThread = false;
       setHtmlNavigation(undefined);
-      if (thread?.target.kind === "html-span") {
+      if (thread?.target.kind === "html-span" && (search.tab !== "comments" || search.thread)) {
         const location = thread.placement.status === "placed" ? thread.placement.location : undefined;
         const placed =
           location?.kind === "html-span" &&
           revision.docs.some((doc) => doc.kind === "html" && doc.path === location.path);
-        const next: ReviewSearch = { ...search, tab: placed ? "docs" : "comments" };
+        const next: ReviewSearch = {
+          ...search,
+          tab: placed ? "docs" : "comments",
+          doc: placed ? (openDoc?.path ?? location.path) : search.doc,
+        };
         const nextHash = `thread-${thread.id}`;
         intent.elementId = nextHash;
         intent.reply ||= !placed;
         if (placed) setHtmlNavigation({ threadId: thread.id, intent });
-        if (search.tab !== next.tab || hash !== nextHash) {
+        if (search.tab !== next.tab || search.doc !== next.doc || hash !== nextHash) {
           // The redirect continues this intent; it does not create another one.
           intent.navigation = readingIntent(next, nextHash, seq).navigation;
           void navigate({ search: next, hash: nextHash, replace: true });
@@ -347,6 +422,9 @@ function LoadedReview({
                   revision={revision}
                   tab={readingTab}
                   search={search}
+                  openDoc={openDoc}
+                  targeted={!!hash || !!search.thread}
+                  onOpenDoc={(path) => navigateReading({ ...search, tab: "docs", doc: path, thread: undefined })}
                   phone={layout === "phone"}
                   onResume={resume}
                   htmlNavigation={htmlNavigation}

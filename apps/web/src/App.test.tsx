@@ -231,7 +231,7 @@ test("explicit empty main writeup remains visible", async () => {
 });
 
 test.each(["markdown", "html"] as const)(
-  "opening main %s doc scrolls once and preserves the full doc list",
+  "opening main %s doc starts at the top without a synthetic scroll",
   async (kind) => {
     const scroll = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => {});
     const path = kind === "html" ? "last.html" : "last.md";
@@ -245,15 +245,13 @@ test.each(["markdown", "html"] as const)(
     });
     mount(`/r/${id}`);
     await screen.findByRole("heading", { name: path });
-    expect(screen.getByRole("heading", { name: "first.md" })).toBeTruthy();
-    const anchor = document.getElementById(`${kind === "html" ? "html-doc" : "doc"}-${path}`);
-    await waitFor(() => expect(scroll.mock.instances).toContain(anchor));
-    expect(scroll.mock.calls[scroll.mock.instances.indexOf(anchor as HTMLElement)]).toEqual([{ block: "start" }]);
-    const calls = scroll.mock.calls.length;
+    expect(screen.queryByRole("heading", { name: "first.md" })).toBeNull();
+    expect(screen.getByTestId("reading-pane").scrollTop).toBe(0);
+    expect(scroll).not.toHaveBeenCalled();
     await act(async () => {
       await client.invalidateQueries({ queryKey: ["revision", id, 1] });
     });
-    expect(scroll).toHaveBeenCalledTimes(calls);
+    expect(scroll).not.toHaveBeenCalled();
   },
 );
 

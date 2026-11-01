@@ -18,7 +18,8 @@ export type ReaderProps = {
 export type ReaderGroup = {
   key: string;
   id?: string;
-  heading: ReactNode;
+  heading?: ReactNode;
+  labelledBy?: string;
   blocks: RenderedBlock[];
   path?: string;
   content?: ReactNode;
@@ -128,18 +129,20 @@ export function BlockReader({
         <section
           key={group.key}
           id={group.id}
-          aria-labelledby={`${headingBase}-${index}`}
+          aria-labelledby={group.labelledBy ?? `${headingBase}-${index}`}
           className={group.topic ? "mt-9 mb-2 border-t border-line-1 pt-5" : "mb-2"}
         >
-          <div className="mb-2.5 flex items-center gap-2.5">
-            <h2
-              id={`${headingBase}-${index}`}
-              className="flex min-w-0 flex-1 items-center gap-2.5 wrap-anywhere text-fg-1 [font:var(--type-h2)]"
-            >
-              {group.heading}
-            </h2>
-            {group.action}
-          </div>
+          {group.heading != null && (
+            <div className="mb-2.5 flex items-center gap-2.5">
+              <h2
+                id={`${headingBase}-${index}`}
+                className="flex min-w-0 flex-1 items-center gap-2.5 wrap-anywhere text-fg-1 [font:var(--type-h2)]"
+              >
+                {group.heading}
+              </h2>
+              {group.action}
+            </div>
+          )}
           {group.meta}
           {group.content}
           {renderBlocks(group.blocks, group.path)}
