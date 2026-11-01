@@ -1,20 +1,23 @@
 import type { ReviewView, RevisionView } from "@emend/contract";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
-import { type MouseEvent, useEffect, useRef, useState } from "react";
+import { type MouseEvent, type Ref, useEffect, useRef, useState } from "react";
 import { placeSpan } from "../../../../packages/core/src/place/span.ts";
 import { reviewQuery, revisionQuery } from "../api/queries.ts";
 import { LazyDiffPane } from "../components/diff/LazyDiffPane.tsx";
 import { isDiffTarget } from "../components/diff/targets.ts";
-import { OriginBadge } from "../components/inbox/OriginBadge.tsx";
-import { AgentStatus } from "../components/inbox/ReviewRow.tsx";
 import { AppFrame } from "../components/layout/AppFrame.tsx";
 import { Panes } from "../components/layout/Panes.tsx";
-import { PhoneTabs, ReviewTabs } from "../components/layout/PhoneTabs.tsx";
+import { PhoneTabs } from "../components/layout/PhoneTabs.tsx";
+import { ReviewInbox } from "../components/layout/ReviewInbox.tsx";
+import { ReviewTabs } from "../components/layout/ReviewTabs.tsx";
 import { DocView } from "../components/reading/DocView.tsx";
 import type { HtmlNavigation } from "../components/reading/HtmlDocFrame.tsx";
 import { Writeup } from "../components/reading/Writeup.tsx";
 import { SendBar } from "../components/send/SendBar.tsx";
+import { AgentStatus, agentStatusOf } from "../components/status/AgentStatus.tsx";
+import { OriginBadge } from "../components/status/OriginBadge.tsx";
+import { StateBadge } from "../components/status/StateBadge.tsx";
 import { Composer } from "../components/threads/Composer.tsx";
 import { ThreadList } from "../components/threads/ThreadList.tsx";
 import { Button } from "../components/ui/Button.tsx";
@@ -24,27 +27,23 @@ import { useReviewEvents } from "../lib/events.ts";
 import { useInboxCollapsed, useLayout } from "../lib/layout.ts";
 import { openingView } from "../lib/opening-view.ts";
 import { type ReviewSearch, validateReviewSearch } from "../router.tsx";
-import { Inbox } from "./inbox.tsx";
 
 function RevisionPicker({
   review,
   seq,
   onChange,
-  menu = false,
 }: {
   review: ReviewView;
   seq: number;
   onChange: (seq: number) => void;
-  menu?: boolean;
 }) {
   return (
     <label className="flex items-center gap-2 text-sm">
-      {menu && <span>Revision</span>}
       <select
-        aria-label={menu ? "Revision" : `Revision ${seq}`}
+        aria-label={`Revision ${seq}`}
         value={seq}
         onChange={(event) => onChange(Number(event.target.value))}
-        className="min-h-10 rounded-md border border-neutral-300 bg-white px-2 dark:border-neutral-700 dark:bg-neutral-900"
+        className="min-h-10 rounded-md border border-line-2 bg-surface px-2"
       >
         {review.revisions.map((revision) => (
           <option key={revision.seq} value={revision.seq}>
@@ -101,7 +100,19 @@ function readingIntent(search: ReviewSearch, hash: string, seq: number) {
     block: "center" as ScrollLogicalPosition,
   };
 }
-function LoadedReview({ review, published }: { review: ReviewView; published: number }) {
+function LoadedReview({
+  review,
+  published,
+  titleRef,
+  collapsed,
+  setCollapsed,
+}: {
+  review: ReviewView;
+  published: number;
+  titleRef: Ref<HTMLHeadingElement>;
+  collapsed: boolean;
+  setCollapsed: (collapsed: boolean) => void;
+}) {
   // Read search and hash from one location: route matches can lag during navigation.
   const location = useLocation();
   const search = validateReviewSearch(location.search);
@@ -110,7 +121,6 @@ function LoadedReview({ review, published }: { review: ReviewView; published: nu
   const seq = search.rev ?? initialRevision;
   const query = useQuery(revisionQuery(review.id, seq));
   const navigate = useNavigate({ from: "/r/$reviewId" });
-  const [collapsed, setCollapsed] = useInboxCollapsed();
   const layout = useLayout();
   const revision = query.data;
   const [resumed, setResumed] = useState<(SavedDraft & { tab: NonNullable<ReviewSearch["tab"]> }) | null>(null);
@@ -267,25 +277,11 @@ function LoadedReview({ review, published }: { review: ReviewView; published: nu
     hasWriteup,
     unsentCount: review.unsentCount,
   };
-  const inbox = <Inbox compact />;
   const ready = Math.max(published, review.newestRevision);
   return (
-    <AppFrame
-      title={review.title}
-      isReview
-      inbox={inbox}
-      desktopAction={
-        collapsed ? (
-          <Button onClick={() => setCollapsed(false)}>Expand inbox</Button>
-        ) : (
-          <Button onClick={() => setCollapsed(true)}>Collapse inbox</Button>
-        )
-      }
-      revisionMenu={<RevisionPicker review={review} seq={seq} onChange={setRevision} menu />}
-    >
+    <AppFrame isReview>
       <Panes
-        inbox={inbox}
-        collapsed={collapsed}
+        inbox={<ReviewInbox collapsed={collapsed} onCollapsedChange={setCollapsed} />}
         tab={tab}
         hasDiff={hasDiff}
         phoneTabs={<PhoneTabs {...tabProps} />}
@@ -300,29 +296,29 @@ function LoadedReview({ review, published }: { review: ReviewView; published: nu
           />
         }
         header={
-          <div className="shrink-0 border-b border-neutral-200 p-4 dark:border-neutral-800">
+          <div className="shrink-0 border-b border-line-1 p-4">
             <div className="flex flex-wrap items-center gap-2">
               <OriginBadge origin={review.origin} />
-              <span className="text-xs text-neutral-500 dark:text-neutral-400">{review.state}</span>
+              <StateBadge state={review.state} />
             </div>
-            <h1 className="mt-2 break-words text-xl font-semibold tracking-tight">{review.title}</h1>
+            <h1 ref={titleRef} tabIndex={-1} className="mt-2 break-words text-xl font-semibold tracking-tight">
+              {review.title}
+            </h1>
             {review.importedAt && (
               <p className="mt-2 break-words text-sm">
                 Copied from {review.origin.name} on {new Date(review.importedAt).toLocaleDateString()}. Comments, Sends
                 and approvals before then were made there.
               </p>
             )}
-            <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-neutral-600 dark:text-neutral-400">
-              {(review.repo || review.branch) && (
-                <span className="break-words">{[review.repo, review.branch].filter(Boolean).join(" · ")}</span>
-              )}
+            <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-fg-2">
+              {review.branch && <span className="break-words">{review.branch}</span>}
               <RevisionPicker review={review} seq={seq} onChange={setRevision} />
-              <AgentStatus review={review} />
+              <AgentStatus status={agentStatusOf(review)} />
             </div>
             {ready > seq && (
               <div
                 role="status"
-                className="mt-4 flex flex-wrap items-center gap-3 rounded-md bg-blue-50 p-3 text-sm text-blue-900 dark:bg-blue-950 dark:text-blue-200"
+                className="mt-4 flex flex-wrap items-center gap-3 rounded-md bg-info-bg p-3 text-sm text-info-fg"
               >
                 <span>Revision {ready} is ready. Reload to see it.</span>
                 <Button onClick={() => setRevision(ready)}>Reload</Button>
@@ -369,7 +365,7 @@ function LoadedReview({ review, published }: { review: ReviewView; published: nu
                 wrap={(editor) => (
                   <section
                     aria-label="Resumed comment"
-                    className="sticky bottom-0 space-y-3 border-t border-neutral-300 bg-white p-3 dark:border-neutral-700 dark:bg-neutral-950"
+                    className="sticky bottom-0 space-y-3 border-t border-line-2 bg-surface p-3"
                   >
                     {resumed.target && "quote" in resumed.target && (
                       <blockquote className="max-h-24 overflow-auto border-l-2 pl-2 text-sm">
@@ -406,9 +402,34 @@ export function ReviewPage() {
   const { reviewId } = useParams({ from: "/r/$reviewId" });
   const query = useQuery(reviewQuery(reviewId));
   const published = useReviewEvents(reviewId);
-  if (query.data) return <LoadedReview key={reviewId} review={query.data} published={published} />;
+  const [collapsed, setCollapsed] = useInboxCollapsed();
+  const previousReviewId = useRef(reviewId);
+  const pendingFocus = useRef(false);
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (previousReviewId.current !== reviewId) {
+      previousReviewId.current = reviewId;
+      pendingFocus.current = true;
+    }
+    if (query.isError && !query.data) pendingFocus.current = false;
+    if (pendingFocus.current && query.data?.id === reviewId && titleRef.current) {
+      pendingFocus.current = false;
+      titleRef.current.focus();
+    }
+  }, [reviewId, query.data, query.isError]);
+  if (query.data)
+    return (
+      <LoadedReview
+        key={reviewId}
+        review={query.data}
+        published={published}
+        titleRef={titleRef}
+        collapsed={collapsed}
+        setCollapsed={setCollapsed}
+      />
+    );
   return (
-    <AppFrame title="Review" isReview>
+    <AppFrame isReview>
       <main className="p-5">
         {query.isError ? (
           <>

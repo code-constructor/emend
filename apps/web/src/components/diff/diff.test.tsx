@@ -89,7 +89,6 @@ async function mount(view: RevisionView) {
           header={null}
           reading={null}
           phoneTabs={null}
-          collapsed
           tab="diff"
           hasDiff
           diff={<DiffPane reviewId={reviewId} revision={view} parser={parser} />}

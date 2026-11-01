@@ -21,47 +21,46 @@ export function DevicesPage() {
     },
   });
   return (
-    <AppFrame title="Devices">
-      <main className="overflow-auto p-6">
-        <h1 className="text-2xl font-semibold">Devices</h1>
-        <Button asChild className="my-4">
-          <Link to="/devices/pair">Pair a device</Link>
-        </Button>
-        {devices.isPending && <p role="status">Loading devices…</p>}
-        {devices.isError && <p role="alert">Could not load devices. Try again.</p>}
-        {revoke.isError && <p role="alert">Could not revoke the device. Try again.</p>}
-        {devices.data?.items.length === 0 && <p>No paired devices.</p>}
-        <ul className="space-y-4">
-          {devices.data?.items.map((device) => (
-            <li
-              key={device.id}
-              className="flex flex-wrap items-center gap-4 rounded-md border border-neutral-300 p-4 dark:border-neutral-700"
-            >
-              <div className="flex-1">
-                <p className="font-medium">{device.name}</p>
-                {device.current && <p>This browser</p>}
-                <p className="text-sm">
-                  {device.kind} · Created {new Date(device.createdAt).toLocaleString()}
-                </p>
-                <p className="text-sm">
-                  Last seen: {device.lastSeenAt ? new Date(device.lastSeenAt).toLocaleString() : "never"}
-                </p>
-              </div>
-              <Button
-                disabled={revoke.isPending}
-                onClick={() => {
-                  if (
-                    !device.current ||
-                    window.confirm("Revoke this browser? You will need to pair it again to sign in.")
-                  )
-                    revoke.mutate(device);
-                }}
-              >
-                Revoke
-              </Button>
-            </li>
-          ))}
-        </ul>
+    <AppFrame>
+      <main className="min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto w-full max-w-[760px] px-5 pt-8 pb-20">
+          <h1 className="text-24 font-semibold leading-(--lh-tight) tracking-(--tracking-tight)">Devices</h1>
+          <Button asChild className="my-4">
+            <Link to="/devices/pair">Pair a device</Link>
+          </Button>
+          {devices.isPending && <p role="status">Loading devices…</p>}
+          {devices.isError && <p role="alert">Could not load devices. Try again.</p>}
+          {revoke.isError && <p role="alert">Could not revoke the device. Try again.</p>}
+          {devices.data?.items.length === 0 && <p>No paired devices.</p>}
+          <ul className="space-y-4">
+            {devices.data?.items.map((device) => (
+              <li key={device.id} className="flex flex-wrap items-center gap-4 rounded-md border border-line-2 p-4">
+                <div className="flex-1">
+                  <p className="font-medium">{device.name}</p>
+                  {device.current && <p>This browser</p>}
+                  <p className="text-sm">
+                    {device.kind} · Created {new Date(device.createdAt).toLocaleString()}
+                  </p>
+                  <p className="text-sm">
+                    Last seen: {device.lastSeenAt ? new Date(device.lastSeenAt).toLocaleString() : "never"}
+                  </p>
+                </div>
+                <Button
+                  disabled={revoke.isPending}
+                  onClick={() => {
+                    if (
+                      !device.current ||
+                      window.confirm("Revoke this browser? You will need to pair it again to sign in.")
+                    )
+                      revoke.mutate(device);
+                  }}
+                >
+                  Revoke
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </div>
       </main>
     </AppFrame>
   );

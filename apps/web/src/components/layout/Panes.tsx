@@ -8,7 +8,6 @@ export function Panes({
   diff,
   phoneTabs,
   sendBar,
-  collapsed,
   tab,
   hasDiff,
 }: {
@@ -18,23 +17,14 @@ export function Panes({
   diff: ReactNode;
   phoneTabs: ReactNode;
   sendBar?: ReactNode;
-  collapsed: boolean;
   tab: string;
   hasDiff: boolean;
 }) {
   const layout = useLayout();
   return (
     <div className="flex min-h-0 flex-1">
-      {layout === "desktop" && !collapsed && (
-        <aside
-          aria-label="Inbox"
-          data-testid="inbox-pane"
-          className="w-[280px] shrink-0 overflow-y-auto border-r border-neutral-200 dark:border-neutral-800"
-        >
-          {inbox}
-        </aside>
-      )}
-      <main className="flex min-w-0 flex-1 flex-col">
+      {layout !== "phone" && inbox}
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col">
         {header}
         <div className="flex min-h-0 flex-1">
           {(layout !== "phone" || tab !== "diff") && (
@@ -47,7 +37,7 @@ export function Panes({
               aria-label="Diff"
               data-testid="diff-pane"
               data-diff-scroll
-              className="min-w-0 flex-1 overflow-y-auto border-neutral-200 md:border-l dark:border-neutral-800"
+              className="min-w-0 flex-1 overflow-y-auto border-line-1 md:border-l"
             >
               {diff}
             </section>

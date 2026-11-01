@@ -1,101 +1,83 @@
 import { Link } from "@tanstack/react-router";
-import { type ReactNode, useState } from "react";
+import { ChevronLeft, Ellipsis, Inbox, Link as LinkIcon, QrCode, Smartphone } from "lucide-react";
+import type { ReactNode } from "react";
 import { useLayout } from "../../lib/layout.ts";
-import { Button } from "../ui/Button.tsx";
-import { Sheet } from "../ui/Sheet.tsx";
+import { Icon } from "../ui/Icon.tsx";
+import { IconButton } from "../ui/IconButton.tsx";
+import { Menu, type MenuItem } from "../ui/Menu.tsx";
+import { useToast } from "../ui/Toast.tsx";
+import { cn } from "../ui/utils.ts";
 
-export function AppFrame({
-  title,
-  isReview = false,
-  children,
-  inbox,
-  revisionMenu,
-  desktopAction,
-}: {
-  title: string;
-  isReview?: boolean;
-  children: ReactNode;
-  inbox?: ReactNode;
-  revisionMenu?: ReactNode;
-  desktopAction?: ReactNode;
-}) {
+export function AppFrame({ isReview = false, children }: { isReview?: boolean; children: ReactNode }) {
   const layout = useLayout();
-  const [copyMessage, setCopyMessage] = useState("");
+  const toast = useToast();
   async function copyLink() {
     try {
       await navigator.clipboard.writeText(location.origin + location.pathname + location.search);
-      setCopyMessage("Link copied.");
+      toast.show({ title: "Link copied" });
     } catch {
-      setCopyMessage("Could not copy the link. Copy it from the address bar.");
+      toast.show({ title: "Could not copy the link. Copy it from the address bar.", tone: "danger" });
     }
   }
+  const devices: MenuItem = {
+    label: "Devices",
+    icon: Smartphone,
+    asChild: true,
+    children: <Link to="/devices">Devices</Link>,
+  };
+  const menuItems: MenuItem[] = isReview
+    ? [
+        { label: "Copy link", icon: LinkIcon, onSelect: () => void copyLink() },
+        { separator: true },
+        { label: "Inbox", icon: Inbox, asChild: true, children: <Link to="/">Inbox</Link> },
+        devices,
+      ]
+    : [
+        devices,
+        {
+          label: "Pair a device",
+          icon: QrCode,
+          asChild: true,
+          children: <Link to="/devices/pair">Pair a device</Link>,
+        },
+      ];
   return (
-    <div className="flex h-dvh min-h-0 flex-col">
-      <header className="flex min-h-14 shrink-0 items-center gap-3 border-b border-neutral-200 px-4 dark:border-neutral-800">
-        {layout === "phone" ? (
-          <>
-            {isReview && (
-              <Button asChild>
-                <Link to="/">Inbox</Link>
-              </Button>
-            )}
-            <span className="min-w-0 flex-1 truncate font-semibold">{title}</span>
-            <Sheet title="More" trigger={<Button aria-label="More">⋯</Button>}>
-              {isReview ? (
-                <>
-                  {revisionMenu}
-                  <Button className="w-full" onClick={() => void copyLink()}>
-                    Copy link
-                  </Button>
-                  {copyMessage && <p role="status">{copyMessage}</p>}
-                  <Link className="block py-2" to="/">
-                    Inbox
-                  </Link>
-                  <Link className="block py-2" to="/devices">
-                    Devices
-                  </Link>
-                </>
-              ) : (
-                <>
-                  <Link className="block py-2" to="/devices">
-                    Devices
-                  </Link>
-                  <Link className="block py-2" to="/devices/pair">
-                    Pair a device
-                  </Link>
-                </>
-              )}
-            </Sheet>
-          </>
+    <div className="flex h-dvh min-h-0 flex-col bg-app">
+      <header
+        className={cn(
+          "flex shrink-0 items-center justify-between border-b border-line-1 bg-app pr-2 pl-4",
+          layout === "phone"
+            ? "h-[calc(var(--topbar-h)+env(safe-area-inset-top))] pt-[env(safe-area-inset-top)]"
+            : "h-(--topbar-h)",
+        )}
+      >
+        {layout === "phone" && isReview ? (
+          <Link
+            to="/"
+            className="inline-flex min-h-11 items-center gap-1 text-13 font-medium text-fg-2 no-underline hover:text-fg-1"
+          >
+            <Icon icon={ChevronLeft} size={20} />
+            Inbox
+          </Link>
         ) : (
-          <>
-            <Link to="/" className="text-lg font-semibold tracking-tight">
-              emend
-            </Link>
-            <span className="text-neutral-400" aria-hidden="true">
-              /
-            </span>
-            <nav aria-label="Breadcrumb" className="min-w-0 flex-1 truncate text-sm">
-              {isReview ? (
-                <>
-                  <Link to="/" className="text-neutral-500">
-                    Inbox
-                  </Link>
-                  <span aria-hidden="true"> / </span>
-                </>
-              ) : null}
-              {title}
-            </nav>
-            {layout === "tablet" && inbox && (
-              <Sheet title="Inbox" trigger={<Button>Inbox</Button>}>
-                {inbox}
-              </Sheet>
-            )}
-            {layout === "desktop" && desktopAction}
-            <Link to="/devices" className="px-2 py-2 text-sm text-blue-700 dark:text-blue-400">
-              Devices
-            </Link>
-          </>
+          <Link
+            to="/"
+            className="font-mono text-14 font-medium leading-none font-stretch-mono text-fg-3 no-underline hover:text-fg-1"
+          >
+            emend
+          </Link>
+        )}
+        {layout === "phone" ? (
+          <Menu
+            label="More"
+            size="lg"
+            trigger={<IconButton label="More" icon={Ellipsis} size="lg" tooltip={false} />}
+            items={menuItems}
+          />
+        ) : (
+          <IconButton label="Devices" icon={Smartphone} asChild>
+            <Link to="/devices" />
+          </IconButton>
         )}
       </header>
       {children}

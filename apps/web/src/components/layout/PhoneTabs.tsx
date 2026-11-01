@@ -1,53 +1,52 @@
 import { Link } from "@tanstack/react-router";
-import type { ReviewSearch } from "../../router.tsx";
+import { FileDiff, Files, FileText, MessageSquare } from "lucide-react";
+import { Icon } from "../ui/Icon.tsx";
+import { cn } from "../ui/utils.ts";
+import type { ReviewTabsProps } from "./ReviewTabs.tsx";
 
-export function ReviewTabs({
-  id,
-  search,
-  hasDocs,
-  hasWriteup,
-  hasDiff,
-  unsentCount,
-  phone = false,
-}: {
-  id: string;
-  search: ReviewSearch;
-  hasDocs: boolean;
-  hasWriteup: boolean;
-  hasDiff: boolean;
-  unsentCount: number;
-  phone?: boolean;
-}) {
-  const tabs = phone ? (["writeup", "diff", "docs", "comments"] as const) : (["writeup", "docs", "comments"] as const);
-  const active =
-    !phone && search.tab === "diff" ? (hasWriteup ? "writeup" : hasDocs ? "docs" : "comments") : search.tab;
+const tabs = [
+  { id: "writeup", label: "Writeup", icon: FileText },
+  { id: "diff", label: "Diff", icon: FileDiff },
+  { id: "docs", label: "Docs", icon: Files },
+  { id: "comments", label: "Comments", icon: MessageSquare },
+] as const;
+
+export function PhoneTabs({ id, search, hasDocs, hasWriteup, hasDiff, unsentCount }: ReviewTabsProps) {
   return (
     <nav
-      aria-label={phone ? "Review tabs" : "Reading tabs"}
-      className={`flex shrink-0 border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-950 ${phone ? "border-t pb-[env(safe-area-inset-bottom)]" : "sticky top-0 border-b"}`}
+      aria-label="Review tabs"
+      className="grid shrink-0 auto-cols-fr grid-flow-col border-t border-line-1 bg-surface pb-[env(safe-area-inset-bottom)]"
     >
       {tabs
-        .filter((tab) => ({ writeup: hasWriteup, diff: hasDiff, docs: hasDocs, comments: true })[tab])
+        .filter((tab) => ({ writeup: hasWriteup, diff: hasDiff, docs: hasDocs, comments: true })[tab.id])
         .map((tab) => (
           <Link
-            key={tab}
+            key={tab.id}
             to="/r/$reviewId"
             params={{ reviewId: id }}
-            search={{ ...search, tab, thread: undefined }}
+            search={{ ...search, tab: tab.id, thread: undefined }}
             hash=""
-            aria-current={tab === active ? "page" : undefined}
-            className={`flex min-h-12 flex-1 items-center justify-center gap-1 px-2 text-sm ${tab === active ? "font-medium text-blue-700 dark:text-blue-400" : "text-neutral-600 dark:text-neutral-400"}`}
-          >
-            {tab[0]?.toUpperCase()}
-            {tab.slice(1)}
-            {tab === "comments" && (
-              <span className="rounded-full bg-neutral-100 px-1.5 text-xs dark:bg-neutral-800">{unsentCount}</span>
+            aria-current={tab.id === search.tab ? "page" : undefined}
+            className={cn(
+              "relative flex h-(--tab-touch) items-center justify-center text-11 font-medium leading-none no-underline hover:text-fg-1",
+              tab.id === search.tab
+                ? "text-fg-1 before:absolute before:-top-px before:right-[28%] before:left-[28%] before:h-0.5 before:rounded-b-[2px] before:bg-accent before:content-['']"
+                : "text-fg-3",
             )}
+          >
+            <span className="relative flex flex-col items-center gap-[3px]">
+              <Icon icon={tab.icon} size={18} />
+              <span>{tab.label}</span>
+              {tab.id === "comments" && unsentCount > 0 && (
+                <span className="absolute -top-1.5 left-[calc(50%+3px)] inline-grid h-[15px] min-w-[15px] place-items-center rounded-full bg-accent px-1 text-[9.5px] font-semibold leading-none text-accent-fg tabular-nums">
+                  <span className="sr-only"> </span>
+                  {unsentCount}
+                  <span className="sr-only"> unsent</span>
+                </span>
+              )}
+            </span>
           </Link>
         ))}
     </nav>
   );
-}
-export function PhoneTabs(props: Omit<Parameters<typeof ReviewTabs>[0], "phone">) {
-  return <ReviewTabs {...props} phone />;
 }

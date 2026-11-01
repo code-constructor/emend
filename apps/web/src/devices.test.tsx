@@ -89,3 +89,28 @@ test("pair-device creates once under StrictMode and renders a QR with React elem
     expect.objectContaining({ method: "POST", body: JSON.stringify({ purpose: "device" }) }),
   );
 });
+
+test.each([
+  ["/devices", "Devices"],
+  ["/devices/pair", "Pair a device"],
+])("%s keeps the scrolling main outside the centred content column", async (path, title) => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () =>
+      path === "/devices"
+        ? Response.json({ items: [] })
+        : Response.json({ url: "https://hub.example/pair", code: "ABCD-EFGH", expiresAt: "2026-01-01T00:10:00.000Z" }),
+    ),
+  );
+  mount(path);
+  const heading = await screen.findByRole("heading", { name: title, level: 1 });
+  const main = screen.getByRole("main");
+  const column = heading.parentElement;
+  expect(main.className).toContain("overflow-y-auto");
+  expect(main.className).not.toMatch(/max-w-|mx-auto/);
+  expect(column?.parentElement).toBe(main);
+  expect(column?.className).toContain("max-w-[760px]");
+  expect(column?.className).toContain("mx-auto");
+  expect(column?.className).toContain("w-full");
+  expect(column?.className).not.toContain("overflow");
+});

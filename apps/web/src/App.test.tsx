@@ -1,17 +1,20 @@
 // @vitest-environment-options {"settings":{"disableIframePageLoading":true}}
-import type { FileView, RenderedBlock, RevisionView, Target, ThreadView } from "@emend/contract";
+import type { FileView, InboxItem, RenderedBlock, RevisionView, Target, ThreadView } from "@emend/contract";
 import { QueryClient } from "@tanstack/react-query";
 import { createMemoryHistory } from "@tanstack/react-router";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { Window } from "happy-dom";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, expectTypeOf, test, vi } from "vitest";
 import { App } from "./App.tsx";
+import { reviewQuery } from "./api/queries.ts";
+import type { PhoneTabs } from "./components/layout/PhoneTabs.tsx";
+import type { ReviewTabs, ReviewTabsProps } from "./components/layout/ReviewTabs.tsx";
 import { draftKey, editDraftKey } from "./lib/drafts.ts";
 import { rememberPairingSecret, takePairingSecret } from "./lib/pairing-secret.ts";
 import { validateReviewSearch } from "./router.tsx";
 
 const id = "11111111-1111-4111-8111-111111111111";
-const item = {
+const item: InboxItem = {
   id,
   title: "Synthetic review",
   origin: { id, name: "Workshop" },
@@ -381,7 +384,7 @@ test.each([
 test("inbox shows the origin and pending Send without a waiting agent", async () => {
   mount();
   expect(await screen.findByText("Workshop")).toBeTruthy();
-  expect(screen.getByText("No agent waiting")).toBeTruthy();
+  expect(screen.getByRole("img", { name: "No agent waiting" })).toBeTruthy();
   expect(screen.getByRole("link", { name: /Synthetic review/ }).getAttribute("href")).toContain(`/r/${id}`);
 });
 test("moved inbox rows show the destination host without a navigable link", async () => {
@@ -397,13 +400,18 @@ test.each([767, 768, 1279, 1280, 390])("review mounts only visible panes at %s p
   expect(screen.getAllByTestId(/-pane$/)).toHaveLength(size >= 1280 ? 3 : size >= 768 ? 2 : 1);
   if (size < 768) {
     const tabs = within(screen.getByRole("navigation", { name: "Review tabs" }));
-    expect(tabs.getAllByRole("link").map((link) => link.textContent)).toEqual(["Writeup", "Diff", "Docs", "Comments2"]);
+    expect(tabs.getAllByRole("link").map((link) => link.textContent)).toEqual([
+      "Writeup",
+      "Diff",
+      "Docs",
+      "Comments 2 unsent",
+    ]);
     fireEvent.click(tabs.getByRole("link", { name: "Diff" }));
     await waitFor(() => expect(screen.getByTestId("diff-pane")).toBeTruthy());
     expect(screen.queryByTestId("reading-pane")).toBeNull();
   }
   if (size >= 768 && size < 1280) {
-    fireEvent.click(screen.getByRole("button", { name: "Inbox" }));
+    fireEvent.click(screen.getByRole("button", { name: "Show inbox" }));
     expect(await screen.findByRole("dialog", { name: "Inbox" })).toBeTruthy();
   }
 });
@@ -461,7 +469,7 @@ test("inbox collapse survives reload and unavailable localStorage", async () => 
   expect(screen.queryByTestId("inbox-pane")).toBeNull();
 });
 
-test("phone menu selects revisions, copies the complete link, and links to devices", async () => {
+test("phone menu copies the complete link and links to devices; header selects revisions", async () => {
   width = 390;
   newest = 2;
   window.history.replaceState(null, "", `/r/${id}?rev=1&tab=comments`);
@@ -469,13 +477,15 @@ test("phone menu selects revisions, copies the complete link, and links to devic
   vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
   const { history } = mount(`/r/${id}?rev=1&tab=comments`);
   await screen.findByLabelText("Revision 1");
-  fireEvent.click(screen.getByRole("button", { name: "More" }));
-  const menu = within(await screen.findByRole("dialog", { name: "More" }));
-  expect(menu.getByRole("link", { name: "Inbox" }).getAttribute("href")).toBe("/");
-  expect(menu.getByRole("link", { name: "Devices" }).getAttribute("href")).toBe("/devices");
-  fireEvent.click(menu.getByRole("button", { name: "Copy link" }));
+  fireEvent.keyDown(screen.getByRole("button", { name: "More" }), { key: "ArrowDown" });
+  const menu = within(await screen.findByRole("menu", { name: "More" }));
+  expect(menu.getByRole("menuitem", { name: "Inbox" }).getAttribute("href")).toBe("/");
+  expect(menu.getByRole("menuitem", { name: "Devices" }).getAttribute("href")).toBe("/devices");
+  fireEvent.click(menu.getByRole("menuitem", { name: "Copy link" }));
   expect(writeText).toHaveBeenCalledWith(location.origin + location.pathname + location.search);
-  fireEvent.change(menu.getByLabelText("Revision"), { target: { value: "2" } });
+  expect(await screen.findByText("Link copied")).toBeTruthy();
+  expect(screen.queryByRole("menu")).toBeNull();
+  fireEvent.change(screen.getByLabelText("Revision 1"), { target: { value: "2" } });
   await waitFor(() => expect(history.location.search).toContain("rev=2"));
   expect(history.location.search).toContain("tab=comments");
 });
@@ -484,10 +494,10 @@ test("phone inbox menu offers Devices and Pair a device", async () => {
   width = 390;
   mount();
   await screen.findByRole("heading", { name: "Inbox" });
-  fireEvent.click(screen.getByRole("button", { name: "More" }));
-  const menu = within(await screen.findByRole("dialog", { name: "More" }));
-  expect(menu.getByRole("link", { name: "Devices" }).getAttribute("href")).toBe("/devices");
-  expect(menu.getByRole("link", { name: "Pair a device" }).getAttribute("href")).toBe("/devices/pair");
+  fireEvent.keyDown(screen.getByRole("button", { name: "More" }), { key: "ArrowDown" });
+  const menu = within(await screen.findByRole("menu", { name: "More" }));
+  expect(menu.getByRole("menuitem", { name: "Devices" }).getAttribute("href")).toBe("/devices");
+  expect(menu.getByRole("menuitem", { name: "Pair a device" }).getAttribute("href")).toBe("/devices/pair");
 });
 
 test("hides Docs without docs, defaults bad search values, and keeps diff visible on desktop", async () => {
@@ -1595,4 +1605,562 @@ test.each([null, "2026-01-02T00:00:00.000Z"])("shows provenance only for copied 
       await screen.findByText(/Copied from Workshop on .*Comments, Sends and approvals before then were made there\./),
     ).toBeTruthy();
   else expect(screen.queryByText(/Copied from/)).toBeNull();
+});
+
+function withInbox(items: InboxItem[]) {
+  const fallback = fetchMock.getMockImplementation();
+  fetchMock.mockImplementation(async (path, init) =>
+    path === "/api/v1/reviews" ? Response.json({ items }) : (fallback?.(path, init) as Promise<Response>),
+  );
+}
+const secondItem: InboxItem = {
+  ...item,
+  id: "22222222-2222-4222-8222-222222222222",
+  title: "Another proposal",
+  branch: "feature/garden",
+  origin: { id: "22222222-2222-4222-8222-222222222222", name: "Garden" },
+  unsentCount: 0,
+  openThreads: 0,
+  agentWaiting: true,
+};
+
+test("inbox row shows machine, title, branch, local time, counts and attention without exposing the repo key", async () => {
+  mount();
+  const row = await screen.findByRole("link", { name: /Synthetic review/ });
+  expect(within(row).getByText("Workshop")).toBeTruthy();
+  expect(screen.queryByRole("link", { name: /From Workshop/ })).toBeNull();
+  expect(within(row).queryByRole("img", { name: "From Workshop" })).toBeNull();
+  expect(within(row).getByText("main")).toBeTruthy();
+  expect(row.textContent).not.toContain(item.repo);
+  expect(row.textContent).not.toContain("Revision");
+  expect(row.querySelector("time")?.dateTime).toBe(item.updatedAt);
+  expect(row.querySelector("time")?.title).toBe(new Date(item.updatedAt).toLocaleString());
+  expect(row.textContent).toContain("1 open thread");
+  expect(row.textContent).toContain("2 unsent");
+  expect(within(row).getByRole("img", { name: "No agent waiting" })).toBeTruthy();
+  expect(within(row).getByText("Needs you.").className).toBe("sr-only");
+  expect(row.querySelector('[aria-hidden="true"].bg-accent')).toBeTruthy();
+});
+
+test.each(["approved", "settled"] as const)(
+  "%s row replaces time with state and has no attention mark",
+  async (state) => {
+    withInbox([{ ...item, state }]);
+    mount();
+    const row = await screen.findByRole("link", { name: /Synthetic review/ });
+    expect(within(row).getByText(state === "approved" ? "Approved" : "Settled")).toBeTruthy();
+    expect(row.querySelector("time")).toBeNull();
+    expect(within(row).queryByText("Needs you.")).toBeNull();
+  },
+);
+
+test("moved rows are disabled and omit attention, counts and agent glyphs", async () => {
+  withInbox([{ ...item, movedTo: "https://hub.example/r/new" }]);
+  mount();
+  const moved = await screen.findByText("Moved to hub.example");
+  const row = moved.closest('[aria-disabled="true"]');
+  expect(row?.tagName).toBe("DIV");
+  expect(row?.textContent).not.toMatch(/unsent|open thread|Needs you/);
+  expect(screen.queryByRole("img", { name: "No agent waiting" })).toBeNull();
+  expect(screen.queryByRole("link", { name: /Synthetic review/ })).toBeNull();
+});
+
+test("quiet rows omit zero counts, attention and absent branch", async () => {
+  withInbox([{ ...item, branch: null, unsentCount: 0, openThreads: 0, pendingSend: false }]);
+  mount();
+  const row = await screen.findByRole("link", { name: /Synthetic review/ });
+  expect(row.textContent).not.toMatch(/unsent|open thread|Needs you|main/);
+  expect(within(row).queryByRole("img", { name: /agent waiting/i })).toBeNull();
+  expect(screen.getByText("Nothing needs you · 1 machine")).toBeTruthy();
+});
+
+test.each(["SYNTHETIC", "MaIn", "wORKsHOP"])("text filter matches title, branch and machine for %s", async (filter) => {
+  withInbox([item, secondItem]);
+  mount();
+  await screen.findByRole("link", { name: /Another proposal/ });
+  fireEvent.change(screen.getByRole("textbox", { name: "Filter reviews" }), { target: { value: filter } });
+  expect(screen.getByRole("link", { name: /Synthetic review/ })).toBeTruthy();
+  expect(screen.queryByRole("link", { name: /Another proposal/ })).toBeNull();
+});
+
+test("no matches can be cleared and filtering preserves server order without changing the URL", async () => {
+  withInbox([secondItem, item]);
+  const { history } = mount();
+  await screen.findByRole("link", { name: /Another proposal/ });
+  fireEvent.change(screen.getByRole("textbox", { name: "Filter reviews" }), { target: { value: "not present" } });
+  expect(screen.getByText("No reviews match this filter.")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Clear filter" }));
+  expect((screen.getByRole("textbox", { name: "Filter reviews" }) as HTMLInputElement).value).toBe("");
+  expect(
+    within(screen.getByRole("list"))
+      .getAllByRole("link")
+      .map((row) => row.getAttribute("href")),
+  ).toEqual([`/r/${secondItem.id}?tab=writeup`, `/r/${id}?tab=writeup`]);
+  expect(history.location.search).toBe("");
+});
+
+test("machine Select appears for multiple origins, sorts names and combines with the text filter", async () => {
+  withInbox([item, secondItem]);
+  mount();
+  const machine = await screen.findByRole("combobox", { name: "Machine" });
+  expect(machine.tagName).toBe("SELECT");
+  expect(
+    within(machine)
+      .getAllByRole("option")
+      .map((option) => option.textContent),
+  ).toEqual(["All machines", "Garden", "Workshop"]);
+  expect(screen.getByText("2 need you · 2 machines")).toBeTruthy();
+  fireEvent.change(machine, { target: { value: secondItem.origin.id } });
+  expect(screen.queryByRole("link", { name: /Synthetic review/ })).toBeNull();
+  expect(screen.getByRole("link", { name: /Another proposal/ })).toBeTruthy();
+  fireEvent.change(screen.getByRole("textbox", { name: "Filter reviews" }), { target: { value: "main" } });
+  expect(screen.getByText("No reviews match this filter.")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Clear filter" }));
+  expect(screen.getByRole("link", { name: /Synthetic review/ })).toBeTruthy();
+  expect(screen.getByRole("link", { name: /Another proposal/ })).toBeTruthy();
+});
+
+test("single origin omits the machine filter; subtitle excludes moved and completed reviews", async () => {
+  withInbox([
+    item,
+    { ...item, id: secondItem.id, state: "approved" },
+    { ...item, id: "44444444-4444-4444-8444-444444444444", movedTo: "https://hub.example/r/new" },
+  ]);
+  mount();
+  await screen.findByText("1 need you · 1 machine");
+  expect(screen.queryByRole("combobox", { name: "Machine" })).toBeNull();
+});
+
+test("compact inbox filters too, omits machine Select and keeps the current row active on another tab", async () => {
+  withInbox([item, secondItem]);
+  mount(`/r/${id}?tab=comments`);
+  const inbox = within(await screen.findByRole("complementary", { name: "Inbox" }));
+  await inbox.findByRole("link", { name: /Synthetic review/ });
+  expect(inbox.getByRole("link", { name: /Synthetic review/ }).getAttribute("aria-current")).toBe("page");
+  expect(inbox.queryByRole("combobox", { name: "Machine" })).toBeNull();
+  fireEvent.change(inbox.getByRole("textbox", { name: "Filter reviews" }), { target: { value: "garden" } });
+  expect(inbox.queryByRole("link", { name: /Synthetic review/ })).toBeNull();
+  expect(inbox.getByRole("link", { name: /Another proposal/ })).toBeTruthy();
+});
+
+test("one list timer refreshes relative times and is cleared on unmount", async () => {
+  let now = Date.parse(item.updatedAt) + 30_000;
+  vi.spyOn(Date, "now").mockImplementation(() => now);
+  const interval = vi.spyOn(window, "setInterval");
+  const clear = vi.spyOn(window, "clearInterval");
+  withInbox([item, secondItem]);
+  const { unmount } = mount();
+  const row = await screen.findByRole("link", { name: /Synthetic review/ });
+  expect(row.querySelector("time")?.textContent).toBe("now");
+  const ticks = interval.mock.calls.filter(([, delay]) => delay === 60_000);
+  expect(ticks).toHaveLength(1);
+  const callback = ticks[0]?.[0];
+  expect(typeof callback).toBe("function");
+  now += 60_000;
+  act(() => {
+    if (typeof callback === "function") callback();
+  });
+  expect(row.querySelector("time")?.textContent).toBe("1m");
+  const index = interval.mock.calls.findIndex(([, delay]) => delay === 60_000);
+  const timer = interval.mock.results[index]?.value;
+  unmount();
+  expect(clear).toHaveBeenCalledWith(timer);
+});
+
+test("desktop frame has wordmark and Devices links, expands its rail and persists both choices", async () => {
+  withInbox([item, { ...secondItem, movedTo: "https://hub.example/r/new" }]);
+  const first = mount(`/r/${id}?tab=docs`);
+  await screen.findByText("plan.md");
+  expect(screen.getByRole("link", { name: "emend" }).getAttribute("href")).toBe("/");
+  expect(screen.getByRole("link", { name: "Devices" }).getAttribute("href")).toBe("/devices");
+  fireEvent.click(screen.getByRole("button", { name: "Collapse inbox" }));
+  const rail = within(screen.getByRole("complementary", { name: "Inbox" }));
+  const link = await rail.findByRole("link", { name: "Needs you: Synthetic review" });
+  expect(link.getAttribute("aria-current")).toBe("page");
+  expect(within(link).getByRole("img", { name: "From Workshop" })).toBeTruthy();
+  expect(rail.queryByRole("link", { name: /Another proposal/ })).toBeNull();
+  expect(localStorage.getItem("emend.inbox.collapsed")).toBe("true");
+  fireEvent.click(screen.getByRole("button", { name: "Show inbox" }));
+  expect(screen.getByTestId("inbox-pane")).toBeTruthy();
+  expect(localStorage.getItem("emend.inbox.collapsed")).toBe("false");
+  first.unmount();
+  mount(`/r/${id}`);
+  expect(await screen.findByTestId("inbox-pane")).toBeTruthy();
+});
+
+test.each([768, 1279])("tablet %s has a rail and selecting a review closes the left sheet", async (size) => {
+  width = size;
+  withInbox([item, secondItem]);
+  const fallback = fetchMock.getMockImplementation();
+  fetchMock.mockImplementation(async (path, init) =>
+    path === `/api/v1/reviews/${secondItem.id}`
+      ? Response.json({ ...secondItem, revisions: [{ seq: 1, createdAt: item.updatedAt }] })
+      : (fallback?.(path, init) as Promise<Response>),
+  );
+  const { history } = mount(`/r/${id}`);
+  await screen.findByText("Overview");
+  const rail = within(screen.getByRole("complementary", { name: "Inbox" }));
+  expect(await rail.findByRole("link", { name: "Needs you: Synthetic review" })).toBeTruthy();
+  fireEvent.click(rail.getByRole("button", { name: "Show inbox" }));
+  const sheet = within(await screen.findByRole("dialog", { name: "Inbox" }));
+  expect(sheet.getAllByRole("heading", { name: "Inbox" })).toHaveLength(1);
+  expect(sheet.queryByRole("button", { name: "Collapse inbox" })).toBeNull();
+  const destination = await sheet.findByRole("link", { name: /Another proposal/ });
+  destination.focus();
+  fireEvent.click(destination, { button: 0 });
+  await waitFor(() => expect(history.location.pathname).toBe(`/r/${secondItem.id}`));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Inbox" })).toBeNull());
+  const heading = await screen.findByRole("heading", { name: "Another proposal", level: 1 });
+  await waitFor(() => expect(document.activeElement).toBe(heading));
+});
+
+test("phone review shows its title once, back link, and clipboard failure toast", async () => {
+  width = 390;
+  vi.stubGlobal("navigator", {
+    ...navigator,
+    clipboard: { writeText: vi.fn().mockRejectedValue(new Error("denied")) },
+  });
+  mount(`/r/${id}`);
+  await screen.findByText("Overview");
+  expect(screen.getAllByText("Synthetic review")).toHaveLength(1);
+  expect(screen.getByRole("link", { name: "Inbox" }).getAttribute("href")).toBe("/");
+  expect(screen.queryByText(item.repo ?? "")).toBeNull();
+  fireEvent.keyDown(screen.getByRole("button", { name: "More" }), { key: "ArrowDown" });
+  const menu = within(await screen.findByRole("menu", { name: "More" }));
+  expect(menu.queryByRole("combobox")).toBeNull();
+  fireEvent.click(menu.getByRole("menuitem", { name: "Copy link" }));
+  expect(await screen.findByText("Could not copy the link. Copy it from the address bar.")).toBeTruthy();
+});
+
+for (const size of [390, 768, 1280])
+  for (const [path, heading] of [
+    ["/", "Inbox"],
+    [`/r/${id}`, "Synthetic review"],
+    ["/devices", "Devices"],
+  ]) {
+    test(`one main on ${path} at ${size}px`, async () => {
+      width = size;
+      const fallback = fetchMock.getMockImplementation();
+      fetchMock.mockImplementation(async (url, init) =>
+        url === "/api/v1/devices" ? Response.json({ items: [] }) : (fallback?.(url, init) as Promise<Response>),
+      );
+      mount(path);
+      await screen.findByRole("heading", { level: 1, name: heading });
+      expect(screen.getAllByRole("main")).toHaveLength(1);
+    });
+  }
+
+test.each([0, 2])(
+  "phone tabs show decorative icons, URL selection and only a positive unsent count (%s)",
+  async (unsentCount) => {
+    width = 390;
+    const fallback = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation(async (path, init) =>
+      path === `/api/v1/reviews/${id}`
+        ? Response.json({ ...item, unsentCount, revisions: [{ seq: 1, createdAt: item.updatedAt }] })
+        : (fallback?.(path, init) as Promise<Response>),
+    );
+    const { history } = mount(`/r/${id}?tab=writeup`);
+    await screen.findByText("Overview");
+    const tabs = within(screen.getByRole("navigation", { name: "Review tabs" }));
+    const links = tabs.getAllByRole("link");
+    expect(links).toHaveLength(4);
+    for (const label of ["Writeup", "Diff", "Docs", "Comments"])
+      expect(tabs.getByRole("link", { name: new RegExp(label) })).toBeTruthy();
+    for (const link of links) expect(link.querySelector('svg[aria-hidden="true"]')).toBeTruthy();
+    expect(tabs.queryByRole("img")).toBeNull();
+    expect(tabs.getByRole("link", { name: "Writeup" }).getAttribute("aria-current")).toBe("page");
+    const comments = tabs.getByRole("link", { name: unsentCount ? "Comments 2 unsent" : "Comments" });
+    expect(comments.textContent).toBe(unsentCount ? "Comments 2 unsent" : "Comments");
+    fireEvent.click(comments);
+    await waitFor(() => expect(history.location.search).toContain("tab=comments"));
+    expect(comments.getAttribute("aria-current")).toBe("page");
+  },
+);
+
+test("task 1.13 at 390 × 844 keeps Send outside the reading scroll area and before bottom tabs", async () => {
+  width = 390;
+  vi.stubGlobal("innerWidth", 390);
+  vi.stubGlobal("innerHeight", 844);
+  mount(`/r/${id}`);
+  await screen.findByText("Overview");
+  expect(screen.getByRole("banner")).toBeTruthy();
+  expect(screen.queryByRole("complementary", { name: "Inbox" })).toBeNull();
+  expect(screen.queryByTestId("inbox-pane")).toBeNull();
+  expect(screen.queryByTestId("diff-pane")).toBeNull();
+  const reading = screen.getByRole("region", { name: "Reading" });
+  expect(reading.className).toContain("overflow-y-auto");
+  const send = screen.getByRole("button", { name: /^Send/ });
+  const tabs = screen.getByRole("navigation", { name: "Review tabs" });
+  expect(reading.contains(send)).toBe(false);
+  expect(reading.compareDocumentPosition(send) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(send.compareDocumentPosition(tabs) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+test("an approved review at an older revision does not claim that revision was approved", async () => {
+  width = 390;
+  const fallback = fetchMock.getMockImplementation();
+  fetchMock.mockImplementation(async (path, init) =>
+    path === `/api/v1/reviews/${id}`
+      ? Response.json({
+          ...item,
+          state: "approved",
+          newestRevision: 2,
+          revisions: [
+            { seq: 1, createdAt: item.updatedAt },
+            { seq: 2, createdAt: item.updatedAt },
+          ],
+        })
+      : (fallback?.(path, init) as Promise<Response>),
+  );
+  mount(`/r/${id}?rev=1`);
+  await screen.findByLabelText("Revision 1");
+  const header = screen.getByRole("heading", { level: 1, name: item.title }).parentElement;
+  if (!header) throw new Error("Missing review header");
+  expect(within(header).getAllByText("Approved")).toHaveLength(2);
+  expect(within(header).queryByText(/Approved.*rev/i)).toBeNull();
+});
+
+test.each(["pane", "rail"])(
+  "desktop %s navigation focuses the new review heading once after loading",
+  async (source) => {
+    withInbox([item, secondItem]);
+    let releaseReview: () => void = () => {};
+    const ready = new Promise<void>((resolve) => {
+      releaseReview = resolve;
+    });
+    const fallback = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation(async (path, init) => {
+      if (path === `/api/v1/reviews/${secondItem.id}`) {
+        await ready;
+        return Response.json({ ...secondItem, revisions: [{ seq: 1, createdAt: item.updatedAt }] });
+      }
+      return fallback?.(path, init) as Promise<Response>;
+    });
+    mount(`/r/${id}`);
+    await screen.findByText("Overview");
+    if (source === "rail") fireEvent.click(screen.getByRole("button", { name: "Collapse inbox" }));
+    const inbox = within(screen.getByRole("complementary", { name: "Inbox" }));
+    const destination = await inbox.findByRole("link", { name: /Another proposal/ });
+    destination.focus();
+    fireEvent.click(destination, { button: 0 });
+    await screen.findByText("Loading review…");
+    await act(async () => {
+      releaseReview();
+    });
+    const heading = await screen.findByRole("heading", { name: secondItem.title, level: 1 });
+    await waitFor(() => expect(document.activeElement).toBe(heading));
+    expect(heading.tabIndex).toBe(-1);
+    const devices = screen.getByRole("link", { name: "Devices" });
+    devices.focus();
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ["review", secondItem.id] });
+    });
+    expect(document.activeElement).toBe(devices);
+  },
+);
+
+test.each([768, 1280])("first review load at %s px does not move focus", async (size) => {
+  width = size;
+  const { getByRole } = render(<button type="button">Keep focus</button>);
+  const focused = getByRole("button", { name: "Keep focus" });
+  focused.focus();
+  mount(`/r/${id}`);
+  await screen.findByText("Overview");
+  expect(document.activeElement).toBe(focused);
+});
+
+test("tablet Sheet stays closed after resizing 768 → 1280 → 768", async () => {
+  width = 768;
+  mount(`/r/${id}`);
+  await screen.findByText("Overview");
+  fireEvent.click(screen.getByRole("button", { name: "Show inbox" }));
+  await screen.findByRole("dialog", { name: "Inbox" });
+  act(() => resize(1280));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Inbox" })).toBeNull());
+  expect(screen.getByTestId("inbox-pane")).toBeTruthy();
+  act(() => resize(768));
+  expect(screen.queryByRole("dialog", { name: "Inbox" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Show inbox" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Show inbox" }));
+  expect(await screen.findByRole("dialog", { name: "Inbox" })).toBeTruthy();
+});
+
+test("in-memory collapsed preference survives the phone layout with unavailable localStorage", async () => {
+  vi.stubGlobal("localStorage", {
+    getItem: () => {
+      throw new Error("Storage denied");
+    },
+    setItem: () => {
+      throw new Error("Storage denied");
+    },
+  });
+  mount(`/r/${id}`);
+  await screen.findByText("Overview");
+  fireEvent.click(screen.getByRole("button", { name: "Collapse inbox" }));
+  expect(screen.getByRole("button", { name: "Show inbox" })).toBeTruthy();
+  act(() => resize(390));
+  expect(screen.queryByRole("complementary", { name: "Inbox" })).toBeNull();
+  act(() => resize(1280));
+  expect(screen.queryByTestId("inbox-pane")).toBeNull();
+  expect(screen.getByRole("button", { name: "Show inbox" })).toBeTruthy();
+});
+
+test("a row with an invalid cached timestamp has no time text", async () => {
+  client.setQueryDefaults(["inbox"], { staleTime: Infinity });
+  client.setQueryData(["inbox"], { items: [{ ...item, updatedAt: "invalid" }] });
+  mount();
+  const row = await screen.findByRole("link", { name: /Synthetic review/ });
+  expect(row.querySelector("time")?.textContent).toBe("");
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+test("phone and desktop tabs accept the same shared props type", () => {
+  expectTypeOf<typeof PhoneTabs>().parameter(0).toEqualTypeOf<ReviewTabsProps>();
+  expectTypeOf<typeof ReviewTabs>().parameter(0).toEqualTypeOf<ReviewTabsProps>();
+});
+
+test.each([
+  { name: "ctrl", click: { button: 0, ctrlKey: true } },
+  { name: "cmd", click: { button: 0, metaKey: true } },
+  { name: "shift", click: { button: 0, shiftKey: true } },
+  { name: "alt", click: { button: 0, altKey: true } },
+  { name: "middle", click: { button: 1 } },
+])("$name-click on a tablet row leaves the Sheet open and its href intact", async ({ click }) => {
+  width = 768;
+  withInbox([item, secondItem]);
+  const { history } = mount(`/r/${id}`);
+  await screen.findByText("Overview");
+  fireEvent.click(screen.getByRole("button", { name: "Show inbox" }));
+  const dialog = await screen.findByRole("dialog", { name: "Inbox" });
+  const destination = await within(dialog).findByRole("link", { name: /Another proposal/ });
+  expect(destination.getAttribute("href")).toBe(`/r/${secondItem.id}?tab=writeup`);
+  destination.focus();
+  let defaultPrevented = true;
+  const onClick = (event: MouseEvent) => {
+    defaultPrevented = event.defaultPrevented;
+  };
+  document.addEventListener("click", onClick, { once: true });
+  fireEvent.click(destination, click);
+  expect(defaultPrevented).toBe(false);
+  expect(history.location.pathname).toBe(`/r/${id}`);
+  expect(screen.getByRole("dialog", { name: "Inbox" })).toBe(dialog);
+  expect(document.activeElement).toBe(destination);
+});
+
+test("in-memory collapsed preference survives rail navigation with unavailable localStorage", async () => {
+  vi.stubGlobal("localStorage", {
+    getItem: () => {
+      throw new Error("Storage denied");
+    },
+    setItem: () => {
+      throw new Error("Storage denied");
+    },
+  });
+  withInbox([item, secondItem]);
+  const fallback = fetchMock.getMockImplementation();
+  fetchMock.mockImplementation(async (path, init) =>
+    path === `/api/v1/reviews/${secondItem.id}`
+      ? Response.json({ ...secondItem, revisions: [{ seq: 1, createdAt: item.updatedAt }] })
+      : (fallback?.(path, init) as Promise<Response>),
+  );
+  const { history } = mount(`/r/${id}`);
+  await screen.findByText("Overview");
+  fireEvent.click(screen.getByRole("button", { name: "Collapse inbox" }));
+  const rail = within(screen.getByRole("complementary", { name: "Inbox" }));
+  const destination = await rail.findByRole("link", { name: "Needs you: Another proposal" });
+  destination.focus();
+  fireEvent.click(destination, { button: 0 });
+  await screen.findByRole("heading", { name: secondItem.title, level: 1 });
+  expect(history.location.pathname).toBe(`/r/${secondItem.id}`);
+  expect(screen.queryByTestId("inbox-pane")).toBeNull();
+  expect(screen.getByRole("button", { name: "Show inbox" })).toBeTruthy();
+  expect(screen.getByRole("link", { name: "Needs you: Another proposal" }).getAttribute("aria-current")).toBe("page");
+});
+
+test.each([
+  { status: 404, recovery: "retry" },
+  { status: 500, recovery: "retry" },
+  { status: 404, recovery: "refetch" },
+  { status: 500, recovery: "refetch" },
+])("a $status review load clears pending heading focus before a successful $recovery", async ({ status, recovery }) => {
+  withInbox([item, secondItem]);
+  let attempts = 0;
+  const fallback = fetchMock.getMockImplementation();
+  fetchMock.mockImplementation(async (path, init) => {
+    if (path === `/api/v1/reviews/${secondItem.id}`) {
+      attempts++;
+      return attempts === 1
+        ? Response.json({ error: { code: "failed", message: "Failed" } }, { status })
+        : Response.json({ ...secondItem, revisions: [{ seq: 1, createdAt: item.updatedAt }] });
+    }
+    return fallback?.(path, init) as Promise<Response>;
+  });
+  const { getByRole } = render(<button type="button">Keep focus after failure</button>);
+  const focused = getByRole("button", { name: "Keep focus after failure" });
+  mount(`/r/${id}`);
+  await screen.findByText("Overview");
+  fireEvent.click(screen.getByRole("button", { name: "Collapse inbox" }));
+  fireEvent.click(await screen.findByRole("link", { name: "Needs you: Another proposal" }), { button: 0 });
+  expect((await screen.findByRole("alert")).textContent).toBe("Could not load this review.");
+  focused.focus();
+  const focus = vi.spyOn(HTMLElement.prototype, "focus");
+  if (recovery === "retry") fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  else
+    await act(async () => {
+      await client.refetchQueries({ queryKey: ["review", secondItem.id] });
+    });
+  const heading = await screen.findByRole("heading", { name: secondItem.title, level: 1 });
+  await screen.findByText("Overview");
+  expect(attempts).toBe(2);
+  expect(document.activeElement).toBe(focused);
+  expect(focus.mock.instances).not.toContain(heading);
+});
+
+test("a cached review with a failed refetch takes heading focus once while its next fetch is pending", async () => {
+  withInbox([item, secondItem]);
+  const cachedReview = { ...secondItem, importedAt: null, revisions: [{ seq: 1, createdAt: item.updatedAt }] };
+  const query = reviewQuery(secondItem.id);
+  client.setQueryData(query.queryKey, cachedReview);
+  let attempts = 0;
+  let releaseFetch: (response: Response) => void = () => {};
+  const nextFetch = new Promise<Response>((resolve) => {
+    releaseFetch = resolve;
+  });
+  const fallback = fetchMock.getMockImplementation();
+  fetchMock.mockImplementation(async (path, init) => {
+    if (path === `/api/v1/reviews/${secondItem.id}`) {
+      attempts++;
+      return attempts === 1
+        ? Response.json({ error: { code: "failed", message: "Failed" } }, { status: 500 })
+        : nextFetch;
+    }
+    return fallback?.(path, init) as Promise<Response>;
+  });
+  await expect(client.fetchQuery(query)).rejects.toThrow();
+  expect(client.getQueryState(query.queryKey)).toMatchObject({ status: "error", data: cachedReview });
+  mount(`/r/${id}`);
+  await screen.findByText("Overview");
+  const inbox = within(screen.getByRole("complementary", { name: "Inbox" }));
+  const destination = await inbox.findByRole("link", { name: /Another proposal/ });
+  destination.focus();
+  const focus = vi.spyOn(HTMLElement.prototype, "focus");
+  fireEvent.click(destination, { button: 0 });
+  const heading = await screen.findByRole("heading", { name: secondItem.title, level: 1 });
+  await waitFor(() => expect(attempts).toBe(2));
+  expect(client.getQueryState(query.queryKey)).toMatchObject({
+    status: "error",
+    fetchStatus: "fetching",
+    data: cachedReview,
+  });
+  expect(document.activeElement).toBe(heading);
+  expect(focus.mock.instances.filter((element) => element === heading)).toHaveLength(1);
+  const devices = screen.getByRole("link", { name: "Devices" });
+  devices.focus();
+  await act(async () => {
+    releaseFetch(Response.json(cachedReview));
+  });
+  await waitFor(() => expect(client.getQueryState(query.queryKey)?.status).toBe("success"));
+  expect(document.activeElement).toBe(devices);
+  expect(focus.mock.instances.filter((element) => element === heading)).toHaveLength(1);
 });

@@ -1,34 +1,90 @@
 import type { InboxItem } from "@emend/contract";
 import { Link } from "@tanstack/react-router";
-import { OriginBadge } from "./OriginBadge.tsx";
+import { MessageSquare, Pencil } from "lucide-react";
+import { relativeTime } from "../../lib/time.ts";
+import { agentDotClasses, agentStatusLabels, agentStatusOf } from "../status/AgentStatus.tsx";
+import { OriginBadge } from "../status/OriginBadge.tsx";
+import { StateBadge } from "../status/StateBadge.tsx";
+import { Icon } from "../ui/Icon.tsx";
+import { cn } from "../ui/utils.ts";
 
-export function AgentStatus({ review }: { review: Pick<InboxItem, "agentWaiting" | "pendingSend"> }) {
-  return review.agentWaiting ? <span>Agent waiting</span> : review.pendingSend ? <span>No agent waiting</span> : null;
+export function needsAttention(review: InboxItem) {
+  return review.state === "open" && !review.movedTo && (review.agentWaiting || review.unsentCount > 0);
 }
-export function ReviewRow({ review }: { review: InboxItem }) {
+
+export function ReviewRow({ review, now, onOpen }: { review: InboxItem; now: number; onOpen?: () => void }) {
+  const attention = needsAttention(review);
+  const agent = agentStatusOf(review);
   const contents = (
     <>
-      <div className="flex flex-wrap items-center gap-2">
-        <OriginBadge origin={review.origin} />
-        <span className="text-xs text-neutral-500 dark:text-neutral-400">{review.state}</span>
-      </div>
-      <div className="mt-2 font-medium break-words">{review.title}</div>
-      <div className="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
-        {[review.repo, review.branch].filter(Boolean).join(" · ")}
-      </div>
-      <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-xs text-neutral-500 dark:text-neutral-400">
-        <span>Revision {review.newestRevision}</span>
-        <span>{review.unsentCount} unsent</span>
-        <span>{review.openThreads} open threads</span>
-        <AgentStatus review={review} />
-      </div>
-      {review.movedTo && <p className="mt-2 text-sm">Moved to {new URL(review.movedTo).host}</p>}
+      <span className="col-start-1 row-start-1 flex min-w-0 items-center gap-1.5 text-11 leading-[1.2] text-fg-3">
+        <span aria-hidden="true" className="inline-flex [&>span]:size-[7px] [&>span]:opacity-85">
+          <OriginBadge origin={review.origin} dot />
+        </span>
+        <span className="truncate">{review.origin.name}</span>
+      </span>
+      <span className="col-start-2 row-start-1 inline-flex items-center whitespace-nowrap text-12 font-normal text-fg-3 tabular-nums">
+        {review.state === "open" ? (
+          <time dateTime={review.updatedAt} title={new Date(review.updatedAt).toLocaleString()}>
+            {relativeTime(review.updatedAt, now)}
+          </time>
+        ) : (
+          <StateBadge state={review.state} variant="inline" />
+        )}
+      </span>
+      <span
+        className={cn(
+          "relative col-span-2 row-start-2 min-w-0 text-13 leading-[1.35] font-[450] group-aria-[current=page]:font-medium group-aria-[current=page]:text-fg-1",
+          attention && "font-medium text-fg-1",
+        )}
+      >
+        {attention && (
+          <span
+            aria-hidden="true"
+            className="absolute top-1/2 -left-2.5 size-[5px] -translate-y-1/2 rounded-full bg-accent"
+          />
+        )}
+        <span className="block truncate">
+          {attention && <span className="sr-only">Needs you. </span>}
+          {review.title}
+        </span>
+      </span>
+      <span className="col-start-1 row-start-3 truncate font-mono text-11 leading-[1.3] font-stretch-mono text-fg-3">
+        {review.movedTo ? `Moved to ${new URL(review.movedTo).host}` : review.branch}
+      </span>
+      {!review.movedTo && (
+        <span className="col-start-2 row-start-3 flex items-center justify-end gap-2 text-11 font-medium leading-none text-fg-3 tabular-nums">
+          {review.openThreads > 0 && (
+            <span className="inline-flex items-center gap-[3px]">
+              <Icon icon={MessageSquare} size={11} />
+              {review.openThreads}
+              <span className="sr-only">{review.openThreads === 1 ? " open thread" : " open threads"}</span>
+            </span>
+          )}
+          {review.unsentCount > 0 && (
+            <span className="inline-flex items-center gap-[3px] text-accent-text">
+              <Icon icon={Pencil} size={11} />
+              {review.unsentCount}
+              <span className="sr-only"> unsent</span>
+            </span>
+          )}
+          {agent && agent !== "approved" && (
+            <span
+              role="img"
+              aria-label={agentStatusLabels[agent]}
+              className={cn("size-[7px] shrink-0 rounded-full", agentDotClasses[agent])}
+            />
+          )}
+        </span>
+      )}
     </>
   );
+  const className =
+    "group relative grid w-full grid-cols-[minmax(0,1fr)_auto] grid-rows-[auto_auto_auto] gap-x-2 gap-y-[3px] rounded-sm px-2.5 pt-2 pb-[9px] text-left text-fg-2 no-underline";
   return (
-    <li className="border-b border-neutral-200 dark:border-neutral-800">
+    <li>
       {review.movedTo ? (
-        <div className="p-4 opacity-55" aria-disabled="true">
+        <div className={cn(className, "opacity-50")} aria-disabled="true">
           {contents}
         </div>
       ) : (
@@ -36,8 +92,20 @@ export function ReviewRow({ review }: { review: InboxItem }) {
           to="/r/$reviewId"
           params={{ reviewId: review.id }}
           search={{ tab: "writeup" }}
-          className="block p-4 hover:bg-neutral-100 focus-visible:outline-2 focus-visible:outline-blue-600 dark:hover:bg-neutral-900"
-          activeProps={{ className: "bg-blue-50 dark:bg-neutral-900" }}
+          activeOptions={{ includeSearch: false }}
+          activeProps={{ "aria-current": "page" }}
+          onClick={(event) => {
+            if (
+              !event.defaultPrevented &&
+              event.button === 0 &&
+              !event.ctrlKey &&
+              !event.metaKey &&
+              !event.shiftKey &&
+              !event.altKey
+            )
+              onOpen?.();
+          }}
+          className={cn(className, "hover:bg-hover hover:text-fg-2 aria-[current=page]:bg-active")}
         >
           {contents}
         </Link>
