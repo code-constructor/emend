@@ -95,6 +95,7 @@ describe.each(["HTTP", "in-process"])("%s transport", { timeout: 30000 }, (mode)
     const f = await fixture();
     const out = f.output();
     out.io.env.EMEND_HOME = f.hubDir;
+    out.io.isTTY = true;
     expect(await run(["pair", "--machine"], out.io)).toBe(0);
     expect(out.stdout.join("")).toMatch(
       /^http.*\/pair#emp_.*\nThis link works only on this machine\. To attach another machine, run emend serve --tailscale\.\n[0-9A-Z]{4}-[0-9A-Z]{4}\nValid for 10 minutes, once\.\nOn the other machine, run: emend attach /,
@@ -142,6 +143,7 @@ describe.each(["HTTP", "in-process"])("%s transport", { timeout: 30000 }, (mode)
       );
       expect(copied.map((r) => r.id).sort()).toEqual(rows.map((r) => r.id).sort());
     }
+    writeSecretFile(join(f.stateDir, "config.json"), JSON.stringify({ docRoots: [f.source], openBrowser: true }));
     const open = f.output();
     open.io.openUrl = vi.fn().mockResolvedValue(true);
     expect(await run([], open.io)).toBe(0);

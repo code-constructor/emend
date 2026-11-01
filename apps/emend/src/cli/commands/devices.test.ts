@@ -16,11 +16,24 @@ const device = {
 };
 async function fixture() {
   const f = await commandFixture();
+  f.io.isTTY = true;
   await rm(join(f.dir, "agent.token"));
   const admin = `em_${"b".repeat(43)}`;
   writeSecretFile(join(f.dir, "admin.token"), admin);
   return { ...f, admin };
 }
+test.each(
+  [false, undefined].flatMap((isTTY) => [
+    { isTTY, args: ["pair"] },
+    { isTTY, args: ["pair", "--machine"] },
+  ]),
+)("$args without a terminal ($isTTY) creates no pairing", async ({ isTTY, args }) => {
+  const f = await fixture();
+  expect(await run(args, { ...f.io, isTTY })).toBe(1);
+  expect(f.stdout).toEqual([]);
+  expect(f.stderr).toEqual(["emend: emend pair prints one-time codes only in a terminal.\n"]);
+  expect(f.fetcher).not.toHaveBeenCalled();
+});
 test.each(["pair", "devices"])("%s without a running server prints one line and starts nothing", async (command) => {
   const f = await fixture();
   await rm(join(f.dir, "server.json"));

@@ -6,6 +6,7 @@ import { defaultStateDir } from "./state/paths.ts";
 import { VERSION } from "./version.ts";
 
 export interface Io {
+  isTTY?: boolean;
   stdout: (s: string) => void;
   stdoutAsync?: (s: string) => Promise<void>;
   stdin?: AsyncIterable<Uint8Array | string>;

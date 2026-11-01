@@ -26,8 +26,8 @@ Node >=24.18.0; SQLite warning behavior has been verified on Node 24.18.0 and 26
 
 ## One machine
 
-The default `emend` command starts a server if needed and opens the browser with a one-time
-link. `emend serve` runs without opening a browser; `emend service install` installs a systemd
+The default `emend` command starts a server if needed and prints a one-time sign-in link; it opens the browser only when the state folder's `config.json` sets `"openBrowser": true`. Outside a terminal it prints no link or pairing code. This keeps links out of agent output; it does not stop a process that can open a terminal or read the state folder.
+`emend serve` runs without opening a browser; `emend service install` installs a systemd
 user unit or a launchd agent. The server binds `127.0.0.1:3636` unless `--host` or `--tailscale`
 explicitly widens access. There is no telemetry.
 
@@ -58,7 +58,8 @@ reviewer privileges only.
 
 A laptop attaches with `emend attach <pairing-link>`, storing the hub URL and a machine token.
 Its CLI then publishes to and waits on the hub; it does not need a local server. The default
-command opens the hub app, where an unpaired browser sees the pairing page.
+command prints the hub address, or opens it when the state folder's `config.json` sets
+`"openBrowser": true`. An unpaired browser sees the pairing page.
 
 Attach copies existing local reviews whole, including revisions, files, threads, comments,
 Sends and open deliveries, while retaining review ids. Repeating attach skips reviews already

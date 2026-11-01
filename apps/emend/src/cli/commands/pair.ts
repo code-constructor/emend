@@ -8,6 +8,7 @@ import { humanServer } from "../human-server.ts";
 export async function pairCommand(stateDir: string, args: string[], io: Io) {
   const machine = args.length === 1 && args[0] === "--machine";
   if (args.length && !machine) throw new CliUsageError("Usage: emend pair [--machine].");
+  if (!io.isTTY) throw new CliError("emend pair prints one-time codes only in a terminal.");
   const target = await humanServer(stateDir);
   const result = PairingCreated.safeParse(
     await apiRequest(stateDir, target, "/pairings", {

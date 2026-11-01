@@ -5,6 +5,7 @@ if (["wait", "feedback", "reply", "mcp", "serve"].includes(process.argv[2] ?? ""
 const serving = process.argv[2] === "serve";
 if (serving) process.stderr.on("error", () => {});
 process.exitCode = await run(process.argv.slice(2), {
+  isTTY: process.stdout.isTTY === true,
   stdout: (s) => {
     try {
       process.stdout.write(s);

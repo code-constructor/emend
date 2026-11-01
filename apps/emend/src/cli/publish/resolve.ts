@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, posix, resolve } from "node:path";
+import { basename, dirname, posix, resolve } from "node:path";
 import { LIMITS, OTHER_TOPIC, type PublishFile, type PublishManifest, PublishRequest } from "@emend/contract";
 import { UnchangedFilesError, withOtherChanges } from "@emend/core";
-import { StateFolderWriteError, stateAccessError } from "../../state/files.ts";
+import { readConfig } from "../config.ts";
 import { escapeReference } from "../escape.ts";
 import { createGitSession, GitFailed } from "../git.ts";
 import { CliError } from "../http.ts";
@@ -17,26 +17,6 @@ import { readSide } from "./sides.ts";
 import type { BlobSource } from "./upload.ts";
 
 export type PublishOptions = { manifest: string; review?: string; key?: string };
-async function docRoots(stateDir: string): Promise<string[]> {
-  let value: unknown;
-  try {
-    value = JSON.parse((await readRegular(join(stateDir, "config.json"), LIMITS.publicJsonBytes)).toString());
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-    const mapped = stateAccessError(stateDir, error);
-    if (mapped instanceof StateFolderWriteError) throw mapped;
-    throw new CliError("invalid emend configuration");
-  }
-  if (
-    !value ||
-    typeof value !== "object" ||
-    !("docRoots" in value) ||
-    !Array.isArray(value.docRoots) ||
-    !value.docRoots.every((root) => typeof root === "string" && isAbsolute(root))
-  )
-    throw new CliError("invalid emend configuration");
-  return Promise.all((value.docRoots as string[]).map((root) => realpath(root)));
-}
 const sha256 = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 export async function publishContext(cwd: string) {
   const git = createGitSession();
@@ -118,7 +98,8 @@ export async function resolvePublish(
   const files: PublishFile[] = [];
   let assetCount = 0;
   const assetPaths = new Set<string>();
-  const roots = [...(worktree ? [worktree] : []), ...(await docRoots(stateDir))];
+  const { docRoots } = await readConfig(stateDir);
+  const roots = [...(worktree ? [worktree] : []), ...(await Promise.all(docRoots.map((root) => realpath(root))))];
   for (const file of grouped.files) {
     if (file.role === "diff") {
       const change = changes.find((c) => c.path === file.path);

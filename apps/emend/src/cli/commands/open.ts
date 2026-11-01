@@ -1,17 +1,29 @@
 import { spawn } from "node:child_process";
 import { PairingCreated } from "@emend/contract";
 import type { Io } from "../../main.ts";
+import { readConfig } from "../config.ts";
+import { findExecutable } from "../executable.ts";
 import { apiRequest, CliError } from "../http.ts";
 import { ensureServer } from "../server-client.ts";
 import { localTarget, readAttachment } from "../target.ts";
 
-export async function openBrowser(url: string, env = process.env, timeoutMs = 5_000): Promise<boolean> {
-  if (process.platform === "linux" && !env.DISPLAY && !env.WAYLAND_DISPLAY) return false;
+export async function findBrowserOpener(env = process.env) {
+  if (process.platform === "linux" && !env.DISPLAY && !env.WAYLAND_DISPLAY) return null;
   const command = process.platform === "darwin" ? "open" : process.platform === "linux" ? "xdg-open" : null;
-  if (!command) return false;
+  if (!command) return null;
+  return findExecutable(command, env.PATH ?? "").catch(() => null);
+}
+export async function openBrowser(url: string, env = process.env, timeoutMs = 5_000): Promise<boolean> {
+  const binary = await findBrowserOpener(env);
+  if (!binary) return false;
   return new Promise((resolve) => {
     try {
-      const child = spawn(command, [url], { detached: true, stdio: "ignore" });
+      const child = spawn(binary.file, [url], {
+        detached: true,
+        stdio: "ignore",
+        cwd: "/",
+        env: { ...env, PATH: binary.path },
+      });
       let settled = false;
       const finish = (opened: boolean) => {
         if (settled) return;
@@ -29,13 +41,17 @@ export async function openBrowser(url: string, env = process.env, timeoutMs = 5_
   });
 }
 export async function openCommand(stateDir: string, io: Io) {
+  const config = await readConfig(stateDir);
+  const openUrl = io.openUrl ?? ((url: string) => openBrowser(url, io.env));
   const attachment = await readAttachment(stateDir);
   if (attachment) {
     let opened = false;
-    try {
-      opened = await (io.openUrl ?? openBrowser)(attachment.hubUrl);
-    } catch {
-      /* Print the hub URL. */
+    if (config.openBrowser) {
+      try {
+        opened = await openUrl(attachment.hubUrl);
+      } catch {
+        /* Print the hub URL. */
+      }
     }
     io.stdout(opened ? "Opening emend in your browser.\n" : `${attachment.hubUrl}\n`);
     return;
@@ -45,6 +61,11 @@ export async function openCommand(stateDir: string, io: Io) {
     ({ url } = await ensureServer(stateDir));
   } catch {
     throw new CliError("Could not start the emend server.");
+  }
+  const terminalHint = `emend is running at ${url}. Run emend in a terminal to get a sign-in link.\n`;
+  if (!io.isTTY && (!config.openBrowser || (!io.openUrl && !(await findBrowserOpener(io.env))))) {
+    io.stdout(terminalHint);
+    return;
   }
   const response = PairingCreated.safeParse(
     await apiRequest(stateDir, await localTarget(stateDir, url, "admin"), "/pairings", {
@@ -60,10 +81,18 @@ export async function openCommand(stateDir: string, io: Io) {
   localLink.host = localOrigin.host;
   const browserUrl = localLink.href;
   let opened = false;
-  try {
-    opened = await (io.openUrl ?? openBrowser)(browserUrl);
-  } catch {
-    /* Offer the same one-time link. */
+  if (config.openBrowser) {
+    try {
+      opened = await openUrl(browserUrl);
+    } catch {
+      /* Offer the one-time link only in a terminal. */
+    }
   }
-  io.stdout(opened ? "Opening emend in your browser.\n" : `Open this link within 10 minutes: ${browserUrl}\n`);
+  io.stdout(
+    opened
+      ? "Opening emend in your browser.\n"
+      : io.isTTY
+        ? `Open this link within 10 minutes: ${browserUrl}\n`
+        : terminalHint,
+  );
 }

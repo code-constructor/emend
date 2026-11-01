@@ -39,6 +39,8 @@ test("doc sources resolve only inside the worktree or configured real doc roots"
     const collect = (source?: string) =>
       resolvePublish(manifest(source), { manifest: "synthetic", key: "plan" }, state, "instance", root, () => {});
     expect((await [...(await collect()).blobs.values()][0]?.read())?.toString()).toBe("local doc");
+    await writeFile(join(state, "config.json"), JSON.stringify({ openBrowser: true }));
+    expect((await [...(await collect()).blobs.values()][0]?.read())?.toString()).toBe("local doc");
     await expect(collect(join(docs, "plan.md"))).rejects.toThrow("outside the allowed doc roots");
     await symlink(join(docs, "plan.md"), join(root, "escape.md"));
     await expect(collect("escape.md")).rejects.toThrow("outside the allowed doc roots");
@@ -46,6 +48,11 @@ test("doc sources resolve only inside the worktree or configured real doc roots"
     await expect(collect("escape.md")).rejects.toThrow("outside the allowed doc roots");
     await writeFile(join(state, "config.json"), JSON.stringify({ docRoots: [docs] }));
     expect((await [...(await collect("escape.md")).blobs.values()][0]?.read())?.toString()).toBe("external doc");
+    await writeFile(join(state, "config.json"), JSON.stringify({ docRoots: [docs], openBrowser: true }));
+    expect((await [...(await collect("escape.md")).blobs.values()][0]?.read())?.toString()).toBe("external doc");
+    await writeFile(join(state, "config.json"), JSON.stringify({ docRoots: [docs], openBrowser: "true" }));
+    await expect(collect("escape.md")).rejects.toThrow("invalid emend configuration");
+    await writeFile(join(state, "config.json"), JSON.stringify({ docRoots: [docs] }));
     await truncate(join(docs, "plan.md"), LIMITS.markdownDocBytes + 1);
     await expect(collect("escape.md")).rejects.toThrow("size limit");
   } finally {
