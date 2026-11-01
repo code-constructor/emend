@@ -20,11 +20,15 @@ export function attachmentUrl(input: unknown): string {
     !ReplyCreated.shape.commentId.safeParse(record.hubId).success ||
     typeof record.hubName !== "string" ||
     record.hubName.length < 1 ||
-    record.hubName.length > 200 ||
-    typeof record.hubUrl !== "string"
+    record.hubName.length > 200
   )
     throw new Error("invalid");
-  const value = record.hubUrl;
+  return attachmentHubUrl(record.hubUrl);
+}
+
+/** Shared by complete attachments and the origin saved before requesting a token. */
+export function attachmentHubUrl(value: unknown): string {
+  if (typeof value !== "string") throw new Error("invalid");
   // Reject URL parser repairs (whitespace, backslashes, dot paths) as well as credentials.
   if (!/^https?:\/\/[^/?#\\\s]+\/?$/.test(value)) throw new Error("invalid");
   const url = new URL(value);

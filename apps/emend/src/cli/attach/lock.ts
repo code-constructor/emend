@@ -1,14 +1,15 @@
 import { closeSync, existsSync, openSync } from "node:fs";
-import { join } from "node:path";
+import { resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { ensureStateDir, StateFolderWriteError, stateAccessError } from "../../state/files.ts";
+import { escapeReference } from "../escape.ts";
 import { CliError } from "../http.ts";
 
 export function lockAttach(stateDir: string): () => void {
   ensureStateDir(stateDir);
+  const path = resolve(stateDir, "attach.lock");
   let db: DatabaseSync | undefined;
   try {
-    const path = join(stateDir, "attach.lock");
     // SQLite gives its journal the database file's permissions. Never unlink
     // this file: every copier must lock the same inode, including after a crash.
     // Opening and closing an existing file outside SQLite could drop another
@@ -25,7 +26,9 @@ export function lockAttach(stateDir: string): () => void {
     if (mapped instanceof StateFolderWriteError) throw mapped;
     if (error instanceof Error && "errcode" in error && error.errcode === 5)
       throw new CliError("another emend attach is running. Nothing was changed.");
-    throw new CliError("could not lock the emend state folder.");
+    throw new CliError(
+      `could not use the lock file ${escapeReference(path)}. If no emend attach or detach is running, including one started with sudo, remove that file and try again.`,
+    );
   }
   const held = db;
   return () => {

@@ -102,6 +102,105 @@ describe.each(["HTTP", "in-process"])("%s transport", { timeout: 30000 }, (mode)
     );
   });
 
+  test.each(["detach", "attach"])("%s recovers a crash after saving the hub token", async (command) => {
+    const f = await fixture();
+    expect((await f.command(["attach", f.pairing.url])).code).toBe(0);
+    await expect(stat(join(f.stateDir, "attach.pending"))).rejects.toMatchObject({ code: "ENOENT" });
+    const target = await resolveTarget(f.stateDir);
+    const token = await readFile(join(f.stateDir, "hub.token"), "utf8");
+    await rm(join(f.stateDir, "attach.json"));
+    writeSecretFile(join(f.stateDir, "attach.pending"), JSON.stringify({ hubUrl: f.hub.url }));
+    const nextPairing = PairingCreated.parse(
+      await apiRequest(f.hubDir, await localTarget(f.hubDir, f.hub.url, "admin"), "/pairings", {
+        method: "POST",
+        body: { purpose: "machine" },
+      }),
+    );
+    const requests = vi.spyOn(globalThis, "fetch");
+    const out = await f.command(command === "attach" ? [command, nextPairing.url] : [command]);
+    expect(out.code).toBe(0);
+    expect(out.text).toBe(
+      `emend: removed an unfinished attachment to ${f.hub.url}; the hub revoked this machine.\n` +
+        (command === "attach"
+          ? "emend: attached to " +
+            JSON.parse(await readFile(join(f.stateDir, "attach.json"), "utf8")).hubName +
+            "; copied 0 reviews, skipped 0.\n"
+          : ""),
+    );
+    const deleted = requests.mock.calls.filter(([, init]) => init?.method === "DELETE");
+    expect(deleted).toHaveLength(1);
+    expect(String(deleted[0]?.[0])).toBe(`${f.hub.url}/api/v1/machines/self`);
+    expect(new Headers(deleted[0]?.[1]?.headers).get("Authorization")).toBe(`Bearer ${token}`);
+    expect(out.text).not.toContain(token);
+    await expect(apiRequest(f.stateDir, target, "/machines/self", { method: "DELETE" })).rejects.toThrow(
+      "rejected this machine's credential",
+    );
+    await expect(stat(join(f.stateDir, "attach.pending"))).rejects.toMatchObject({ code: "ENOENT" });
+    if (command === "detach")
+      for (const name of ["hub.token", "attach.json"])
+        await expect(stat(join(f.stateDir, name))).rejects.toMatchObject({ code: "ENOENT" });
+    else expect(await readFile(join(f.stateDir, "hub.token"), "utf8")).not.toBe(token);
+  });
+
+  test("detach recovers an unfinished attachment when its hub is down", async () => {
+    const f = await fixture();
+    expect((await f.command(["attach", f.pairing.url])).code).toBe(0);
+    await rm(join(f.stateDir, "attach.json"));
+    writeSecretFile(join(f.stateDir, "attach.pending"), JSON.stringify({ hubUrl: f.hub.url }));
+    await f.hub.close();
+    expect(await f.command(["detach"])).toMatchObject({
+      code: 0,
+      text: `emend: removed an unfinished attachment to ${f.hub.url}. The hub did not confirm the revocation; revoke this machine in its devices.\n`,
+    });
+    for (const name of ["hub.token", "attach.json", "attach.pending"])
+      await expect(stat(join(f.stateDir, name))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  test.each([true, false])(
+    "a signal after registration revokes its token or names it (hub available %s)",
+    async (available) => {
+      const f = await fixture();
+      const fetcher = globalThis.fetch;
+      let token = "";
+      const revocations: { url: string; authorization: string | null; aborted: boolean }[] = [];
+      const transport = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+        if (init?.method === "DELETE")
+          revocations.push({
+            url: String(input),
+            authorization: new Headers(init.headers).get("Authorization"),
+            aborted: Boolean(init.signal?.aborted),
+          });
+        const response = await fetcher(input, init);
+        if (String(input).endsWith("/machines") && response.status === 201) {
+          token = ((await response.clone().json()) as { token: string }).token;
+          if (!available) await f.hub.close();
+          process.emit("SIGTERM");
+        }
+        return response;
+      });
+      const out = await f.command(["attach", f.pairing.url]);
+      expect(out).toMatchObject({
+        code: 143,
+        text: available
+          ? ""
+          : "emend: the hub registered this machine before emend stopped. Revoke this machine in the hub's devices.\n",
+        stdout: [],
+      });
+      expect(token).toMatch(/^em_[A-Za-z0-9_-]{43}$/);
+      expect(out.text).not.toContain(token);
+      expect(revocations).toEqual([
+        { url: `${f.hub.url}/api/v1/machines/self`, authorization: `Bearer ${token}`, aborted: false },
+      ]);
+      transport.mockRestore();
+      if (available)
+        await expect(
+          apiRequest(f.stateDir, { via: "hub", url: f.hub.url, token }, "/machines/self", { method: "DELETE" }),
+        ).rejects.toThrow("rejected this machine's credential");
+      for (const name of ["hub.token", "attach.json", "attach.pending"])
+        await expect(stat(join(f.stateDir, name))).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
   test("attach copies whole reviews once, preserves ids, publishes and opens on the hub, then detaches", async () => {
     const f = await fixture();
     const first = await f.publish("first");

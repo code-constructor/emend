@@ -1,6 +1,6 @@
 import type { Io } from "../../main.ts";
 import { safeMessage } from "../attach/copy.ts";
-import { removeAttachment } from "../attach/files.ts";
+import { cleanupAttachment, removeAttachment } from "../attach/files.ts";
 import { lockAttach } from "../attach/lock.ts";
 import { apiRequest, CliError, CliUsageError } from "../http.ts";
 import { AttachmentChangedError, AttachmentCredentialError, attachedTarget, readAttachmentPair } from "../target.ts";
@@ -9,6 +9,7 @@ export async function detachCommand(stateDir: string, args: string[], io: Io) {
   if (args.length) throw new CliUsageError("Usage: emend detach.");
   const release = lockAttach(stateDir);
   try {
+    if (await cleanupAttachment(stateDir, io)) return;
     await detach(stateDir, io);
   } finally {
     release();

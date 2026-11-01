@@ -17,6 +17,7 @@ import { canClearCopyMark, copyReviews } from "./attach/copy.ts";
 import { lockAttach } from "./attach/lock.ts";
 import { takeDirect } from "./direct/index.ts";
 import { directFixture } from "./direct-test-support.ts";
+import { escapeReference } from "./escape.ts";
 import { apiRequest, CliApiError, CliConnectionError, CliError, CliHttpError, CliSignalExit } from "./http.ts";
 import { movedError } from "./moved.ts";
 import * as pauses from "./pause.ts";
@@ -50,7 +51,7 @@ async function fixture() {
     return { ...out, code, text };
   };
   const absent = async () => {
-    for (const file of ["attach.json", "hub.token"])
+    for (const file of ["attach.json", "hub.token", "attach.pending"])
       await expect(stat(join(f.stateDir, file))).rejects.toMatchObject({ code: "ENOENT" });
   };
   const lockReleased = async () => {
@@ -606,7 +607,7 @@ test("detach removes an unreadable attachment directory without contacting a hub
   writeSecretFile(join(f.stateDir, "hub.token"), token);
   expect(await f.command(["detach"])).toMatchObject({
     code: 0,
-    text: "emend: detached. The hub was not reached; revoke this machine in its devices.\n",
+    text: "emend: removed a leftover hub token. If a hub lists this machine, revoke it in its devices.\n",
   });
   expect(f.calls).toEqual([]);
   await f.absent();
@@ -779,7 +780,7 @@ test.each(["busy", "invalid"])("a %s lock refusal survives a failing close", asy
       text:
         failure === "busy"
           ? "emend: another emend attach is running. Nothing was changed.\n"
-          : "emend: could not lock the emend state folder.\n",
+          : `emend: could not use the lock file ${escapeReference(join(f.stateDir, "attach.lock"))}. If no emend attach or detach is running, including one started with sudo, remove that file and try again.\n`,
       stdout: [],
     });
     expect(closing).toHaveBeenCalledOnce();
@@ -812,19 +813,54 @@ test("a failed lock rollback still closes and preserves the command's refusal", 
   await f.lockReleased();
 });
 
-test.each(["invalid", "directory"])("attach reports an unusable %s lock without taking it over", async (kind) => {
+test.each(["attach", "detach"].flatMap((command) => ["invalid", "directory"].map((kind) => [command, kind])))(
+  "%s reports an unusable %s lock without taking it over",
+  async (command, kind) => {
+    const f = await fixture();
+    const path = join(f.stateDir, "attach.lock");
+    if (kind === "directory") await mkdir(path);
+    else await writeFile(path, "not a database");
+    const before = await stat(path);
+    expect(await f.command(command === "attach" ? ["attach", link] : ["detach"])).toMatchObject({
+      code: 1,
+      text: `emend: could not use the lock file ${escapeReference(path)}. If no emend attach or detach is running, including one started with sudo, remove that file and try again.\n`,
+    });
+    expect(f.calls).toEqual([]);
+    expect((await stat(path)).ino).toBe(before.ino);
+    await f.absent();
+  },
+);
+
+test.skipIf(process.getuid?.() === 0).each(["attach", "detach"])(
+  "%s names an unreadable lock file without changing it",
+  async (command) => {
+    const f = await fixture();
+    const path = join(f.stateDir, "attach.lock");
+    await writeFile(path, "not a database", { mode: 0o000 });
+    try {
+      expect(await f.command(command === "attach" ? ["attach", link] : ["detach"])).toMatchObject({
+        code: 1,
+        text: `emend: could not use the lock file ${escapeReference(path)}. If no emend attach or detach is running, including one started with sudo, remove that file and try again.\n`,
+      });
+      expect(f.calls).toEqual([]);
+      expect((await stat(path)).mode & 0o777).toBe(0);
+    } finally {
+      await chmod(path, 0o600);
+    }
+  },
+);
+
+test("an unusable lock path is escaped onto one terminal line", async () => {
   const f = await fixture();
-  const path = join(f.stateDir, "attach.lock");
-  if (kind === "directory") await mkdir(path);
-  else await writeFile(path, "not a database");
-  const before = await stat(path);
-  expect(await f.command()).toMatchObject({
-    code: 1,
-    text: "emend: could not lock the emend state folder.\n",
-  });
-  expect(f.calls).toEqual([]);
-  expect((await stat(path)).ino).toBe(before.ino);
-  await f.absent();
+  const dir = join(f.stateDir, "synthetic\n\u001b[31m");
+  await mkdir(dir, { mode: 0o700 });
+  await mkdir(join(dir, "attach.lock"));
+  const out = f.output();
+  out.io.env.EMEND_HOME = dir;
+  expect(await run(["detach"], out.io)).toBe(1);
+  expect(out.stderr).toEqual([
+    `emend: could not use the lock file ${escapeReference(join(dir, "attach.lock"))}. If no emend attach or detach is running, including one started with sudo, remove that file and try again.\n`,
+  ]);
 });
 
 test("a second lock holder in the same process refuses before any request", async () => {
@@ -1011,11 +1047,12 @@ test("a signal before registration gives no revoke advice and releases the attac
 });
 
 test.each([201, 401])(
-  "a signal during a %s registration response gives revoke guidance only without a definite refusal",
+  "a signal during a %s registration response revokes a returned token and respects a definite refusal",
   async (status) => {
     const f = await fixture();
-    f.handler.mockImplementation(async (url) => {
+    f.handler.mockImplementation(async (url, init) => {
       if (url.endsWith("/capabilities")) return capabilities();
+      if (init.method === "DELETE") return new Response(null, { status: 204 });
       process.emit("SIGTERM");
       return Response.json(
         status === 201 ? { token, hub } : { error: { code: "unauthorized", message: "Synthetic refusal." } },
@@ -1025,13 +1062,13 @@ test.each([201, 401])(
     const out = await f.command();
     expect(out.code).toBe(143);
     expect(out.stdout).toEqual([]);
-    expect(out.stderr).toEqual(
-      status === 401
-        ? []
-        : [
-            `emend: the hub at ${origin} did not answer. The request may have reached it; check before trying again. Revoke this machine in the hub's devices before you attach again.\n`,
-          ],
-    );
+    expect(out.stderr).toEqual([]);
+    const deleted = f.calls.filter((call) => call.init.method === "DELETE");
+    expect(deleted).toHaveLength(status === 201 ? 1 : 0);
+    if (status === 201) {
+      expect(deleted[0]?.url).toBe(`${origin}/api/v1/machines/self`);
+      expect(new Headers(deleted[0]?.init.headers).get("Authorization")).toBe(`Bearer ${token}`);
+    }
     await f.absent();
     await f.lockReleased();
   },

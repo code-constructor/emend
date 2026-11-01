@@ -61,6 +61,13 @@ Its CLI then publishes to and waits on the hub; it does not need a local server.
 command prints the hub address, or opens it when the state folder's `config.json` sets
 `"openBrowser": true`. An unpaired browser sees the pairing page.
 
+Attach records the pairing origin in a private `attach.pending` file before it asks the hub for
+a token, and removes it once the attachment is saved. If a crash leaves that marker or a
+`hub.token` without `attach.json`, the next attach or detach, holding `attach.lock`, revokes the
+token only at the recorded origin, never sends a token that has no valid marker, and removes the
+marker last. A token emend receives but does not keep is revoked at once; when the hub does not
+confirm it, the error says to revoke the machine in the hub's devices.
+
 Attach copies existing local reviews whole, including revisions, files, threads, comments,
 Sends and open deliveries, while retaining review ids. Repeating attach skips reviews already
 on the hub. Local copies become read-only links to the hub. Detach makes new reviews local;
