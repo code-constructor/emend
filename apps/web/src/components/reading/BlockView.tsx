@@ -19,7 +19,7 @@ export function BlockView({ block, changedIn }: { block: RenderedBlock; changedI
         </div>
       ) : (
         // biome-ignore lint/security/noDangerouslySetInnerHtml: RenderedBlock.html is sanitized by the server; this is the sole rendering boundary.
-        <div {...attributes} className="rendered-block" dangerouslySetInnerHTML={{ __html: block.html }} />
+        <div {...attributes} className="em-prose" dangerouslySetInnerHTML={{ __html: block.html }} />
       )}
     </div>
   );

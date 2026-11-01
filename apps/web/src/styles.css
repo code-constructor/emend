@@ -1,97 +1,32 @@
 @import "tailwindcss";
-
-@layer base {
-  :root {
-    color-scheme: light dark;
-    font-family: ui-sans-serif, system-ui, sans-serif;
-  }
-  body {
-    margin: 0;
-    background: var(--color-neutral-50);
-    color: var(--color-neutral-900);
-  }
-  button,
-  select {
-    cursor: pointer;
-  }
-  @media (prefers-color-scheme: dark) {
-    body {
-      background: var(--color-neutral-950);
-      color: var(--color-neutral-100);
-    }
-  }
-}
+@import "./styles/fonts.css";
+@import "./styles/colors.css" layer(base);
+@import "./styles/typography.css" layer(base);
+@import "./styles/spacing.css" layer(base);
+@import "./styles/theme.css";
+@import "./styles/base.css";
+@import "./styles/prose.css";
 
 @layer components {
   .review-input {
     width: 100%;
-    border: 1px solid var(--color-neutral-300);
-    border-radius: 0.375rem;
-    background: white;
-    padding: 0.5rem;
-    font-size: 0.875rem;
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius-md);
+    background: var(--bg-surface);
+    color: var(--fg-1);
+    padding: var(--space-2);
+    font: var(--type-body);
+    box-shadow: var(--shadow-inset);
+    transition:
+      border-color var(--dur-1) var(--ease-out),
+      box-shadow var(--dur-1) var(--ease-out);
   }
-  .rendered-block {
-    overflow-wrap: break-word;
-    font-size: 0.875rem;
-    line-height: 1.75rem;
+  .review-input::placeholder {
+    color: var(--fg-3);
   }
-  .rendered-block :is(h1, h2, h3, h4, h5, h6) {
-    font-weight: 600;
-  }
-  .rendered-block h1 {
-    font-size: 1.5rem;
-  }
-  .rendered-block h2 {
-    font-size: 1.25rem;
-  }
-  .rendered-block h3 {
-    font-size: 1.125rem;
-  }
-  .rendered-block a {
-    color: var(--color-blue-700);
-    text-decoration: underline;
-  }
-  .rendered-block pre {
-    overflow-x: auto;
-    border-radius: 0.375rem;
-    padding: 0.75rem;
-    font-size: 0.75rem;
-    line-height: 1.25rem;
-  }
-  .rendered-block ul {
-    list-style: disc;
-    padding-left: 1.5rem;
-  }
-  .rendered-block ol {
-    list-style: decimal;
-    padding-left: 1.5rem;
-  }
-  .rendered-block blockquote {
-    border-left: 2px solid var(--color-neutral-300);
-    padding-left: 0.75rem;
-  }
-  .rendered-block table {
-    display: block;
-    max-width: 100%;
-    overflow-x: auto;
-    border-collapse: collapse;
-  }
-  .rendered-block :is(th, td) {
-    border: 1px solid var(--color-neutral-300);
-    padding: 0.25rem 0.75rem;
-    text-align: left;
-  }
-  @media (prefers-color-scheme: dark) {
-    .review-input {
-      border-color: var(--color-neutral-700);
-      background: var(--color-neutral-900);
-    }
-    .rendered-block a {
-      color: var(--color-blue-300);
-    }
-    .rendered-block :is(blockquote, th, td) {
-      border-color: var(--color-neutral-700);
-    }
+  .review-input:focus {
+    outline: none;
+    border-color: var(--border-focus);
+    box-shadow: 0 0 0 3px var(--accent-tint-2);
   }
 }

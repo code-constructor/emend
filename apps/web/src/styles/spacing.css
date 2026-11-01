@@ -1,0 +1,62 @@
+:root {
+  --space-0: 0;
+  --space-px: 1px;
+  --space-0-5: 2px;
+  --space-1: 4px;
+  --space-1-5: 6px;
+  --space-2: 8px;
+  --space-2-5: 10px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+  --radius-xs: 3px;
+  --radius-sm: 5px;
+  --radius-md: 7px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --radius-full: 999px;
+  --shadow-1: 0 1px 0 oklch(0.2 0.004 260 / 0.04), 0 1px 2px oklch(0.2 0.004 260 / 0.06);
+  --shadow-2: 0 1px 2px oklch(0.2 0.004 260 / 0.06), 0 4px 12px oklch(0.2 0.004 260 / 0.08);
+  --shadow-3: 0 2px 4px oklch(0.2 0.004 260 / 0.06), 0 12px 32px oklch(0.2 0.004 260 / 0.14);
+  --shadow-inset: inset 0 1px 1px oklch(0.2 0.004 260 / 0.05);
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-in-out: cubic-bezier(0.6, 0, 0.3, 1);
+  --dur-1: 90ms;
+  --dur-2: 160ms;
+  --dur-3: 240ms;
+  --dur-pulse: 1600ms;
+  /* layout */
+  --topbar-h: 48px;
+  --sendbar-h: 56px;
+  --tabbar-h: 48px;
+  --inbox-w: 296px;
+  --inbox-w-collapsed: 52px;
+  --reading-min: 420px;
+  --diff-min: 520px;
+  --touch-min: 40px;
+  --tab-touch: 48px;
+  --bp-tablet: 768px;
+  --bp-desktop: 1280px;
+  --z-sticky: 10;
+  --z-bar: 20;
+  --z-sheet: 40;
+  --z-toast: 60;
+  --z-tooltip: 70;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --shadow-1: 0 0 0 1px oklch(1 0 0 / 0.04);
+    --shadow-2: 0 0 0 1px oklch(1 0 0 / 0.05), 0 4px 14px oklch(0 0 0 / 0.4);
+    --shadow-3: 0 0 0 1px oklch(1 0 0 / 0.06), 0 16px 40px oklch(0 0 0 / 0.55);
+  }
+}
+[data-theme="dark"] {
+  --shadow-1: 0 0 0 1px oklch(1 0 0 / 0.04);
+  --shadow-2: 0 0 0 1px oklch(1 0 0 / 0.05), 0 4px 14px oklch(0 0 0 / 0.4);
+  --shadow-3: 0 0 0 1px oklch(1 0 0 / 0.06), 0 16px 40px oklch(0 0 0 / 0.55);
+}

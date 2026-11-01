@@ -895,7 +895,14 @@ test("pnpm pack --dry-run includes the launcher and built app, without src or a 
     mkdirSync(dependency, { recursive: true });
     writeFileSync(join(dependency, "package.json"), JSON.stringify({ name, version: "0.0.0" }));
   }
-  for (const path of ["bin/emend", "dist/emend.mjs", "dist/web/index.html", "src/x.ts"]) {
+  for (const path of [
+    "bin/emend",
+    "dist/emend.mjs",
+    "dist/web/index.html",
+    "dist/web/licenses/hanken-grotesk-OFL.txt",
+    "dist/web/licenses/martian-mono-OFL.txt",
+    "src/x.ts",
+  ]) {
     mkdirSync(dirname(join(pkg, path)), { recursive: true });
     writeFileSync(join(pkg, path), "synthetic package fixture\n");
   }
@@ -911,6 +918,8 @@ test("pnpm pack --dry-run includes the launcher and built app, without src or a 
   expect(result.stdout).toContain("bin/emend");
   expect(result.stdout).toContain("dist/emend.mjs");
   expect(result.stdout).toContain("dist/web/index.html");
+  expect(result.stdout).toContain("dist/web/licenses/hanken-grotesk-OFL.txt");
+  expect(result.stdout).toContain("dist/web/licenses/martian-mono-OFL.txt");
   expect(result.stdout).not.toContain("src/");
   expect(readdirSync(pkg).some((file) => file.endsWith(".tgz"))).toBe(false);
   expect(calls()).toEqual([]);

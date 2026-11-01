@@ -1,0 +1,104 @@
+@layer base {
+  /* Minimal element base: consumers get emend type + colour on body, focus ring, marks. */
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    margin: 0;
+    background: var(--bg-app);
+    color: var(--fg-1);
+    font: var(--type-body);
+    -webkit-font-smoothing: antialiased;
+    font-feature-settings: "ss01", "cv11";
+  }
+  code,
+  kbd,
+  pre,
+  samp {
+    font-family: var(--font-mono);
+    font-stretch: var(--mono-stretch);
+  }
+  a {
+    color: var(--fg-link);
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 2px;
+  }
+  a:hover {
+    color: var(--fg-link-hover);
+  }
+  :focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+    border-radius: var(--radius-sm);
+  }
+  ::selection {
+    background: var(--ochre-200);
+    color: var(--n-1000);
+  }
+  @keyframes em-pulse {
+    0% {
+      box-shadow: 0 0 0 0 currentColor;
+    }
+    70% {
+      box-shadow: 0 0 0 5px transparent;
+    }
+    100% {
+      box-shadow: 0 0 0 0 transparent;
+    }
+  }
+  @keyframes em-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @keyframes em-sheet-up {
+    from {
+      transform: translateY(16px);
+      opacity: 0;
+    }
+    to {
+      transform: none;
+      opacity: 1;
+    }
+  }
+  @keyframes em-sheet-right {
+    from {
+      transform: translateX(16px);
+      opacity: 0;
+    }
+    to {
+      transform: none;
+      opacity: 1;
+    }
+  }
+  @keyframes em-fade {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * {
+      /* biome-ignore lint/complexity/noImportantStyles: Reduced motion must override component animations. */
+      animation-duration: 1ms !important;
+      /* biome-ignore lint/complexity/noImportantStyles: Reduced motion must override component transitions. */
+      transition-duration: 1ms !important;
+    }
+  }
+
+  button,
+  select {
+    cursor: pointer;
+  }
+  ::highlight(emend-comment) {
+    background: var(--mark-bg);
+    text-decoration: underline solid var(--mark-line) 1.5px;
+  }
+  ::highlight(emend-comment-active) {
+    background: var(--mark-bg-active);
+    text-decoration: underline solid var(--mark-line) 1.5px;
+  }
+}

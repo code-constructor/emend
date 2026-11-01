@@ -1,0 +1,40 @@
+:root {
+  --font-sans: "Hanken Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Martian Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --mono-stretch: 87.5%;
+  /* scale (px). Body stays 14 for density; mono runs ~1px smaller because Martian has a tall x-height */
+  --text-11: 11px;
+  --text-12: 12px;
+  --text-13: 13px;
+  --text-14: 14px;
+  --text-15: 15px;
+  --text-16: 16px;
+  --text-18: 18px;
+  --text-20: 20px;
+  --text-24: 24px;
+  --text-30: 30px;
+  --text-40: 40px;
+  --lh-tight: 1.2;
+  --lh-snug: 1.35;
+  --lh-body: 1.55;
+  --lh-prose: 1.65;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+  --tracking-tight: -0.015em;
+  --tracking-normal: 0;
+  --tracking-label: 0.04em;
+  /* semantic roles */
+  --type-display: 600 var(--text-30) / var(--lh-tight) var(--font-sans);
+  --type-h1: 600 var(--text-24) / var(--lh-tight) var(--font-sans);
+  --type-h2: 600 var(--text-18) / var(--lh-snug) var(--font-sans);
+  --type-h3: 600 var(--text-15) / var(--lh-snug) var(--font-sans);
+  --type-body: 400 var(--text-14) / var(--lh-body) var(--font-sans);
+  --type-prose: 400 var(--text-15) / var(--lh-prose) var(--font-sans);
+  --type-ui: 500 var(--text-13) / var(--lh-snug) var(--font-sans);
+  --type-meta: 400 var(--text-12) / var(--lh-snug) var(--font-sans);
+  --type-label: 500 var(--text-11) / var(--lh-snug) var(--font-mono);
+  --type-code: 400 var(--text-12) / 1.6 var(--font-mono);
+  --type-path: 400 var(--text-12) / var(--lh-snug) var(--font-mono);
+}
