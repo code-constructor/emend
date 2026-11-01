@@ -26,7 +26,11 @@ Node >=24.18.0; SQLite warning behavior has been verified on Node 24.18.0 and 26
 
 ## One machine
 
-The default `emend` command starts a server if needed and prints a one-time sign-in link; it opens the browser only when the state folder's `config.json` sets `"openBrowser": true`. Outside a terminal it prints no link or pairing code. This keeps links out of agent output; it does not stop a process that can open a terminal or read the state folder.
+The default `emend` command starts a server if needed and prints a one-time sign-in link; it opens
+the browser only when the state folder's `config.json` sets `"openBrowser": true`. Outside a
+terminal it prints no link or pairing code. This keeps links out of agent output; it does not stop a
+process that can open a terminal, read the state folder, or, with `openBrowser` on, choose the
+opener.
 `emend serve` runs without opening a browser; `emend service install` installs a systemd
 user unit or a launchd agent. The server binds `127.0.0.1:3636` unless `--host` or `--tailscale`
 explicitly widens access. There is no telemetry.
@@ -46,8 +50,12 @@ A signal after a hand-off is claimed leaves it unconfirmed, and it is offered ag
 
 State is one SQLite database and a content-addressed blob store with SHA-256 names. `EMEND_HOME`
 overrides the platform data location: the XDG data directory on Linux, Application Support on
-macOS. Each instance has a stable id and a name, defaulting to the hostname. Tests always use
-temporary state directories.
+macOS. Each instance has a stable id and a name, defaulting to the hostname.
+Both live in the state folder's `instance.json`, which emend creates once and never rewrites. If
+that file is deleted, the next server start or direct-mode command creates a new instance:
+reviews published before stay, but agents on this machine reach only the new instance's reviews.
+The next server start also revokes the old instance's admin and agent tokens and writes new ones.
+Tests always use temporary state directories.
 
 ## Attached machines and the phone
 
