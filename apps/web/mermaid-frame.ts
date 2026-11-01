@@ -1,4 +1,4 @@
-import mermaid from "mermaid";
+import mermaid, { type MermaidConfig } from "mermaid";
 
 const MAX_SOURCE = 50000;
 export function sanitizeSvg(source: string): SVGElement {
@@ -28,8 +28,49 @@ export function sanitizeSvg(source: string): SVGElement {
   }
   return document.importNode(svg, true) as unknown as SVGElement;
 }
-export function startFrame(root: HTMLElement) {
-  mermaid.initialize({
+export function frameConfig(dark: boolean): MermaidConfig {
+  // sRGB: bg-sunken, bg-surface, fg-1/2/3, border-2, topic-bg-2 and topic-solid.
+  const [sunken, surface, fg, fg2, fg3, border, topicBg, topic] = dark
+    ? ["#060708", "#111213", "#f4f4f6", "#c4c6c8", "#9d9ea1", "#2a2b2d", "#043232", "#00a19d"]
+    : ["#f4f4f6", "#fdfdfe", "#111213", "#444547", "#5f6063", "#c4c6c8", "#c2f3f0", "#00807e"];
+  return {
+    theme: "base",
+    fontFamily: "system-ui, sans-serif",
+    themeVariables: {
+      darkMode: dark,
+      fontSize: "13px",
+      background: sunken,
+      tertiaryColor: sunken,
+      labelBoxBkgColor: sunken,
+      primaryColor: surface,
+      actorBkg: surface,
+      primaryTextColor: fg,
+      textColor: fg,
+      noteTextColor: fg,
+      actorTextColor: fg,
+      signalColor: fg2,
+      signalTextColor: fg2,
+      labelTextColor: fg2,
+      loopTextColor: fg2,
+      lineColor: fg3,
+      primaryBorderColor: border,
+      actorBorder: border,
+      actorLineColor: border,
+      labelBoxBorderColor: border,
+      secondaryColor: topicBg,
+      noteBkgColor: topicBg,
+      noteBorderColor: topicBg,
+      activationBkgColor: topicBg,
+      activationBorderColor: topic,
+    },
+    sequence: {
+      mirrorActors: false,
+      actorMargin: 48,
+      messageMargin: 30,
+      boxMargin: 8,
+      useMaxWidth: true,
+      actorFontWeight: 500,
+    },
     startOnLoad: false,
     securityLevel: "strict",
     htmlLabels: false,
@@ -47,13 +88,17 @@ export function startFrame(root: HTMLElement) {
         "htmlLabels",
         "flowchart",
         "themeCSS",
+        "theme",
         "themeVariables",
         "dompurifyConfig",
         "fontFamily",
         "altFontFamily",
       ]),
     ],
-  });
+  };
+}
+export function startFrame(root: HTMLElement) {
+  mermaid.initialize(frameConfig(matchMedia("(prefers-color-scheme: dark)").matches));
   let active = true;
   let pending: string | undefined;
   let rendering = false;

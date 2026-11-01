@@ -79,3 +79,15 @@ test("the five variable fonts and their OFL licences ship with matching font-fac
   }
   expect(sources.sort()).toEqual(fontFiles.map((file) => join(webFonts, file)).sort());
 });
+
+test("reading components use semantic colours, with white reserved for the isolated HTML document page", () => {
+  const reading = join(webSource, "components/reading");
+  for (const file of readdirSync(reading).filter((file) => file.endsWith(".tsx") && !file.endsWith(".test.tsx"))) {
+    const source = readFileSync(join(reading, file), "utf8");
+    expect(source, file).not.toMatch(/(?:neutral-|amber-|dark:|bg-white|text-white)/);
+    if (source.includes("bg-[#fff]")) expect(file).toBe("HtmlDocFrame.tsx");
+  }
+  const frame = readFileSync(join(webSource, "../mermaid-frame.html"), "utf8");
+  expect(frame).toMatch(/:root\s*\{\s*color-scheme:\s*light dark/);
+  expect(frame).toMatch(/body\s*\{\s*background:\s*transparent/);
+});

@@ -4,7 +4,7 @@ import { cleanup, render } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 import { placeSpan } from "../../../../packages/core/src/place/span.ts";
 import { BlockView } from "../components/reading/BlockView.tsx";
-import { selectionToAnchor } from "./selection.ts";
+import { blockAnchor, selectionToAnchor } from "./selection.ts";
 
 afterEach(() => {
   cleanup();
@@ -85,4 +85,16 @@ test("over-limit selections report too-long", () => {
   const { container } = render(<BlockView block={{ ...block, text, html: `<p>${text}</p>` }} />);
   const node = required(container.querySelector("p")?.firstChild);
   expect(selectionToAnchor(select(node, 0, node, 2001), container)).toEqual({ error: "too-long" });
+});
+
+test("blockAnchor normalizes and clips a whole block without context or split surrogate pairs", () => {
+  expect(blockAnchor({ id: block.id, text: "  Plant\n a  seed. " })).toEqual({
+    blockId: block.id,
+    quote: "Plant a seed.",
+    prefix: "",
+    suffix: "",
+  });
+  const anchor = blockAnchor({ id: block.id, text: `${"x".repeat(1999)}🪴` });
+  expect(anchor.quote).toHaveLength(1999);
+  expect(anchor.quote.isWellFormed()).toBe(true);
 });

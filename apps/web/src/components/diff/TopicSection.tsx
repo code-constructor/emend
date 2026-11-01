@@ -14,7 +14,13 @@ export function TopicSection({ topic, files, ...context }: DiffContext & { topic
       thread.placement.location.slug === topic.slug,
   );
   return (
-    <section data-diff-section data-topic={topic.slug} className="mb-6" aria-label={`Topic ${topic.title}`}>
+    <section
+      id={`diff-topic-${topic.slug}`}
+      data-diff-section
+      data-topic={topic.slug}
+      className="mb-6"
+      aria-label={`Topic ${topic.title}`}
+    >
       <header data-topic-header className="space-y-2">
         <h3 className="font-semibold">{topic.title}</h3>
         {topic.summary && <p className="whitespace-pre-wrap break-words text-sm">{topic.summary}</p>}

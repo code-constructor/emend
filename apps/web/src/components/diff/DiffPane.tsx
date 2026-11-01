@@ -14,8 +14,13 @@ export type DiffPaneProps = {
   parser?: DiffParser;
   resume?: SavedDraft;
   onResumeEnd?: () => void;
+  onRendered?: () => void;
 };
-export function DiffPane({ reviewId, revision, parser, resume, onResumeEnd }: DiffPaneProps) {
+export function DiffPane({ reviewId, revision, parser, resume, onResumeEnd, onRendered }: DiffPaneProps) {
+  useEffect(() => {
+    // The route's scroll retry relies on topic sections rendering in the same commit as this pane.
+    onRendered?.();
+  }, [onRendered]);
   const [active, setActive] = useState<Target | null>(null);
   const onActive = (target: Target | null) => {
     if (target) claimDraft(draftKey(reviewId, target), "diff");

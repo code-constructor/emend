@@ -1,0 +1,29 @@
+@layer components {
+  .em-reading-block + .em-reading-block {
+    margin-top: var(--space-3);
+  }
+  .em-reading-block[data-commenting] {
+    background: var(--accent-tint);
+    box-shadow: 0 0 0 4px var(--accent-tint);
+  }
+  .em-reading-block__comment {
+    display: block;
+    width: fit-content;
+    margin-top: 4px;
+  }
+  @media (pointer: fine) {
+    .em-reading-block__comment {
+      position: absolute;
+      left: -40px;
+      top: 2px;
+      margin-top: 0;
+      opacity: 0;
+      transition: opacity var(--dur-1);
+    }
+    .em-reading-block:hover .em-reading-block__comment,
+    .em-reading-block:focus-within .em-reading-block__comment,
+    .em-reading-block[data-commenting] .em-reading-block__comment {
+      opacity: 1;
+    }
+  }
+}

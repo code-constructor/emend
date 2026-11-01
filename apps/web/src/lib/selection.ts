@@ -6,7 +6,7 @@ export function clipText(text: string, limit: number) {
   const clipped = text.slice(0, limit);
   return /[\uD800-\uDBFF]$/.test(clipped) ? clipped.slice(0, -1) : clipped;
 }
-export function diagramAnchor(block: Pick<RenderedBlock, "id" | "text">) {
+export function blockAnchor(block: Pick<RenderedBlock, "id" | "text">) {
   return { blockId: block.id, quote: clipText(normalizeText(block.text), LIMITS.quoteChars), prefix: "", suffix: "" };
 }
 type Anchor = ReturnType<typeof makeSpan>;
@@ -26,7 +26,7 @@ export function selectionToAnchor(
   const text = first.dataset.blockText;
   if (!id || text === undefined) return { error: "empty" };
   if (first.dataset.blockKind === "diagram")
-    return normalizeText(text) ? diagramAnchor({ id, text }) : { error: "empty" };
+    return normalizeText(text) ? blockAnchor({ id, text }) : { error: "empty" };
   const quote = normalizeText(range.toString());
   if (quote.length > LIMITS.quoteChars) return { error: "too-long" };
   if (quote.length === 0 || !quote.isWellFormed()) return { error: "empty" };

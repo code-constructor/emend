@@ -1,7 +1,7 @@
 import type { ReviewView, RevisionView } from "@emend/contract";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
-import { type MouseEvent, type Ref, useEffect, useRef, useState } from "react";
+import { type MouseEvent, type Ref, useCallback, useEffect, useId, useRef, useState } from "react";
 import { placeSpan } from "../../../../packages/core/src/place/span.ts";
 import { reviewQuery, revisionQuery } from "../api/queries.ts";
 import { LazyDiffPane } from "../components/diff/LazyDiffPane.tsx";
@@ -33,6 +33,9 @@ function Reading({
   onResume,
   htmlNavigation,
   composingPath,
+  resumedBlockId,
+  search,
+  phone,
 }: {
   reviewId: string;
   revision: RevisionView;
@@ -40,12 +43,33 @@ function Reading({
   onResume: (draft: SavedDraft) => void;
   htmlNavigation?: HtmlNavigation;
   composingPath?: string;
+  resumedBlockId?: string;
+  search: ReviewSearch;
+  phone: boolean;
 }) {
   const props = { reviewId, revision: revision.seq, threads: revision.threads, changedBlocks: revision.changedBlocks };
   if (tab === "comments") return <ThreadList {...props} onResume={onResume} />;
   if (tab === "docs")
-    return <DocView {...props} docs={revision.docs} navigation={htmlNavigation} composingPath={composingPath} />;
-  return <Writeup {...props} writeup={revision.writeup} />;
+    return (
+      <DocView
+        {...props}
+        docs={revision.docs}
+        navigation={htmlNavigation}
+        composingPath={composingPath}
+        resumedBlockId={resumedBlockId}
+      />
+    );
+  return (
+    <Writeup
+      {...props}
+      writeup={revision.writeup}
+      topics={revision.topics}
+      files={revision.files}
+      search={search}
+      phone={phone}
+      resumedBlockId={resumedBlockId}
+    />
+  );
 }
 function draftPlacement(draft: SavedDraft, revision: RevisionView) {
   if (draft.threadId) return revision.threads.find((thread) => thread.id === draft.threadId)?.placement;
@@ -94,8 +118,17 @@ function LoadedReview({
   const query = useQuery(revisionQuery(review.id, seq));
   const navigate = useNavigate({ from: "/r/$reviewId" });
   const layout = useLayout();
+  const readingId = useId();
+  // Resolving the lazy pane does not otherwise rerender this route's pending scroll effect.
+  const [, setDiffRendered] = useState(0);
+  const onDiffRendered = useCallback(() => setDiffRendered((value) => value + 1), []);
   const revision = query.data;
   const [resumed, setResumed] = useState<(SavedDraft & { tab: NonNullable<ReviewSearch["tab"]> }) | null>(null);
+  const resumedPlacement = resumed && revision ? draftPlacement(resumed, revision) : undefined;
+  const resumedBlockId =
+    resumedPlacement?.status === "placed" && "blockId" in resumedPlacement.location
+      ? resumedPlacement.location.blockId
+      : undefined;
   const endResume = () => setResumed((current) => (current === resumed ? null : current));
   useEffect(() => {
     if (!resumed) return;
@@ -284,55 +317,70 @@ function LoadedReview({
         }
         reading={
           <div className="contents" onClickCapture={followReadingLink}>
-            {layout !== "phone" && <ReviewTabs {...tabProps} />}
-            {query.isPending && (
-              <p role="status" className="p-5">
-                Loading revision…
-              </p>
+            {layout !== "phone" && (
+              <ReviewTabs {...tabProps} docsCount={revision?.docs.length ?? 0} idBase={readingId} />
             )}
-            {query.isError && (
-              <div className="p-5">
-                <p role="alert">Could not load this revision.</p>
-                <Button onClick={() => void query.refetch()}>Retry</Button>
-              </div>
-            )}
-            {revision && (
-              <Reading
-                key={`${seq}:${tab}`}
-                reviewId={review.id}
-                revision={revision}
-                tab={readingTab}
-                onResume={resume}
-                htmlNavigation={htmlNavigation}
-                composingPath={resumed?.target?.kind === "html-span" ? resumed.target.path : undefined}
-              />
-            )}
-            {resumed?.target && !isDiffTarget(resumed.target) && (
-              <Composer
-                surface="resumed"
-                placeholder={false}
-                reviewId={review.id}
-                revision={seq}
-                target={resumed.target}
-                threadId={resumed.threadId}
-                storageKey={resumed.key}
-                onSaved={endResume}
-                onCancel={endResume}
-                wrap={(editor) => (
-                  <section
-                    aria-label="Resumed comment"
-                    className="sticky bottom-0 space-y-3 border-t border-line-2 bg-surface p-3"
-                  >
-                    {resumed.target && "quote" in resumed.target && (
-                      <blockquote className="max-h-24 overflow-auto border-l-2 pl-2 text-sm">
-                        {resumed.target.quote}
-                      </blockquote>
-                    )}
-                    {editor}
-                  </section>
-                )}
-              />
-            )}
+            <div
+              {...(layout !== "phone"
+                ? {
+                    role: "tabpanel" as const,
+                    id: `${readingId}-panel`,
+                    "aria-labelledby": `${readingId}-tab-${readingTab}`,
+                  }
+                : {})}
+            >
+              {query.isPending && (
+                <p role="status" className="p-5">
+                  Loading revision…
+                </p>
+              )}
+              {query.isError && (
+                <div className="p-5">
+                  <p role="alert">Could not load this revision.</p>
+                  <Button onClick={() => void query.refetch()}>Retry</Button>
+                </div>
+              )}
+              {revision && (
+                <Reading
+                  key={`${seq}:${readingTab}`}
+                  reviewId={review.id}
+                  revision={revision}
+                  tab={readingTab}
+                  search={search}
+                  phone={layout === "phone"}
+                  onResume={resume}
+                  htmlNavigation={htmlNavigation}
+                  composingPath={resumed?.target?.kind === "html-span" ? resumed.target.path : undefined}
+                  resumedBlockId={resumedBlockId}
+                />
+              )}
+              {resumed?.target && !isDiffTarget(resumed.target) && (
+                <Composer
+                  surface="resumed"
+                  placeholder={false}
+                  reviewId={review.id}
+                  revision={seq}
+                  target={resumed.target}
+                  threadId={resumed.threadId}
+                  storageKey={resumed.key}
+                  onSaved={endResume}
+                  onCancel={endResume}
+                  wrap={(editor) => (
+                    <section
+                      aria-label="Resumed comment"
+                      className="sticky bottom-0 space-y-3 border-t border-line-2 bg-surface p-3"
+                    >
+                      {resumed.target && "quote" in resumed.target && (
+                        <blockquote className="max-h-24 overflow-auto border-l-2 pl-2 text-sm">
+                          {resumed.target.quote}
+                        </blockquote>
+                      )}
+                      {editor}
+                    </section>
+                  )}
+                />
+              )}
+            </div>
           </div>
         }
         diff={
@@ -343,6 +391,7 @@ function LoadedReview({
               revision={revision}
               resume={resumed?.target && isDiffTarget(resumed.target) ? resumed : undefined}
               onResumeEnd={endResume}
+              onRendered={onDiffRendered}
             />
           ) : (
             <p role={query.isError ? "alert" : "status"} className="p-5">

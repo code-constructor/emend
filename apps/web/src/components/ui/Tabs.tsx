@@ -15,10 +15,12 @@ export interface TabsProps {
   onChange?: (id: string) => void;
   label: string;
   className?: string;
+  idBase?: string;
 }
 
-export function Tabs({ items, value, onChange, label, className }: TabsProps) {
-  const id = useId();
+export function Tabs({ items, value, onChange, label, className, idBase }: TabsProps) {
+  const generatedId = useId();
+  const id = idBase ?? generatedId;
   const buttons = useRef(new Map<string, HTMLButtonElement>());
   const visible = items.filter((item) => !item.hidden);
   const tabValue = visible.some((item) => item.id === value) ? value : visible[0]?.id;

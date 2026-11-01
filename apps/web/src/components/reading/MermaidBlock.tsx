@@ -29,14 +29,14 @@ function DiagramFrame({ source }: { source: string }) {
     return () => window.removeEventListener("message", receive);
   }, []);
   return (
-    <div className="space-y-2">
+    <div className="space-y-2 overflow-auto rounded-md bg-sunken p-3.5">
       <iframe
         ref={frame}
         title="Diagram"
         loading="lazy"
         src="/mermaid-frame.html"
         sandbox="allow-scripts"
-        className="w-full border-0"
+        className="w-full border-0 bg-transparent"
         style={{ height }}
         onLoad={() => {
           if (loaded.current) return;
@@ -45,8 +45,10 @@ function DiagramFrame({ source }: { source: string }) {
         }}
       />
       <details>
-        <summary className="cursor-pointer text-sm text-neutral-500 dark:text-neutral-400">Diagram source</summary>
-        <pre className="overflow-x-auto whitespace-pre-wrap break-words text-xs">{source}</pre>
+        <summary className="cursor-pointer text-fg-3 [font:var(--type-meta)]">Diagram source</summary>
+        <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-12 font-stretch-mono text-fg-2">
+          {source}
+        </pre>
       </details>
     </div>
   );

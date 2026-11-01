@@ -1,4 +1,5 @@
 import type { HtmlSpanTarget } from "@emend/contract";
+import { ShieldCheck } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { claimDraft } from "../../lib/composer-owner.ts";
 import { draftKey } from "../../lib/drafts.ts";
@@ -6,6 +7,7 @@ import { type DocNavigation, FrameToParent, type ParentToFrame } from "../../lib
 import { Composer } from "../threads/Composer.tsx";
 import { ThreadCard } from "../threads/ThreadCard.tsx";
 import { Button } from "../ui/Button.tsx";
+import { Icon } from "../ui/Icon.tsx";
 import type { ReaderProps } from "./BlockReader.tsx";
 
 export type HtmlNavigation = { threadId: string; intent: unknown };
@@ -126,23 +128,29 @@ export function HtmlDocFrame({
   };
   return (
     <div className="space-y-4" id={`html-doc-${path}`}>
-      <iframe
-        ref={mountFrame}
-        key={generation}
-        sandbox="allow-scripts"
-        src={src}
-        title={path}
-        referrerPolicy="no-referrer"
-        className="w-full border-0"
-        style={{ height: "70vh", minHeight: "320px" }}
-        onLoad={() => {
-          if (++loads.current <= 1) return;
-          gone.current = true;
-          setAway(true);
-          setReady(0);
-          if (!composing) setTarget(null);
-        }}
-      />
+      <div>
+        <iframe
+          ref={mountFrame}
+          key={generation}
+          sandbox="allow-scripts"
+          src={src}
+          title={path}
+          referrerPolicy="no-referrer"
+          className="w-full rounded-md border border-line-1 bg-[#fff]"
+          style={{ height: "70vh", minHeight: "320px" }}
+          onLoad={() => {
+            if (++loads.current <= 1) return;
+            gone.current = true;
+            setAway(true);
+            setReady(0);
+            if (!composing) setTarget(null);
+          }}
+        />
+        <p className="mt-2 flex items-center gap-1.5 text-fg-3 [font:var(--type-meta)]">
+          <Icon icon={ShieldCheck} size={13} />
+          Shown in a sandbox. Scripts in this doc never run.
+        </p>
+      </div>
       {away && (
         <div role="status" className="space-y-2">
           <p>This doc navigated away.</p>
@@ -173,7 +181,7 @@ export function HtmlDocFrame({
         </div>
       ))}
       {target && !composerOpen && (
-        <div className="sticky bottom-0 space-y-3 rounded-lg border border-neutral-300 bg-white p-3 shadow-lg dark:border-neutral-700 dark:bg-neutral-950">
+        <div className="sticky bottom-0 space-y-3 rounded-lg border border-line-2 bg-raised p-3 shadow-2">
           {composing ? (
             <>
               <blockquote className="max-h-24 overflow-auto border-l-2 pl-2 text-sm">{target.quote}</blockquote>

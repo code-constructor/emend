@@ -14,11 +14,11 @@
   .em-prose h2 {
     font: 600 19px / 1.3 var(--font-sans);
     letter-spacing: -0.01em;
-    margin: 36px 0 10px;
+    margin: 0 0 10px;
   }
   .em-prose h3 {
     font: 600 16px / 1.35 var(--font-sans);
-    margin: 24px 0 6px;
+    margin: 0 0 6px;
   }
   .em-prose h4 {
     font: 600 11px / 1.3 var(--font-mono);
@@ -26,7 +26,17 @@
     text-transform: uppercase;
     letter-spacing: var(--tracking-label);
     color: var(--fg-3);
-    margin: 24px 0 6px;
+    margin: 0 0 6px;
+  }
+  .em-prose h2,
+  .em-reading-block + .em-reading-block:has(> .em-prose > h2) {
+    margin-top: 36px;
+  }
+  .em-prose h3,
+  .em-prose h4,
+  .em-reading-block + .em-reading-block:has(> .em-prose > h3),
+  .em-reading-block + .em-reading-block:has(> .em-prose > h4) {
+    margin-top: 24px;
   }
   .em-prose h5,
   .em-prose h6 {
@@ -166,12 +176,5 @@
   }
   mark.em-mark[data-active] {
     background: var(--mark-bg-active);
-  }
-}
-
-@layer utilities {
-  /* BlockReader wraps each BlockView: keep its paragraph gap at 12px. */
-  .space-y-4 > :has(> div > .em-prose):not(:last-child) {
-    margin-block-end: var(--space-3);
   }
 }

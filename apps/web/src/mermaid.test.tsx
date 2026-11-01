@@ -47,7 +47,10 @@ test("SVG scrub drops executable elements, click handlers and non-fragment links
   ).toBe(true);
   expect(svg.querySelector("use")?.getAttribute("href")).toBe("#safe");
 });
-test("frame config is strict, ignores strangers and never binds a Mermaid click directive", async () => {
+test.each([
+  'graph TD; A-->B; click A evil "click"',
+  '%%{init: {"theme": "dark", "securityLevel": "loose"}}%%\ngraph TD; A-->B; click A evil "click"',
+])("frame config is strict, ignores strangers and never binds a Mermaid click directive: %s", async (source) => {
   const root = document.createElement("div");
   document.body.append(root);
   const bindFunctions = vi.fn();
@@ -60,13 +63,21 @@ test("frame config is strict, ignores strangers and never binds a Mermaid click 
     expect(mermaid.initialize).toHaveBeenCalledWith(
       expect.objectContaining({ startOnLoad: false, securityLevel: "strict", htmlLabels: false, maxTextSize: 50000 }),
     );
-    const source = 'graph TD; A-->B; click A evil "click"';
     window.dispatchEvent(new MessageEvent("message", { source: null, data: { type: "render", source } }));
     expect(mermaid.render).not.toHaveBeenCalled();
     window.dispatchEvent(new MessageEvent("message", { source: window.parent, data: { type: "render", source } }));
     await waitFor(() => expect(root.querySelector("svg")).not.toBeNull());
     expect(bindFunctions).not.toHaveBeenCalled();
     expect(root.querySelector("[onclick], [href]")).toBeNull();
+    for (const node of root.querySelectorAll("svg, svg *"))
+      expect([...node.attributes].some((attr) => attr.name.toLowerCase().startsWith("on"))).toBe(false);
+    expect(mermaid.initialize).toHaveBeenCalledWith(
+      expect.objectContaining({
+        theme: "base",
+        securityLevel: "strict",
+        secure: expect.arrayContaining(["theme", "themeVariables", "securityLevel"]),
+      }),
+    );
   } finally {
     stop();
     root.remove();
@@ -174,6 +185,7 @@ test.each([
           "maxEdges",
           "htmlLabels",
           "flowchart",
+          "theme",
           "themeCSS",
           "themeVariables",
           "dompurifyConfig",
@@ -206,4 +218,61 @@ test("lazy frames receive source only on first load, with a fresh frame for chan
   fireEvent.load(next);
   fireEvent.load(next);
   expect(nextPost).toHaveBeenCalledExactlyOnceWith({ type: "render", source: "flowchart LR; B-->C" }, "*");
+});
+
+test.each([false, true])("frame locks its base theme to the embedding colour scheme (dark=%s)", (dark) => {
+  const media = vi.spyOn(window, "matchMedia").mockReturnValue({ matches: dark } as MediaQueryList);
+  const stop = startFrame(document.createElement("div"));
+  try {
+    expect(media).toHaveBeenCalledExactlyOnceWith("(prefers-color-scheme: dark)");
+    const [sunken, surface, fg, fg2, fg3, border, topicBg, topic] = dark
+      ? ["#060708", "#111213", "#f4f4f6", "#c4c6c8", "#9d9ea1", "#2a2b2d", "#043232", "#00a19d"]
+      : ["#f4f4f6", "#fdfdfe", "#111213", "#444547", "#5f6063", "#c4c6c8", "#c2f3f0", "#00807e"];
+    expect(mermaid.initialize).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        theme: "base",
+        fontFamily: "system-ui, sans-serif",
+        startOnLoad: false,
+        securityLevel: "strict",
+        secure: expect.arrayContaining(["theme", "themeVariables", "themeCSS", "fontFamily"]),
+        themeVariables: {
+          darkMode: dark,
+          fontSize: "13px",
+          background: sunken,
+          tertiaryColor: sunken,
+          labelBoxBkgColor: sunken,
+          primaryColor: surface,
+          actorBkg: surface,
+          primaryTextColor: fg,
+          textColor: fg,
+          noteTextColor: fg,
+          actorTextColor: fg,
+          signalColor: fg2,
+          signalTextColor: fg2,
+          labelTextColor: fg2,
+          loopTextColor: fg2,
+          lineColor: fg3,
+          primaryBorderColor: border,
+          actorBorder: border,
+          actorLineColor: border,
+          labelBoxBorderColor: border,
+          secondaryColor: topicBg,
+          noteBkgColor: topicBg,
+          noteBorderColor: topicBg,
+          activationBkgColor: topicBg,
+          activationBorderColor: topic,
+        },
+        sequence: {
+          mirrorActors: false,
+          actorMargin: 48,
+          messageMargin: 30,
+          boxMargin: 8,
+          useMaxWidth: true,
+          actorFontWeight: 500,
+        },
+      }),
+    );
+  } finally {
+    stop();
+  }
 });

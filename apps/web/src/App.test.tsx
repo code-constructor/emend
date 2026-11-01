@@ -194,10 +194,14 @@ test.each([390, 1280])("empty Writeup and absent Diff tabs are hidden at %s px",
   openingRevision({ docs: [{ path: "plan.md", kind: "markdown", blocks: [] }] });
   mount(`/r/${id}?tab=writeup`);
   await screen.findByRole("heading", { name: "plan.md" });
-  expect(screen.queryByRole("link", { name: "Writeup" })).toBeNull();
+  expect(screen.queryByRole(width < 768 ? "link" : "tab", { name: "Writeup" })).toBeNull();
   expect(screen.queryByRole("link", { name: "Diff" })).toBeNull();
-  expect(screen.getByRole("link", { name: "Docs" }).getAttribute("aria-current")).toBe("page");
-  expect(screen.getByRole("link", { name: /Comments/ })).toBeTruthy();
+  expect(
+    screen
+      .getByRole(width < 768 ? "link" : "tab", { name: /^Docs(?: \d+)?$/ })
+      .getAttribute(width < 768 ? "aria-current" : "aria-selected"),
+  ).toBe(width < 768 ? "page" : "true");
+  expect(screen.getByRole(width < 768 ? "link" : "tab", { name: /Comments/ })).toBeTruthy();
   expect(screen.queryByTestId("diff-pane")).toBeNull();
   expect(screen.getByTestId("reading-pane").className).toContain("flex-1");
 });
@@ -217,7 +221,13 @@ test("explicit Diff stays selected even with a main doc", async () => {
 test("explicit empty main writeup remains visible", async () => {
   openingRevision({ main: "writeup" });
   mount(`/r/${id}`);
-  await waitFor(() => expect(screen.getByRole("link", { name: "Writeup" }).getAttribute("aria-current")).toBe("page"));
+  await waitFor(() =>
+    expect(
+      screen
+        .getByRole(width < 768 ? "link" : "tab", { name: "Writeup" })
+        .getAttribute(width < 768 ? "aria-current" : "aria-selected"),
+    ).toBe(width < 768 ? "page" : "true"),
+  );
 });
 
 test.each(["markdown", "html"] as const)(
@@ -287,7 +297,11 @@ test("revision picker keeps the visible opening tab even when no tab was in the 
   await screen.findByRole("heading", { name: "old.md" });
   await chooseRevision(2);
   await screen.findByRole("heading", { name: "next.md" });
-  expect(screen.getByRole("link", { name: "Docs" }).getAttribute("aria-current")).toBe("page");
+  expect(
+    screen
+      .getByRole(width < 768 ? "link" : "tab", { name: /^Docs(?: \d+)?$/ })
+      .getAttribute(width < 768 ? "aria-current" : "aria-selected"),
+  ).toBe(width < 768 ? "page" : "true");
 });
 afterEach(async () => {
   cleanup();
@@ -515,11 +529,15 @@ test("hides Docs without docs, defaults bad search values, and keeps diff visibl
   });
   const { history } = mount(`/r/${id}?rev=-1&tab=diff&thread=bad`);
   await screen.findByText("Overview");
-  expect(screen.queryByRole("link", { name: "Docs" })).toBeNull();
+  expect(screen.queryByRole(width < 768 ? "link" : "tab", { name: /^Docs(?: \d+)?$/ })).toBeNull();
   expect(screen.getByTestId("diff-pane")).toBeTruthy();
-  const reading = within(screen.getByRole("navigation", { name: "Reading tabs" }));
-  expect(reading.getByRole("link", { name: "Writeup" }).getAttribute("aria-current")).toBe("page");
-  fireEvent.click(reading.getByRole("link", { name: /Comments/ }));
+  const reading = within(screen.getByRole("tablist", { name: "Reading tabs" }));
+  expect(
+    reading
+      .getByRole(width < 768 ? "link" : "tab", { name: "Writeup" })
+      .getAttribute(width < 768 ? "aria-current" : "aria-selected"),
+  ).toBe(width < 768 ? "page" : "true");
+  fireEvent.click(reading.getByRole(width < 768 ? "link" : "tab", { name: /Comments/ }));
   await waitFor(() => expect(history.location.search).toContain("tab=comments"));
   expect(history.location.search).not.toContain("thread");
   expect(history.location.search).not.toContain("rev=-1");
@@ -1053,8 +1071,8 @@ test.each([
   await waitFor(() =>
     expect(scroll.mock.instances.some((node) => (node as HTMLElement).id === `thread-${id}`)).toBe(true),
   );
-  const link = screen.getByRole("link", { name: new RegExp(tab) });
-  expect(new URL((link as HTMLAnchorElement).href).searchParams.has("thread")).toBe(false);
+  const link = screen.getByRole(width < 768 ? "link" : "tab", { name: new RegExp(tab) });
+  if (width < 768) expect(new URL((link as HTMLAnchorElement).href).searchParams.has("thread")).toBe(false);
   fireEvent.click(link);
   await waitFor(() => expect(history.location.search).toContain(`tab=${tab.toLowerCase()}`));
   expect(history.location.search).not.toContain("thread=");
@@ -1062,7 +1080,11 @@ test.each([
   await act(async () => {
     await client.invalidateQueries({ queryKey: ["revision", id, 1] });
   });
-  expect(screen.getByRole("link", { name: new RegExp(tab) }).getAttribute("aria-current")).toBe("page");
+  expect(
+    screen
+      .getByRole(width < 768 ? "link" : "tab", { name: new RegExp(tab) })
+      .getAttribute(width < 768 ? "aria-current" : "aria-selected"),
+  ).toBe(width < 768 ? "page" : "true");
   expect(container.querySelector("iframe")).toBeNull();
 });
 
@@ -1083,12 +1105,12 @@ test.each([false, true])(
     );
     const scroll = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => {});
     const { history, container } = mount(`/r/${id}?thread=${id}`);
-    await screen.findByRole("link", { name: "Writeup" });
+    await screen.findByRole(width < 768 ? "link" : "tab", { name: "Writeup" });
     await waitFor(() => expect(client.isFetching({ queryKey: ["revision", id, 1] })).toBe(1));
     expect(container.querySelector("iframe")).toBeNull();
     expect(scroll).not.toHaveBeenCalled();
     if (switchTab) {
-      fireEvent.click(screen.getByRole("link", { name: /Comments/ }));
+      fireEvent.click(screen.getByRole(width < 768 ? "link" : "tab", { name: /Comments/ }));
       await waitFor(() => expect(history.location.search).toContain("tab=comments"));
       expect(history.location.search).not.toContain("thread=");
     }
@@ -1098,7 +1120,11 @@ test.each([false, true])(
     });
     if (switchTab) {
       expect(history.location.search).toContain("tab=comments");
-      expect(screen.getByRole("link", { name: /Comments/ }).getAttribute("aria-current")).toBe("page");
+      expect(
+        screen
+          .getByRole(width < 768 ? "link" : "tab", { name: /Comments/ })
+          .getAttribute(width < 768 ? "aria-current" : "aria-selected"),
+      ).toBe(width < 768 ? "page" : "true");
       expect(container.querySelector("iframe")).toBeNull();
       expect(scroll).not.toHaveBeenCalled();
     } else {
@@ -1345,7 +1371,7 @@ test("Resume claims the Comments reply from the diff, focuses it and keeps threa
   const input = await diff.findByLabelText("Reply");
   input.focus();
   fireEvent.change(input, { target: { value: "Follow-up" } });
-  fireEvent.click(screen.getByRole("link", { name: /Comments/ }));
+  fireEvent.click(screen.getByRole(width < 768 ? "link" : "tab", { name: /Comments/ }));
   const drafts = within(await screen.findByRole("region", { name: "Unsaved comments" }));
   fireEvent.click(drafts.getByRole("button", { name: "Resume" }));
   const reading = within(screen.getByTestId("reading-pane"));
@@ -1418,7 +1444,7 @@ test("a delayed diff reply save cannot clear newer text after Comments claims th
   fireEvent.change(input, { target: { value: "First reply" } });
   fireEvent.click(diff.getByRole("button", { name: "Add reply" }));
   await waitFor(() => expect(submitted).toHaveLength(1));
-  fireEvent.click(screen.getByRole("link", { name: /Comments/ }));
+  fireEvent.click(screen.getByRole(width < 768 ? "link" : "tab", { name: /Comments/ }));
   fireEvent.click(
     within(await screen.findByRole("region", { name: "Unsaved comments" })).getByRole("button", { name: "Resume" }),
   );
@@ -1464,7 +1490,7 @@ test("a pending edit resumes in Comments and a completed PATCH preserves newer e
   fireEvent.change(diff.getByLabelText("Edit comment"), { target: { value: "First edit" } });
   fireEvent.click(diff.getByRole("button", { name: "Save edit" }));
   await waitFor(() => expect(submitted).toHaveLength(1));
-  fireEvent.click(screen.getByRole("link", { name: /Comments/ }));
+  fireEvent.click(screen.getByRole(width < 768 ? "link" : "tab", { name: /Comments/ }));
   const drafts = within(await screen.findByRole("region", { name: "Unsaved comments" }));
   expect(drafts.getByText("Unsaved edit")).toBeTruthy();
   fireEvent.click(drafts.getByRole("button", { name: "Resume" }));
@@ -1509,13 +1535,16 @@ test.each(
   const editor = (await within(pane).findByLabelText("Comment")) as HTMLTextAreaElement;
   expect(editor.value).toBe("Resume this draft");
   await waitFor(() => expect(document.activeElement).toBe(editor));
-  if (size === 390) expect(screen.getByRole("link", { name: "Diff" }).getAttribute("aria-current")).toBe("page");
+  if (size === 390)
+    expect(
+      screen.getByRole("link", { name: "Diff" }).getAttribute(width < 768 ? "aria-current" : "aria-selected"),
+    ).toBe(width < 768 ? "page" : "true");
   // Deleting the draft's text while editing does not mean Discard.
   fireEvent.change(editor, { target: { value: "" } });
   expect(screen.getByTestId("diff-pane")).toBe(pane);
   fireEvent.change(editor, { target: { value: "Resume this draft" } });
   if (end === "discard") {
-    fireEvent.click(screen.getByRole("link", { name: /Comments/ }));
+    fireEvent.click(screen.getByRole(width < 768 ? "link" : "tab", { name: /Comments/ }));
     const drafts = within(await screen.findByRole("region", { name: "Unsaved comments" }));
     fireEvent.click(drafts.getByRole("button", { name: "Discard" }));
   } else fireEvent.click(within(pane).getByRole("button", { name: end === "save" ? "Save comment" : "Cancel" }));
@@ -1542,11 +1571,21 @@ test.each([390, 1280])("a removed HTML draft keeps Docs visible at %s px until c
   fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
   const composer = within(await screen.findByRole("region", { name: "Resumed comment" }));
   expect((composer.getByLabelText("Comment") as HTMLTextAreaElement).value).toBe("HTML draft");
-  await waitFor(() => expect(screen.getByRole("link", { name: "Docs" }).getAttribute("aria-current")).toBe("page"));
+  await waitFor(() =>
+    expect(
+      screen
+        .getByRole(width < 768 ? "link" : "tab", { name: /^Docs(?: \d+)?$/ })
+        .getAttribute(width < 768 ? "aria-current" : "aria-selected"),
+    ).toBe(width < 768 ? "page" : "true"),
+  );
   fireEvent.click(composer.getByRole("button", { name: "Cancel" }));
-  await waitFor(() => expect(screen.queryByRole("link", { name: "Docs" })).toBeNull());
+  await waitFor(() => expect(screen.queryByRole(width < 768 ? "link" : "tab", { name: /^Docs(?: \d+)?$/ })).toBeNull());
   expect(screen.queryByRole("region", { name: "Resumed comment" })).toBeNull();
-  expect(screen.getByRole("link", { name: "Writeup" }).getAttribute("aria-current")).toBe("page");
+  expect(
+    screen
+      .getByRole(width < 768 ? "link" : "tab", { name: "Writeup" })
+      .getAttribute(width < 768 ? "aria-current" : "aria-selected"),
+  ).toBe(width < 768 ? "page" : "true");
 });
 
 test.each(["writeup", "docs"] as const)(
@@ -1595,7 +1634,11 @@ test("an unplaced reading draft resumed beside Diff stays visible when resized t
   expect(((await screen.findByLabelText("Comment")) as HTMLTextAreaElement).value).toBe("Unplaced writeup draft");
   act(() => resize(390));
   expect(((await screen.findByLabelText("Comment")) as HTMLTextAreaElement).value).toBe("Unplaced writeup draft");
-  expect(screen.getByRole("link", { name: /Comments/ }).getAttribute("aria-current")).toBe("page");
+  expect(
+    screen
+      .getByRole(width < 768 ? "link" : "tab", { name: /Comments/ })
+      .getAttribute(width < 768 ? "aria-current" : "aria-selected"),
+  ).toBe(width < 768 ? "page" : "true");
 });
 
 test.each([null, "2026-01-02T00:00:00.000Z"])("shows provenance only for copied reviews (%s)", async (importedAt) => {
@@ -2022,9 +2065,9 @@ test("a row with an invalid cached timestamp has no time text", async () => {
   expect(screen.queryByRole("alert")).toBeNull();
 });
 
-test("phone and desktop tabs accept the same shared props type", () => {
+test("phone and desktop tabs retain the shared navigation props", () => {
   expectTypeOf<typeof PhoneTabs>().parameter(0).toEqualTypeOf<ReviewTabsProps>();
-  expectTypeOf<typeof ReviewTabs>().parameter(0).toEqualTypeOf<ReviewTabsProps>();
+  expectTypeOf<typeof ReviewTabs>().parameter(0).toExtend<ReviewTabsProps>();
 });
 
 test.each([

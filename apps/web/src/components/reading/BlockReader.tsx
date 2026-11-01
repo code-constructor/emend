@@ -1,35 +1,46 @@
 import type { RenderedBlock, RevisionView, Target } from "@emend/contract";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
 import { claimDraft } from "../../lib/composer-owner.ts";
 import { draftKey } from "../../lib/drafts.ts";
-import { diagramAnchor, selectionToAnchor } from "../../lib/selection.ts";
+import { blockAnchor, selectionToAnchor } from "../../lib/selection.ts";
 import { Composer } from "../threads/Composer.tsx";
 import { ThreadCard } from "../threads/ThreadCard.tsx";
 import { Button } from "../ui/Button.tsx";
-import { BlockView } from "./BlockView.tsx";
+import { Block } from "./Block.tsx";
 
 export type ReaderProps = {
   reviewId: string;
   revision: number;
   changedBlocks: RevisionView["changedBlocks"];
   threads: RevisionView["threads"];
+  resumedBlockId?: string;
 };
+export type ReaderGroup = {
+  key: string;
+  id?: string;
+  heading: ReactNode;
+  blocks: RenderedBlock[];
+  path?: string;
+  content?: ReactNode;
+  topic?: boolean;
+  action?: ReactNode;
+  meta?: ReactNode;
+  subsections?: { key: string; heading: string; blocks: RenderedBlock[] }[];
+};
+function groupBlocks(group: ReaderGroup) {
+  return [...group.blocks, ...(group.subsections?.flatMap((section) => section.blocks) ?? [])];
+}
 export function BlockReader({
   reviewId,
   revision,
   changedBlocks,
   threads,
   groups,
+  resumedBlockId,
 }: ReaderProps & {
-  groups: {
-    key: string;
-    id?: string;
-    heading: ReactNode;
-    blocks: RenderedBlock[];
-    path?: string;
-    content?: ReactNode;
-  }[];
+  groups: ReaderGroup[];
 }) {
+  const headingBase = useId();
   const root = useRef<HTMLDivElement>(null);
   const [target, setTarget] = useState<Target | null>(null);
   const [composing, setComposing] = useState(false);
@@ -42,7 +53,7 @@ export function BlockReader({
   };
   const changes = new Map(changedBlocks.map((block) => [block.blockId, block.revision]));
   const targets = useMemo(
-    () => new Map(groups.flatMap((group) => group.blocks.map((block) => [block.id, group.path] as const))),
+    () => new Map(groups.flatMap((group) => groupBlocks(group).map((block) => [block.id, group.path] as const))),
     [groups],
   );
   const blockThreads = new Map<string, RevisionView["threads"]>();
@@ -86,47 +97,62 @@ export function BlockReader({
       element?.removeEventListener("keyup", capture);
     };
   }, [composing, targets]);
+  const renderBlocks = (blocks: RenderedBlock[], path?: string) =>
+    blocks.map((block) => (
+      <Block
+        key={block.id}
+        block={block}
+        changedIn={changes.get(block.id)}
+        commenting={
+          resumedBlockId === block.id || (composing && !!target && "blockId" in target && target.blockId === block.id)
+        }
+        onComment={() => {
+          const anchor = blockAnchor(block);
+          if (!anchor.quote) return;
+          openComposer(
+            path === undefined ? { kind: "writeup-span", ...anchor } : { kind: "doc-span", path, ...anchor },
+          );
+        }}
+      >
+        {blockThreads.get(block.id)?.map((thread) => (
+          <div key={thread.id} className="mt-2.5 mb-1.5">
+            <ThreadCard reviewId={reviewId} revision={revision} thread={thread} changedBlocks={changedBlocks} />
+          </div>
+        ))}
+      </Block>
+    ));
   return (
-    <div ref={root} className="space-y-6 p-5">
-      <p className="text-xs text-neutral-500 dark:text-neutral-400">Select text to comment.</p>
-      {groups.map((group) => (
-        <section key={group.key} id={group.id} className="space-y-4">
-          <h2 className="break-words border-b border-neutral-200 pb-2 font-semibold dark:border-neutral-800">
-            {group.heading}
-          </h2>
+    <div ref={root} className="px-4 pt-4 pb-8 md:pt-7 md:pr-8 md:pb-[72px] md:pl-14">
+      <p className="mb-6 text-fg-3 [font:var(--type-meta)]">Select text to comment.</p>
+      {groups.map((group, index) => (
+        <section
+          key={group.key}
+          id={group.id}
+          aria-labelledby={`${headingBase}-${index}`}
+          className={group.topic ? "mt-9 mb-2 border-t border-line-1 pt-5" : "mb-2"}
+        >
+          <div className="mb-2.5 flex items-center gap-2.5">
+            <h2
+              id={`${headingBase}-${index}`}
+              className="flex min-w-0 flex-1 items-center gap-2.5 wrap-anywhere text-fg-1 [font:var(--type-h2)]"
+            >
+              {group.heading}
+            </h2>
+            {group.action}
+          </div>
+          {group.meta}
           {group.content}
-          {group.blocks.map((block) => (
-            <div key={block.id} className="space-y-3">
-              <BlockView block={block} changedIn={changes.get(block.id)} />
-              {block.kind === "diagram" && diagramAnchor(block).quote && (
-                <Button
-                  onClick={() => {
-                    const anchor = diagramAnchor(block);
-                    openComposer(
-                      group.path === undefined
-                        ? { kind: "writeup-span", ...anchor }
-                        : { kind: "doc-span", path: group.path, ...anchor },
-                    );
-                  }}
-                >
-                  Comment on diagram
-                </Button>
-              )}
-              {blockThreads.get(block.id)?.map((thread) => (
-                <ThreadCard
-                  key={thread.id}
-                  reviewId={reviewId}
-                  revision={revision}
-                  thread={thread}
-                  changedBlocks={changedBlocks}
-                />
-              ))}
+          {renderBlocks(group.blocks, group.path)}
+          {group.subsections?.map((section) => (
+            <div key={section.key} className="mt-6">
+              <h3 className="mb-1.5 text-fg-1 [font:var(--type-h3)]">{section.heading}</h3>
+              {renderBlocks(section.blocks, group.path)}
             </div>
           ))}
         </section>
       ))}
       {(error || target) && (
-        <div className="sticky bottom-0 space-y-3 rounded-lg border border-neutral-300 bg-white p-3 shadow-lg dark:border-neutral-700 dark:bg-neutral-950">
+        <div className="sticky bottom-0 space-y-3 rounded-lg border border-line-2 bg-raised p-3 shadow-2">
           {error && <p role="status">{error}</p>}
           {target &&
             (composing ? (
