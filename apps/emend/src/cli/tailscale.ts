@@ -1,4 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
+import { basename, delimiter, dirname, isAbsolute } from "node:path";
 import { findExecutable } from "./executable.ts";
 import { CliError } from "./http.ts";
 
@@ -11,6 +12,8 @@ function record(value: unknown): value is Record<string, unknown> {
 }
 interface RunOptions {
   deadlineMs?: number;
+  platform?: NodeJS.Platform;
+  appPath?: string;
 }
 const escalations = new Set<Promise<void>>();
 /** Serve keeps its signal handlers installed until every scheduled group kill has run. */
@@ -21,12 +24,22 @@ async function execute(
   args: string[],
   env = process.env,
   signal?: AbortSignal,
-  { deadlineMs = 10_000 }: RunOptions = {},
+  {
+    deadlineMs = 10_000,
+    platform = process.platform,
+    appPath = "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+  }: RunOptions = {},
 ): Promise<string> {
   signal?.throwIfAborted();
-  const binary = await findExecutable("tailscale", env.PATH ?? "").catch(() => {
-    throw new CliError("tailscale is not installed or not on PATH.");
-  });
+  const searchPath = (env.PATH ?? "").split(delimiter).filter(isAbsolute).join(delimiter);
+  const binary = await findExecutable("tailscale", searchPath)
+    .catch((error) => {
+      if (platform !== "darwin") throw error;
+      return findExecutable(basename(appPath), dirname(appPath));
+    })
+    .catch(() => {
+      throw new CliError("tailscale is not installed or not on PATH.");
+    });
   signal?.throwIfAborted();
   return new Promise((resolve, reject) => {
     const serve = args[0] === "serve";
@@ -43,7 +56,7 @@ async function execute(
       child = spawn(binary.file, args, {
         detached: true,
         stdio: ["ignore", "pipe", "pipe"],
-        env: { PATH: binary.path, HOME: env.HOME, LC_ALL: "C" },
+        env: { PATH: searchPath || "/usr/bin:/bin:/usr/sbin:/sbin", HOME: env.HOME, LC_ALL: "C" },
       });
     } catch {
       reject(failure());

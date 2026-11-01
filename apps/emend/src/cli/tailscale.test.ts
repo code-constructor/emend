@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
@@ -51,12 +51,80 @@ fi
   };
 }
 const running = { BackendState: "Running", Self: { DNSName: "Hub.Example.ts.net." } };
+async function fakeApp() {
+  const app = await fake(running);
+  const appDir = join(app.dir, "app");
+  await mkdir(appDir);
+  const appPath = join(appDir, "Tailscale");
+  await rename(join(app.dir, "tailscale"), appPath);
+  return { ...app, appPath };
+}
 test("status normalizes DNS and runs with only the minimal environment", async () => {
   const f = await fake(running);
   expect(await tailscaleSelf()).toEqual({ dnsName: "hub.example.ts.net" });
   const [call] = await f.calls();
   expect(call?.args).toEqual(["status", "--json"]);
   expect(await f.env()).toEqual({ PATH: f.dir, HOME: process.env.HOME, LC_ALL: "C" });
+});
+test.each([true, false])(
+  "darwin runs the app with the caller's filtered PATH (absolute entries: %s)",
+  async (absolute) => {
+    const app = await fakeApp();
+    const searchPath = absolute ? `${join(app.dir, "first")}:${join(app.dir, "second")}` : "";
+    const env = {
+      PATH: `.:relative:${searchPath}:`,
+      HOME: join(app.dir, "home"),
+      LC_ALL: "fr_FR.UTF-8",
+      NODE_OPTIONS: "--this-must-not-be-inherited",
+    };
+    expect(await tailscaleSelf(env, undefined, { platform: "darwin", appPath: app.appPath })).toEqual({
+      dnsName: "hub.example.ts.net",
+    });
+    expect(await app.calls()).toEqual([{ args: ["status", "--json"] }]);
+    expect(await app.env()).toEqual({
+      PATH: absolute ? searchPath : "/usr/bin:/bin:/usr/sbin:/sbin",
+      HOME: env.HOME,
+      LC_ALL: "C",
+    });
+  },
+);
+test.each([undefined, ""])("darwin uses a fixed spawn PATH when the caller's PATH is %j", async (path) => {
+  const app = await fakeApp();
+  const env = { PATH: path, HOME: join(app.dir, "home") };
+  expect(await tailscaleSelf(env, undefined, { platform: "darwin", appPath: app.appPath })).toEqual({
+    dnsName: "hub.example.ts.net",
+  });
+  expect(await app.calls()).toEqual([{ args: ["status", "--json"] }]);
+  expect(await app.env()).toEqual({ PATH: "/usr/bin:/bin:/usr/sbin:/sbin", HOME: env.HOME, LC_ALL: "C" });
+});
+test("darwin prefers tailscale on PATH over the app", async () => {
+  const app = await fakeApp();
+  const path = await fake(running);
+  expect(await tailscaleSelf(process.env, undefined, { platform: "darwin", appPath: app.appPath })).toEqual({
+    dnsName: "hub.example.ts.net",
+  });
+  expect(await path.calls()).toEqual([{ args: ["status", "--json"] }]);
+  expect(await path.env()).toEqual({ PATH: path.dir, HOME: process.env.HOME, LC_ALL: "C" });
+  await expect(app.calls()).rejects.toMatchObject({ code: "ENOENT" });
+});
+test("linux never uses the app even when it is executable", async () => {
+  const app = await fakeApp();
+  await expect(tailscaleSelf(process.env, undefined, { platform: "linux", appPath: app.appPath })).rejects.toThrow(
+    "tailscale is not installed or not on PATH.",
+  );
+  await expect(app.calls()).rejects.toMatchObject({ code: "ENOENT" });
+});
+test.each(["missing", "non-executable", "directory"])("darwin rejects a %s app binary", async (kind) => {
+  const app = await fakeApp();
+  if (kind === "non-executable") await chmod(app.appPath, 0o600);
+  else {
+    await rm(app.appPath);
+    if (kind === "directory") await mkdir(app.appPath);
+  }
+  await expect(tailscaleSelf(process.env, undefined, { platform: "darwin", appPath: app.appPath })).rejects.toThrow(
+    "tailscale is not installed or not on PATH.",
+  );
+  await expect(app.calls()).rejects.toMatchObject({ code: "ENOENT" });
 });
 test.each(["NeedsLogin", "Stopped"])("%s returns null and the CLI prints the required line", async (state) => {
   await fake({ BackendState: state });
@@ -86,6 +154,13 @@ test.each([
   expect(await tailscaleSelf()).toBeNull();
 });
 test("missing binary prints only the fixed error", async () => {
+  const app = await fakeApp();
+  await rm(app.appPath);
+  const tailscale = await import("./tailscale.ts");
+  const self = tailscale.tailscaleSelf;
+  vi.spyOn(tailscale, "tailscaleSelf").mockImplementation((env, signal) =>
+    self(env, signal, { platform: "darwin", appPath: app.appPath }),
+  );
   vi.stubEnv("PATH", ".:relative");
   const stderr: string[] = [];
   expect(
