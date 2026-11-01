@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readdir, symlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { LIMITS } from "@emend/contract";
 import { expect, test, vi } from "vitest";
 import { run } from "../main.ts";
+import * as tokens from "../state/token-file.ts";
 import { apiRequest } from "./http.ts";
 import * as discovery from "./server-client.ts";
-import { resolveTarget } from "./target.ts";
+import { readAttachmentPair, resolveTarget } from "./target.ts";
 import { commandFixture } from "./test-support.ts";
 
 const hub = { hubUrl: "https://hub.example", hubId: randomUUID(), hubName: "Synthetic hub" };
@@ -23,6 +24,80 @@ async function attached() {
   await writeFile(join(f.dir, "hub.token"), `em_${"b".repeat(43)}`);
   return f;
 }
+
+test.each(["another hub", "same fields, different bytes", "removed", "removed with token"])(
+  "target refuses an attachment %s during its credential read before any request",
+  async (change) => {
+    const f = await attached();
+    const read = tokens.readTokenFile;
+    vi.spyOn(tokens, "readTokenFile").mockImplementationOnce(async (...args) => {
+      if (change.startsWith("removed")) {
+        await rm(join(f.dir, "attach.json"));
+        if (change === "removed with token") await rm(join(f.dir, "hub.token"));
+      } else {
+        await writeFile(
+          join(f.dir, "attach.json"),
+          change === "another hub"
+            ? JSON.stringify({ ...hub, hubUrl: "https://other.example.test" })
+            : `${JSON.stringify(hub)}\n`,
+        );
+        await writeFile(join(f.dir, "hub.token"), `em_${"y".repeat(43)}`);
+      }
+      return read(...args);
+    });
+    await expect(resolveTarget(f.dir)).rejects.toThrow(
+      "the attachment changed while this command started. Run it again. Nothing was changed.",
+    );
+    expect(f.fetcher).not.toHaveBeenCalled();
+  },
+);
+
+test("target resolution preserves both values from an earlier attachment pair", async () => {
+  const f = await attached();
+  const pair = await readAttachmentPair(f.dir);
+  await writeFile(join(f.dir, "attach.json"), JSON.stringify({ ...hub, hubUrl: "https://other.example.test" }));
+  await writeFile(join(f.dir, "hub.token"), `em_${"y".repeat(43)}`);
+  const target = await resolveTarget(f.dir, pair);
+  expect(target).toEqual({ via: "hub", url: hub.hubUrl, token: `em_${"b".repeat(43)}` });
+  expect(f.fetcher).toHaveBeenCalledExactlyOnceWith(`${hub.hubUrl}/api/v1/capabilities`, expect.anything());
+});
+
+test("an A -> B -> A registration change refuses the captured B token before any request", async () => {
+  const f = await attached();
+  const path = join(f.dir, "attach.json");
+  const tokenPath = join(f.dir, "hub.token");
+  const first = { ...hub, registration: Buffer.alloc(16, 1).toString("base64url") };
+  await writeFile(path, JSON.stringify(first));
+  const read = tokens.readTokenFile;
+  const tokenRead = vi.spyOn(tokens, "readTokenFile").mockImplementationOnce(async (...args) => {
+    // Detach A, register B, and capture B's credential.
+    await rm(path);
+    await rm(tokenPath);
+    await writeFile(tokenPath, `em_${"y".repeat(43)}`);
+    await writeFile(
+      path,
+      JSON.stringify({
+        ...hub,
+        hubUrl: "https://other.example.test",
+        registration: Buffer.alloc(16, 2).toString("base64url"),
+      }),
+    );
+    const captured = await read(...args);
+    // Detach B and register A again; only A's registration id differs.
+    await rm(path);
+    await rm(tokenPath);
+    await writeFile(tokenPath, `em_${"z".repeat(43)}`);
+    await writeFile(path, JSON.stringify({ ...first, registration: Buffer.alloc(16, 3).toString("base64url") }));
+    return captured;
+  });
+  expect(await run(["feedback", randomUUID()], f.io)).toBe(1);
+  expect(f.stderr).toEqual([
+    "emend: the attachment changed while this command started. Run it again. Nothing was changed.\n",
+  ]);
+  expect(f.stdout).toEqual([]);
+  expect(tokenRead).toHaveBeenCalledOnce();
+  expect(f.fetcher).not.toHaveBeenCalled();
+});
 
 test("hub probing stops a streamed oversized capabilities body before sending a credential", async () => {
   const f = await attached();

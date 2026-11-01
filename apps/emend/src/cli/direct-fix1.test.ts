@@ -137,19 +137,22 @@ test("a stopped server leaves its private public origin for direct publish", asy
   expect(result.url).toBe(`https://review.example/r/${result.reviewId}`);
 });
 
-test("attached publish without a local server publishes locally without contacting the hub", async () => {
+test("attached publish without a local server refuses an unreachable hub without falling back", async () => {
   const f = await directFixture();
   await writeFile(
     join(f.stateDir, "attach.json"),
     JSON.stringify({ hubId: randomUUID(), hubName: "Synthetic hub", hubUrl: "https://hub.example" }),
   );
+  await writeFile(join(f.stateDir, "hub.token"), `em_${"a".repeat(43)}`, { mode: 0o600 });
   const fetcher = vi.fn(() => {
-    throw new Error("publish must stay local");
+    throw new Error("Synthetic unavailable hub");
   });
   vi.stubGlobal("fetch", fetcher);
-  const { result } = await f.publish();
-  expect(result.url).toBe(`http://127.0.0.1:3636/r/${result.reviewId}`);
-  expect(fetcher).not.toHaveBeenCalled();
+  await expect(f.publish()).rejects.toThrow(
+    "cannot reach the hub at https://hub.example: connection failed. Nothing was changed.",
+  );
+  expect(fetcher).toHaveBeenCalledOnce();
+  await expect(stat(join(f.stateDir, "emend.db"))).rejects.toMatchObject({ code: "ENOENT" });
 });
 
 test("direct wait takes a Send that arrives during its final sleep", async () => {

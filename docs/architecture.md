@@ -33,8 +33,8 @@ explicitly widens access. There is no telemetry.
 
 Agent commands (`publish`, `wait`, `feedback`, `reply` and the MCP tools) work with or without a
 running server and never start one. They use a discovered server's API, or open the same local
-state directly when discovery finds no server. Attached wait, feedback, reply and MCP tools use
-the hub; publish and pairing stay local. Only the reviewer command `emend`, explicit
+state directly when discovery finds no server. Attached publish, wait, feedback, reply and MCP tools use
+the hub; pairing a phone happens on the hub. Only the reviewer command `emend`, explicit
 `emend serve`, and the service start a server. Direct writes send no
 live event; the browser sees them on its next load. A direct wait polls every second, renewing a
 30-second database waiter every 10 seconds so a later server can show that the agent is waiting.
@@ -64,6 +64,8 @@ Attach copies existing local reviews whole, including revisions, files, threads,
 Sends and open deliveries, while retaining review ids. Repeating attach skips reviews already
 on the hub. Local copies become read-only links to the hub. Detach makes new reviews local;
 reviews already on the hub stay there. There is no two-way synchronization in the MVP.
+A copy whose outcome is unknown keeps the review read-only here and says "Run emend attach
+again"; the next attach finishes it. Only one attach runs at a time per state directory.
 
 Reviews on the hub belong to its owner. Each records its origin instance, shown as an inbox
 badge; a machine token reaches only that instance's reviews. If the hub is unreachable,

@@ -317,7 +317,7 @@ directory, mode 0600. With Tailscale, it replaces that value with the public ori
 Serve setup succeeds; a failed startup keeps the loopback URL. A successful start leaves its
 confirmed base URL there on close. Direct publish uses that saved HTTP(S) origin;
 a missing or invalid JSON record, credentials, path, query or fragment falls back to
-`http://127.0.0.1:3636`. Publish stays local even when attached until attached publishing is built.
+`http://127.0.0.1:3636`. An attached machine publishes to the hub using its machine credential.
 `revision` is a positive integer sequence, and the placement counts are nonnegative integers.
 
 ### Machines and import

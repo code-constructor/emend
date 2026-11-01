@@ -2,6 +2,7 @@ import { MAX_TAKE_WAIT_SECONDS, WaitResult } from "@emend/contract";
 import type { Io } from "../../main.ts";
 import { confirmDirect, takeDirect } from "../direct/index.ts";
 import { apiRequest, CliError, CliSignalExit, CliUsageError, printJson } from "../http.ts";
+import { movedError } from "../moved.ts";
 import { pause } from "../pause.ts";
 import { resolveTarget, type Target } from "../target.ts";
 
@@ -22,38 +23,43 @@ export async function takeFeedback(
   timeoutSeconds: number,
   options: { signal?: AbortSignal; progress?: (seconds: number) => Promise<void>; maxBytes?: number } = {},
 ): Promise<WaitResult> {
-  if (target.via === "direct")
-    return parseFeedback(await takeDirect(stateDir, reviewId, timeoutSeconds, options), reviewId);
-  const start = performance.now();
-  const deadline = start + timeoutSeconds * 1000;
-  do {
-    options.signal?.throwIfAborted();
-    const roundStart = performance.now();
-    const remaining = Math.max(0, (deadline - roundStart) / 1000);
-    if (timeoutSeconds > 0 && remaining < 0.05) {
-      await pause(remaining * 1000, options.signal);
-      break;
-    }
-    const waitSeconds = Math.min(MAX_TAKE_WAIT_SECONDS, remaining);
-    const result = parseFeedback(
-      await apiRequest(stateDir, target, `/reviews/${reviewId}/take`, {
-        method: "POST",
-        body: { waitSeconds, ...(options.maxBytes === undefined ? {} : { maxBytes: options.maxBytes }) },
-        timeoutMs: Math.ceil((waitSeconds + 10) * 1000),
-        signal: options.signal,
-      }),
+  try {
+    if (target.via === "direct")
+      return parseFeedback(await takeDirect(stateDir, reviewId, timeoutSeconds, options), reviewId);
+    const start = performance.now();
+    const deadline = start + timeoutSeconds * 1000;
+    do {
+      options.signal?.throwIfAborted();
+      const roundStart = performance.now();
+      const remaining = Math.max(0, (deadline - roundStart) / 1000);
+      if (timeoutSeconds > 0 && remaining < 0.05) {
+        await pause(remaining * 1000, options.signal);
+        break;
+      }
+      const waitSeconds = Math.min(MAX_TAKE_WAIT_SECONDS, remaining);
+      const result = parseFeedback(
+        await apiRequest(stateDir, target, `/reviews/${reviewId}/take`, {
+          method: "POST",
+          body: { waitSeconds, ...(options.maxBytes === undefined ? {} : { maxBytes: options.maxBytes }) },
+          timeoutMs: Math.ceil((waitSeconds + 10) * 1000),
+          signal: options.signal,
+        }),
+        reviewId,
+      );
+      options.signal?.throwIfAborted();
+      if (result.kind !== "pending") return result;
+      await pause(Math.min(deadline, roundStart + waitSeconds * 1000) - performance.now(), options.signal);
+      if (waitSeconds === MAX_TAKE_WAIT_SECONDS)
+        await options.progress?.(Math.floor((performance.now() - start) / 1000));
+    } while (performance.now() < deadline);
+    return {
+      kind: "pending",
       reviewId,
-    );
-    options.signal?.throwIfAborted();
-    if (result.kind !== "pending") return result;
-    await pause(Math.min(deadline, roundStart + waitSeconds * 1000) - performance.now(), options.signal);
-    if (waitSeconds === MAX_TAKE_WAIT_SECONDS) await options.progress?.(Math.floor((performance.now() - start) / 1000));
-  } while (performance.now() < deadline);
-  return {
-    kind: "pending",
-    reviewId,
-    waitedSeconds: timeoutSeconds === 0 ? 0 : Math.floor((performance.now() - start) / 1000),
-  };
+      waitedSeconds: timeoutSeconds === 0 ? 0 : Math.floor((performance.now() - start) / 1000),
+    };
+  } catch (error) {
+    return movedError(stateDir, error, { reviewId });
+  }
 }
 
 export async function confirmFeedback(stateDir: string, target: Target, deliveryId: string, stderr: Io["stderr"]) {

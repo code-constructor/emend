@@ -4,18 +4,18 @@ import { join } from "node:path";
 import { Capabilities, LIMITS, ReplyCreated } from "@emend/contract";
 import { readTokenFile } from "../state/token-file.ts";
 import { VERSION } from "../version.ts";
-import { CliError } from "./http.ts";
+import { CliError, hubFailure } from "./http.ts";
 import { readRegular } from "./publish/read.ts";
 import { discover } from "./server-client.ts";
 
 export type HttpTarget = { url: string; token: string; via: "local" | "hub" };
 export type Target = HttpTarget | { via: "direct" };
 
-function attachmentUrl(input: unknown): string {
+export function attachmentUrl(input: unknown): string {
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("invalid");
   const record = input as Record<string, unknown>;
   if (
-    Object.keys(record).length !== 3 ||
+    Object.keys(record).filter((key) => key !== "registration").length !== 3 ||
     !ReplyCreated.shape.commentId.safeParse(record.hubId).success ||
     typeof record.hubName !== "string" ||
     record.hubName.length < 1 ||
@@ -52,28 +52,84 @@ export async function localTarget(
   return { url, token: await credential(stateDir, kind), via: "local" };
 }
 
-export async function resolveTarget(stateDir: string): Promise<Target> {
+type Attachment = { hubId: string; hubName: string; hubUrl: string };
+type AttachmentPair = { attachment: Attachment; token: string };
+
+export class AttachmentChangedError extends CliError {
+  constructor() {
+    super("the attachment changed while this command started. Run it again. Nothing was changed.");
+  }
+}
+
+export class AttachmentCredentialError extends CliError {
+  constructor(
+    readonly attachment: Attachment,
+    error: unknown,
+  ) {
+    super(error instanceof CliError ? error.message : "Could not read the emend credential.");
+  }
+}
+
+async function attachmentBytes(stateDir: string): Promise<Buffer | null> {
   const path = join(stateDir, "attach.json");
-  let attached = true;
   try {
     await lstat(path);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") attached = false;
-    else throw new CliError("Could not read the emend attachment.");
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw new CliError("Could not read the emend attachment.");
   }
-  if (!attached) {
-    const server = await discover(stateDir, 5000);
-    return server ? localTarget(stateDir, server.url) : { via: "direct" };
-  }
-  let url: string;
   try {
-    url = attachmentUrl(JSON.parse((await readRegular(path, LIMITS.publicJsonBytes)).toString()));
+    return await readRegular(path, LIMITS.publicJsonBytes);
   } catch {
     throw new CliError("The emend attachment is invalid or unreadable.");
   }
-  const token = await credential(stateDir, "hub");
+}
+
+function parseAttachment(bytes: Buffer): Attachment {
+  try {
+    const record = JSON.parse(bytes.toString());
+    return { hubId: record.hubId, hubName: record.hubName, hubUrl: attachmentUrl(record) };
+  } catch {
+    throw new CliError("The emend attachment is invalid or unreadable.");
+  }
+}
+
+export async function readAttachment(stateDir: string): Promise<Attachment | null> {
+  const bytes = await attachmentBytes(stateDir);
+  return bytes === null ? null : parseAttachment(bytes);
+}
+
+export async function readAttachmentPair(stateDir: string): Promise<AttachmentPair | null> {
+  // Registration holds the attach lock, requires attach.json to be absent, and
+  // alone writes its fresh id. Equal bytes mean no registration wrote hub.token
+  // between these reads.
+  const before = await attachmentBytes(stateDir);
+  const attachment = before === null ? null : parseAttachment(before);
+  let token: string | null = null;
+  let tokenError: unknown;
+  try {
+    token = attachment ? await credential(stateDir, "hub") : null;
+  } catch (error) {
+    tokenError = error;
+  }
+  // Check even if the token read failed: a concurrent detach must not turn
+  // into invalid-state cleanup that deletes a replacement attachment.
+  let after: Buffer | null;
+  try {
+    after = await attachmentBytes(stateDir);
+  } catch {
+    throw new AttachmentChangedError();
+  }
+  if (before === null ? after !== null : after === null || !before.equals(after)) throw new AttachmentChangedError();
+  if (attachment && tokenError) throw new AttachmentCredentialError(attachment, tokenError);
+  return attachment && token ? { attachment, token } : null;
+}
+
+export async function hubCapabilities(url: string, callerSignal?: AbortSignal): Promise<Capabilities> {
+  callerSignal?.throwIfAborted();
   const failure = (reason: string) => new CliError(`cannot reach the hub at ${url}: ${reason}. Nothing was changed.`);
-  const signal = AbortSignal.timeout(5000);
+  const timeout = AbortSignal.timeout(5000);
+  const signal = callerSignal ? AbortSignal.any([callerSignal, timeout]) : timeout;
   let response: Response;
   try {
     response = await fetch(`${url}/api/v1/capabilities`, {
@@ -82,9 +138,8 @@ export async function resolveTarget(stateDir: string): Promise<Target> {
       headers: { "X-Emend-Client": `cli/${VERSION}` },
     });
   } catch (error) {
-    if (signal.aborted || (error instanceof Error && error.name === "TimeoutError")) throw failure("timed out");
-    const cause = error instanceof Error ? (error.cause as { code?: string } | undefined) : undefined;
-    throw failure(cause?.code === "ECONNREFUSED" ? "connection refused" : "connection failed");
+    callerSignal?.throwIfAborted();
+    throw hubFailure(url, error, signal);
   }
   if (!response.ok) throw failure("not an emend hub");
   try {
@@ -106,9 +161,24 @@ export async function resolveTarget(stateDir: string): Promise<Target> {
     } finally {
       reader.releaseLock();
     }
-    if (!Capabilities.safeParse(JSON.parse(Buffer.concat(chunks).toString("utf8"))).success) throw new Error("invalid");
+    return Capabilities.parse(JSON.parse(Buffer.concat(chunks).toString("utf8")));
   } catch {
+    callerSignal?.throwIfAborted();
     throw failure(signal.aborted ? "timed out" : "not an emend hub");
   }
-  return { url, token, via: "hub" };
+}
+
+export function attachedTarget({ attachment, token }: AttachmentPair): HttpTarget {
+  return { url: attachment.hubUrl, token, via: "hub" };
+}
+
+export async function resolveTarget(stateDir: string, pair?: AttachmentPair | null): Promise<Target> {
+  if (pair === undefined) pair = await readAttachmentPair(stateDir);
+  if (!pair) {
+    const server = await discover(stateDir, 5000);
+    return server ? localTarget(stateDir, server.url) : { via: "direct" };
+  }
+  const target = attachedTarget(pair);
+  await hubCapabilities(target.url);
+  return target;
 }

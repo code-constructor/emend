@@ -3,7 +3,7 @@ import { PairingCreated } from "@emend/contract";
 import type { Io } from "../../main.ts";
 import { apiRequest, CliError } from "../http.ts";
 import { ensureServer } from "../server-client.ts";
-import { localTarget } from "../target.ts";
+import { localTarget, readAttachment } from "../target.ts";
 
 export async function openBrowser(url: string, env = process.env, timeoutMs = 5_000): Promise<boolean> {
   if (process.platform === "linux" && !env.DISPLAY && !env.WAYLAND_DISPLAY) return false;
@@ -29,6 +29,17 @@ export async function openBrowser(url: string, env = process.env, timeoutMs = 5_
   });
 }
 export async function openCommand(stateDir: string, io: Io) {
+  const attachment = await readAttachment(stateDir);
+  if (attachment) {
+    let opened = false;
+    try {
+      opened = await (io.openUrl ?? openBrowser)(attachment.hubUrl);
+    } catch {
+      /* Print the hub URL. */
+    }
+    io.stdout(opened ? "Opening emend in your browser.\n" : `${attachment.hubUrl}\n`);
+    return;
+  }
   let url: string;
   try {
     ({ url } = await ensureServer(stateDir));

@@ -5,11 +5,11 @@ import type { Io } from "../../main.ts";
 import { publishDirect } from "../direct/index.ts";
 import { escapeReference } from "../escape.ts";
 import { apiRequest, CliError, printJson, publishAnswerIncomplete } from "../http.ts";
+import { movedError, refuseUncopiedReview } from "../moved.ts";
 import { GitFolderRead, inside, readRegular } from "../publish/read.ts";
 import { type PublishOptions, publishContext, resolvePublish } from "../publish/resolve.ts";
 import { upload } from "../publish/upload.ts";
-import { discover } from "../server-client.ts";
-import { localTarget } from "../target.ts";
+import { readAttachmentPair, resolveTarget } from "../target.ts";
 
 export function parsePublishArgs(args: string[]): PublishOptions {
   const opts: Partial<PublishOptions> = {};
@@ -88,29 +88,48 @@ export async function publishCommand(stateDir: string, args: string[], io: Io, c
     (line) => warnings.push(line),
     context,
   );
-  // Publish and pairing deliberately stay local until attached publishing exists.
-  const server = await discover(stateDir, 5000);
-  const target = server ? await localTarget(stateDir, server.url) : { via: "direct" as const };
+  const pair = await readAttachmentPair(stateDir);
+  const localReviewId = pair
+    ? await refuseUncopiedReview(
+        stateDir,
+        {
+          reviewId: options.review,
+          keyFor: (id) => collected.forInstance(id).reviewKey,
+        },
+        pair.attachment.hubUrl,
+      )
+    : undefined;
+  const target = await resolveTarget(stateDir, pair);
   let response: unknown;
-  if (target.via === "direct") response = await publishDirect(stateDir, collected);
-  else {
-    let instanceId: string;
-    try {
-      const instance = JSON.parse(
-        (await readRegular(join(stateDir, "instance.json"), LIMITS.publicJsonBytes)).toString(),
-      );
-      if (typeof instance.id !== "string" || !/^[a-f0-9-]{36}$/i.test(instance.id)) throw new Error("invalid");
-      instanceId = instance.id;
-    } catch {
-      throw new CliError("invalid emend instance");
+  try {
+    if (target.via === "direct") response = await publishDirect(stateDir, collected);
+    else {
+      let instanceId: string;
+      try {
+        const instance = JSON.parse(
+          (await readRegular(join(stateDir, "instance.json"), LIMITS.publicJsonBytes)).toString(),
+        );
+        if (typeof instance.id !== "string" || !/^[a-f0-9-]{36}$/i.test(instance.id)) throw new Error("invalid");
+        instanceId = instance.id;
+      } catch {
+        throw new CliError("invalid emend instance");
+      }
+      const request = collected.forInstance(instanceId);
+      if (localReviewId) request.reviewId = localReviewId;
+      await upload(stateDir, target, collected.blobs);
+      response = await apiRequest(stateDir, target, "/publish", {
+        method: "POST",
+        body: request,
+        timeoutMs: publishTimeoutMs(request.files),
+      });
     }
-    const request = collected.forInstance(instanceId);
-    await upload(stateDir, target, collected.blobs);
-    response = await apiRequest(stateDir, target, "/publish", {
-      method: "POST",
-      body: request,
-      timeoutMs: publishTimeoutMs(request.files),
-    });
+  } catch (error) {
+    return movedError(
+      stateDir,
+      error,
+      { reviewId: options.review, keyFor: (id) => collected.forInstance(id).reviewKey },
+      true,
+    );
   }
   const result = PublishResponse.safeParse(response);
   if (!result.success) throw new CliError(publishAnswerIncomplete);

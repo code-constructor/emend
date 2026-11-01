@@ -20,7 +20,9 @@ export async function run(argv: string[], io: Io): Promise<number> {
     io.stdout(`Usage:
   emend                         Open the review inbox
   emend serve [--tailscale]      Run the local server
-  emend pair                    Pair a device
+  emend pair [--machine]        Pair a device or machine
+  emend attach <link>            Attach this machine to a hub
+  emend detach                   Detach this machine
   emend devices [--revoke <id>]  List or revoke devices
   emend publish --manifest <file> [--review <id>] [--key <name>]
   emend wait <review> [--timeout <seconds>]
@@ -37,10 +39,16 @@ export async function run(argv: string[], io: Io): Promise<number> {
     io.stdout(`emend ${VERSION}\n`);
     return 0;
   }
-  if (["wait", "feedback", "reply", "mcp", "service", "skills", "pair", "devices"].includes(argv[0] ?? "")) {
+  if (
+    ["wait", "feedback", "reply", "mcp", "service", "skills", "pair", "devices", "attach", "detach"].includes(
+      argv[0] ?? "",
+    )
+  ) {
     const { CliUsageError, CliSignalExit, errorLine } = await import("./cli/http.ts");
     try {
       const commands = {
+        attach: () => import("./cli/commands/attach.ts").then((m) => m.attachCommand),
+        detach: () => import("./cli/commands/detach.ts").then((m) => m.detachCommand),
         pair: () => import("./cli/commands/pair.ts").then((m) => m.pairCommand),
         devices: () => import("./cli/commands/devices.ts").then((m) => m.devicesCommand),
         wait: () => import("./cli/commands/wait.ts").then((m) => m.waitCommand),
