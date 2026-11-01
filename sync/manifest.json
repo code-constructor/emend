@@ -3,7 +3,7 @@
   "surfaces": [
     {
       "name": "review-wording",
-      "self": ["skills/emend-review/**"],
+      "self": ["plugin/skills/emend-review/**"],
       "counterpart": ["skills/hunk-review/SKILL.md"]
     },
     {
@@ -13,7 +13,7 @@
     },
     {
       "name": "modes-outcomes",
-      "self": ["packages/contract/src/send.ts", "packages/contract/src/thread.ts", "skills/emend-feedback/**"],
+      "self": ["packages/contract/src/send.ts", "packages/contract/src/thread.ts", "plugin/skills/emend-feedback/**"],
       "counterpart": ["extension/review-plan/go.ts", "skills/hunk-handle-notes/SKILL.md"]
     },
     {

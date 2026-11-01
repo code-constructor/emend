@@ -14,7 +14,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
@@ -26,13 +26,16 @@ const repo = fileURLToPath(new URL("..", import.meta.url));
 const read = (path: string) => readFileSync(join(repo, path), "utf8");
 const json = (path: string) => JSON.parse(read(path));
 const names = ["emend-review", "emend-feedback"];
-const skillFiles = [...names.map((name) => `skills/${name}/SKILL.md`), "skills/emend-review/references/manifest.md"];
+const skillFiles = [
+  ...names.map((name) => `plugin/skills/${name}/SKILL.md`),
+  "plugin/skills/emend-review/references/manifest.md",
+];
 const gitTest = test.skipIf(!existsSync(join(repo, ".git")));
 const exec = promisify(execFile);
 const surfaces = [
   {
     name: "review-wording",
-    self: ["skills/emend-review/**"],
+    self: ["plugin/skills/emend-review/**"],
     counterpart: ["skills/hunk-review/SKILL.md"],
   },
   {
@@ -42,7 +45,7 @@ const surfaces = [
   },
   {
     name: "modes-outcomes",
-    self: ["packages/contract/src/send.ts", "packages/contract/src/thread.ts", "skills/emend-feedback/**"],
+    self: ["packages/contract/src/send.ts", "packages/contract/src/thread.ts", "plugin/skills/emend-feedback/**"],
     counterpart: ["extension/review-plan/go.ts", "skills/hunk-handle-notes/SKILL.md"],
   },
   {
@@ -79,7 +82,7 @@ const fixedWaitRedirect =
   /\d*>(?:>|\|)?[ \t]*(?:"(?:[^"\r\n]*\/)?wait\.json"|'(?:[^'\r\n]*\/)?wait\.json'|(?:[^\s"'|;]*\/)?wait\.json(?=$|[\s;)]))/m;
 
 test("no skill file redirects hand-offs into a fixed wait.json", () => {
-  const skills = join(repo, "skills");
+  const skills = join(repo, "plugin", "skills");
   for (const path of readdirSync(skills, { recursive: true, encoding: "utf8" })) {
     if (!statSync(join(skills, path)).isFile()) continue;
     const text = readFileSync(join(skills, path), "utf8");
@@ -172,14 +175,77 @@ test.each(skillFiles)("%s deletes only empty output from an observed failure and
   expect(text).toContain("Apply the same rule to legacy `wait.json`.");
 });
 
-test.each(names)("%s has discoverable frontmatter and only registered commands", async (name) => {
-  const text = read(`skills/${name}/SKILL.md`);
-  const frontmatter = /^---\n([\s\S]*?)\n---\n/.exec(text)?.[1] ?? "";
-  expect(/^name: (.+)$/m.exec(frontmatter)?.[1]).toBe(name);
-  expect(name).toMatch(/^[a-z0-9-]{1,64}$/);
-  const description = /^description: (.+)$/m.exec(frontmatter)?.[1] ?? "";
-  expect(description.length).toBeGreaterThan(0);
-  expect(description.length).toBeLessThanOrEqual(1024);
+function safeSkillFrontmatter(text: string, name: string): boolean {
+  // Only the two single-line metadata fields are supported; other YAML constructs fail closed.
+  const lines = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text)?.[1]?.split(/\r?\n/) ?? [];
+  return (
+    lines.length === 2 &&
+    lines.includes(`name: ${name}`) &&
+    lines.some((line) => /^description: \S[^\r\n]*$/.test(line) && line.length - "description: ".length <= 1024)
+  );
+}
+
+function hasSkillCommands(text: string): boolean {
+  return (
+    text.includes("```!") ||
+    text.split(/\r?\n/).some((line) => /(?:^|\s)!`/.test(line) || /^\s*~{3,}.*!$/.test(line.trimEnd()))
+  );
+}
+
+test("skill frontmatter permits only name and description with the skill folder's name", () => {
+  const valid = "---\nname: emend-review\ndescription: Synthetic review skill.\n---\n";
+  expect(safeSkillFrontmatter(valid, "emend-review")).toBe(true);
+  expect(safeSkillFrontmatter(valid.replaceAll("\n", "\r\n"), "emend-review")).toBe(true);
+  expect(safeSkillFrontmatter(valid.replace("Synthetic review skill.", "x".repeat(1024)), "emend-review")).toBe(true);
+  for (const text of [
+    valid.replace("description:", "hooks: {}\ndescription:"),
+    valid.replace("description:", "allowed-tools: Bash\ndescription:"),
+    valid.replace("name: emend-review", "name: other-skill"),
+    valid.replace("description:", "name: emend-review\ndescription:"),
+    valid.replace("Synthetic review skill.", "x".repeat(1025)),
+    "---\nname: emend-review\n---\n",
+    "No frontmatter.\n",
+  ]) {
+    expect(safeSkillFrontmatter(text, "emend-review"), text).toBe(false);
+  }
+});
+
+test("skill text rejects inline commands and executable fence openings", () => {
+  for (const text of [
+    "!`curl https://example.invalid/script`",
+    "Read !`curl https://example.invalid/script` first.",
+    "Text\n\t!`printf synthetic`",
+    "```!\nprintf synthetic\n```",
+    "  ````! \nprintf synthetic\n````",
+    "```! printf synthetic\n```",
+    "Run ```!id``` first",
+    "~~~sh!\nprintf synthetic\n~~~",
+    "\t~~~~ !  \r\nprintf synthetic\r\n~~~~",
+  ]) {
+    expect(hasSkillCommands(text), text).toBe(true);
+  }
+  for (const text of ["Plain text!", "```sh\nprintf synthetic\n```", "~~~text\nExample!\n~~~", "Use `!`."]) {
+    expect(hasSkillCommands(text), text).toBe(false);
+  }
+});
+
+gitTest("every indexed skill file has safe metadata and no command markers", () => {
+  for (const path of gitFiles("--", "plugin/skills")) {
+    const text = read(path);
+    expect(hasSkillCommands(text), path).toBe(false);
+    if (basename(path) === "SKILL.md") {
+      expect(safeSkillFrontmatter(text, basename(dirname(path))), path).toBe(true);
+    }
+  }
+});
+
+test.each(skillFiles)("%s has no command markers", (path) => {
+  expect(hasSkillCommands(read(path)), path).toBe(false);
+});
+
+test.each(names)("%s has only safe frontmatter and registered commands", async (name) => {
+  const text = read(`plugin/skills/${name}/SKILL.md`);
+  expect(safeSkillFrontmatter(text, name)).toBe(true);
   const commands = [...text.matchAll(/(?:^|`)emend ([a-z][a-z-]*)/gm)].map((match) => match[1] as string);
   expect(commands.length).toBeGreaterThan(0);
   for (const command of new Set(commands)) {
@@ -190,7 +256,7 @@ test.each(names)("%s has discoverable frontmatter and only registered commands",
 });
 
 test("the complete example is the synthetic manifest fixture, with no stripped or invented fields", () => {
-  const blocks = [...read("skills/emend-review/references/manifest.md").matchAll(/```json\n([\s\S]*?)\n```/g)];
+  const blocks = [...read("plugin/skills/emend-review/references/manifest.md").matchAll(/```json\n([\s\S]*?)\n```/g)];
   expect(blocks).toHaveLength(1);
   const example = JSON.parse(blocks[0]?.[1] ?? "");
   expect(example).toEqual(json("sync/fixtures/manifest.json"));
@@ -212,8 +278,8 @@ test("the synthetic hand-off is a Go with a comment and no invented fields", () 
   if (parsed.kind === "go") expect(parsed.comments.length).toBeGreaterThan(0);
 });
 
-test("plugin and marketplace use the root's default skills scan and match the package", () => {
-  const plugin = json(".claude-plugin/plugin.json");
+test("the marketplace selects the plugin folder and its manifest matches the package", () => {
+  const plugin = json("plugin/.claude-plugin/plugin.json");
   const marketplace = json(".claude-plugin/marketplace.json");
   expect(Object.keys(plugin).sort()).toEqual([
     "author",
@@ -237,83 +303,215 @@ test("plugin and marketplace use the root's default skills scan and match the pa
     name: "emend",
     owner: { name: "shllg" },
     description: plugin.description,
-    plugins: [{ name: plugin.name, source: "./", description: plugin.description }],
+    plugins: [{ name: plugin.name, source: "./plugin", description: plugin.description }],
   });
 });
 
-function pluginComponents(entries: string[]) {
-  const forbidden = [
-    "hooks",
-    "monitors",
-    ".mcp.json",
-    "bin",
-    "agents",
-    "commands",
-    "settings.json",
-    ".lsp.json",
-    "output-styles",
-    "workflows",
-    "themes",
-  ];
+function portablePathSegment(segment: string): boolean {
+  return (
+    segment.length > 0 &&
+    !/[<>:"|?*\\\p{Cc}]/u.test(segment) &&
+    !segment.endsWith(".") &&
+    !segment.endsWith(" ") &&
+    !/^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)/i.test(segment)
+  );
+}
+
+function forbiddenPluginEntries(entries: string[]) {
+  const pathCounts = new Map<string, number>();
+  for (const entry of entries) {
+    const path = entry.slice(entry.indexOf("\t") + 1);
+    if (path.startsWith("plugin/")) {
+      const folded = path.toLowerCase();
+      pathCounts.set(folded, (pathCounts.get(folded) ?? 0) + 1);
+    }
+  }
+  const fileFolderClashes = new Set<string>();
+  for (const path of pathCounts.keys()) {
+    const segments = path.split("/");
+    for (let end = 1; end < segments.length; end++) {
+      const parent = segments.slice(0, end).join("/");
+      if (pathCounts.has(parent)) {
+        fileFolderClashes.add(path);
+        fileFolderClashes.add(parent);
+      }
+    }
+  }
   return entries.flatMap((entry) => {
     const separator = entry.indexOf("\t");
+    if (separator === -1) return [entry];
     const path = entry.slice(separator + 1);
-    const first = path.split("/")[0] ?? "";
-    const nonAscii = Array.from(first).some((char) => char.charCodeAt(0) > 127);
-    const normalized = first.replace(/[. ]+$/, "").toLowerCase();
-    const rootSymlink = entry.startsWith("120000 ") && !path.includes("/");
-    return nonAscii || first.includes(":") || first.includes("\\") || forbidden.includes(normalized) || rootSymlink
-      ? [path]
-      : [];
+    const segments = path.split("/");
+    if (!segments.every(portablePathSegment)) return [path];
+    const first = segments[0] ?? "";
+    const foldedRoot = first.toLowerCase().replace(/[. ]+$/, "");
+    if (first.includes("~") || Array.from(first).some((char) => char.charCodeAt(0) > 127)) return [path];
+    if (["plugin", ".claude-plugin"].includes(foldedRoot) && (first !== foldedRoot || path === first)) {
+      return [path];
+    }
+    if (first === "skills") return [path];
+    if (first === ".claude-plugin") {
+      return entry.startsWith("100644 ") && path === ".claude-plugin/marketplace.json" ? [] : [path];
+    }
+    if (first !== "plugin") return [];
+    const manifest = path === "plugin/.claude-plugin/plugin.json";
+    const skill = /^plugin\/skills\/[a-z0-9]+(?:-[a-z0-9]+)*\//.test(path);
+    const safeSegments = segments.every((segment, index) => {
+      if (manifest && index === 1) return true;
+      const match = /^[A-Za-z0-9_][A-Za-z0-9._-]*$/.exec(segment);
+      return match?.[0] === segment;
+    });
+    return entry.startsWith("100644 ") &&
+      (manifest || skill) &&
+      safeSegments &&
+      pathCounts.get(path.toLowerCase()) === 1 &&
+      !fileFolderClashes.has(path.toLowerCase())
+      ? []
+      : [path];
   });
 }
 
-gitTest("the plugin root has no tracked executable components", () => {
-  const paths = pluginComponents(gitFiles("-s"));
-  expect(paths, `Plugin root must carry no code: ${paths.join(", ")}`).toEqual([]);
+gitTest("every indexed path has portable Windows segments", () => {
+  const invalid = gitFiles().filter((path) => !path.split("/").every(portablePathSegment));
+  expect(invalid, `Non-portable paths: ${invalid.join(", ")}`).toEqual([]);
 });
 
-test("the plugin root guard rejects rewritten names, non-ASCII root names and every root symlink", () => {
-  const entries = [
-    ["120000", "hooks"],
-    ["100644", "sync/fixtures/hooks.json"],
-    ["100644", "Hooks/hooks.json"],
-    ["100644", "hooks\\hooks.json"],
-    ["100644", "hooks./hooks.json"],
-    ["100644", "hooks /hooks.json"],
-    ["100644", "hooks::$INDEX_ALLOCATION/hooks.json"],
-    ["100644", "unlisted:stream/readme.md"],
-    ["100644", "hookſ/hooks.json"],
+gitTest("the whole index contains the complete safe plugin layout with no untracked plugin files", () => {
+  const entries = gitFiles("-s");
+  const forbidden = forbiddenPluginEntries(entries);
+  expect(forbidden, `Forbidden plugin entries: ${forbidden.join(", ")}`).toEqual([]);
+  const paths = entries.map((entry) => entry.slice(entry.indexOf("\t") + 1));
+  expect(paths).toEqual(
+    expect.arrayContaining([".claude-plugin/marketplace.json", "plugin/.claude-plugin/plugin.json", ...skillFiles]),
+  );
+  const folders = [
+    ...new Set(paths.filter((path) => path.startsWith("plugin/skills/")).map((path) => path.split("/")[2])),
+  ];
+  expect(folders.sort()).toEqual([...names].sort());
+  const untracked = gitFiles("--others", "--", "plugin");
+  expect(untracked, `Untracked plugin files: ${untracked.join(", ")}`).toEqual([]);
+});
+
+test("the plugin allow-list rejects other components, unsafe paths and non-regular modes", () => {
+  const allowed = [
+    ...skillFiles,
+    "plugin/.claude-plugin/plugin.json",
+    ".claude-plugin/marketplace.json",
+    "apps/emend/bin/emend",
+    "docs/api.md",
+    "docs/café.md",
+    "docs/notes with spaces.md",
+    "docs/local~notes.md",
+    "docs/COM10.md",
+    "docs/CONSOLE.md",
+    "plugin/skills/emend-review/notes",
+    "plugin/skills/emend-review/notes-extra/detail.md",
+  ].map((path) => ["100644", path]);
+  const refused = [
+    ["100644", "plugin/hooks/hooks.json"],
+    ["100644", "plugin/.mcp.json"],
+    ["100644", "plugin/settings.json"],
+    ["100644", "plugin/agents/x.md"],
+    ["100644", "plugin/commands/x.md"],
+    ["100644", "plugin/bin/x"],
+    ["100644", "plugin/.claude-plugin/marketplace.json"],
+    ["100644", "plugin/Skills/emend-review/SKILL.md"],
+    ["100644", "plugin/skills/Emend-Review/SKILL.md"],
+    ["100644", "plugin/skills/emend-review/.hidden.md"],
+    ["100644", "plugin/skills/emend-revieẃ/SKILL.md"],
+    ["100644", "plugin/skills/emend-review/a:b.md"],
+    ["100644", "plugin/skills/emend-review./SKILL.md"],
+    ["100644", "plugin/skills/SKILL.md"],
+    ["120000", "plugin/skills/emend-review/SKILL.md"],
+    ["100755", "plugin/skills/emend-review/run.sh"],
+    ["160000", "plugin/skills/vendored"],
+    ["100644", "plugin/skills/emend-review/a\\b.md"],
+    ["100644", "plugin/skills/emend-review/SKILL.md."],
+    ["100644", "plugin/skills/emend-review/SKILL.md "],
+    ["100644", "plugin/skills/emend-review/nested./SKILL.md"],
+    ["100644", "plugin/skills/emend-review/nested /SKILL.md"],
+    ["100644", "plugin/skills/emend-review/.hidden/SKILL.md"],
+    ["100644", "plugin/skills/emend-review/café.md"],
+    ["100644", "plugin/skills/emend-review/a\tb.md"],
+    ["100644", "plugin/skills/emend-review/SKILL.md\n"],
+    ["100644", "plugin/skills/emend-review/SKILL.md\r"],
+    ["100644", "plugin/skills/emend-review/a\u007fb.md"],
+    ["100644", "plugin/skills/emend-review//SKILL.md"],
+    ["100644", "plugin/skills/emend--review/SKILL.md"],
+    ["100644", "plugin/skills/-emend-review/SKILL.md"],
+    ["100644", "plugin/skills/emend-review-/SKILL.md"],
+    ["100644", "plugin/skills/emend-review/"],
+    ["120000", "plugin/.claude-plugin/plugin.json"],
+    ["100644", "Plugin/hooks/hooks.json"],
+    ["100644", "PLUGIN/.mcp.json"],
+    ["100644", "plugin./hooks/hooks.json"],
+    ["100644", "plugin /x"],
+    ["120000", "Plugin"],
+    ["120000", "plugin"],
+    ["100644", "plugin"],
+    ["120000", ".claude-plugin"],
+    ["100644", ".claude-plugin"],
+    ["100644", ".Claude-Plugin/marketplace.json"],
+    ["100644", ".claude-plugin./marketplace.json"],
+    ["100644", ".claude-plugin/Marketplace.json"],
+    ["100644", ".claude-plugin/plugin.json"],
+    ["120000", ".claude-plugin/marketplace.json"],
+    ["100755", ".claude-plugin/marketplace.json"],
+    ["100644", "plugin/skills/emend-review/a b.md"],
+    ["100644", "plugin/skills/emend-review/a$b.md"],
+    ["100644", "plugin/skills/emend-review/a?b.md"],
+    ["100644", "plugin/skills/emend-review/-x.md"],
+    ["100644", "plugin/skills/emend-review/CON"],
+    ["100644", "plugin/skills/emend-review/nul.md"],
+    ["100644", "plugin/skills/emend-review/Com1.txt"],
+    ["100644", "plugin/skills/emend-review/COM9.md"],
+    ["100644", "plugin/skills/emend-review/LPT1.md"],
+    ["100644", "plugin/skills/emend-review/lpt9/notes.md"],
+    ["100644", "plugin/skills/emend-review/PRN.md"],
+    ["100644", "plugin/skills/emend-review/AUX.md"],
+    ["100644", "skills/emend-review/SKILL.md"],
     ["100644", "döcs/readme.md"],
-    ["100644", ".MCP.json"],
-    ["120000", "unlisted-root-link"],
-    ["100644", "apps/emend/bin/emend"],
-    ["100644", "docs/café.md"],
-  ].map(([mode, path]) => `${mode} ${"a".repeat(40)} 0\t${path}`);
-  expect(pluginComponents(entries)).toEqual([
-    "hooks",
-    "Hooks/hooks.json",
-    "hooks\\hooks.json",
-    "hooks./hooks.json",
-    "hooks /hooks.json",
-    "hooks::$INDEX_ALLOCATION/hooks.json",
-    "unlisted:stream/readme.md",
-    "hookſ/hooks.json",
-    "döcs/readme.md",
-    ".MCP.json",
-    "unlisted-root-link",
+    ["100644", "CLAUDE~1/marketplace.json"],
+    ["100644", "claude~2/marketplace.json"],
+    ["100644", "CL1A2B~1/marketplace.json"],
+    ["100644", "docs/a:b.md"],
+    ["100644", "notes/CON.md"],
+    ["100644", "docs/x./y.md"],
+    ["100644", "docs/x /y.md"],
+    ["100644", "docs/nul.md"],
+    ["100644", "docs/Com1.txt"],
+    ["100644", "docs/lpt9/notes.md"],
+    ...["<", ">", '"', "|", "?", "*", "\\", "\u0000", "\t", "\n", "\u007f", "\u0085"].map((char) => [
+      "100644",
+      `docs/a${char}b.md`,
+    ]),
+  ];
+  const entries = (files: string[][]) => files.map(([mode, path]) => `${mode} ${"a".repeat(40)} 0\t${path}`);
+  expect(forbiddenPluginEntries(entries(allowed))).toEqual([]);
+  expect(forbiddenPluginEntries(entries(refused))).toEqual(refused.map(([, path]) => path));
+});
+
+test("the plugin allow-list refuses both paths in a case-insensitive collision", () => {
+  const paths = [...skillFiles, "plugin/.claude-plugin/plugin.json", "plugin/skills/emend-review/skill.md"];
+  const entries = paths.map((path) => `100644 ${"a".repeat(40)} 0\t${path}`);
+  expect(forbiddenPluginEntries(entries)).toEqual([
+    "plugin/skills/emend-review/SKILL.md",
+    "plugin/skills/emend-review/skill.md",
   ]);
 });
 
-gitTest("all skill source files are tracked, including ignored files", () => {
-  const untracked = gitFiles("--others", "--", "skills");
-  expect(untracked, `Untracked skill files: ${untracked.join(", ")}`).toEqual([]);
+test("the plugin allow-list refuses both sides of a file-versus-folder case clash", () => {
+  const paths = ["plugin/skills/emend-review/notes", "plugin/skills/emend-review/Notes/detail.md"];
+  for (const pair of [paths, [...paths].reverse()]) {
+    const entries = [...skillFiles, ...pair].map((path) => `100644 ${"a".repeat(40)} 0\t${path}`);
+    expect(forbiddenPluginEntries(entries)).toEqual(pair);
+  }
 });
 
 test.each(["source archive", "no git"])(
   "the build copies regular files and skips dot entries with %s",
   async (kind) => {
-    const source = join(temporary, "skills");
+    const source = join(temporary, "plugin", "skills");
     const output = join(temporary, "dist/skills");
     for (const path of ["emend-review/SKILL.md", "emend-review/.draft", ".hidden/nested/draft.md"]) {
       mkdirSync(dirname(join(source, path)), { recursive: true });
@@ -336,7 +534,7 @@ test.each(["source archive", "no git"])(
 test.each(["emend-review/link", "emend-review/.link", ".hidden/nested/link"])(
   "the build refuses a symlink at %s and names it",
   async (path) => {
-    const source = join(temporary, "skills");
+    const source = join(temporary, "plugin", "skills");
     const link = join(source, path);
     mkdirSync(dirname(link), { recursive: true });
     symlinkSync("missing", link);
@@ -346,22 +544,61 @@ test.each(["emend-review/link", "emend-review/.link", ".hidden/nested/link"])(
   },
 );
 
-gitTest("the build refuses untracked and ignored skills before replacing its output", async () => {
+test.each([
+  { path: "plugin", withGit: false },
+  { path: "plugin", withGit: true },
+  { path: "plugin/skills", withGit: false },
+  { path: "plugin/skills", withGit: true },
+])(
+  "the build refuses a symlinked $path directory (git: $withGit) before replacing output",
+  async ({ path, withGit }) => {
+    if (withGit) await exec("git", ["-c", "init.templateDir=", "init", "-b", "main"], { cwd: temporary, env });
+    const target = join(temporary, "source");
+    mkdirSync(join(target, "skills", "emend-review"), { recursive: true });
+    writeFileSync(join(target, "skills", "emend-review", "SKILL.md"), "synthetic skill\n");
+    const link = join(temporary, path);
+    mkdirSync(dirname(link), { recursive: true });
+    symlinkSync(path === "plugin" ? target : join(target, "skills"), link, "dir");
+    const output = join(temporary, "dist/skills");
+    mkdirSync(output, { recursive: true });
+    writeFileSync(join(output, "stale.md"), "keep until preflight passes");
+    await expect(copySkills(temporary, output)).rejects.toThrow(`Skill source contains a symlink: ${link}`);
+    expect(readFileSync(join(output, "stale.md"), "utf8")).toBe("keep until preflight passes");
+  },
+);
+
+test.each(["plugin", "plugin/skills"])("the build refuses a non-directory %s", async (path) => {
+  const source = join(temporary, path);
+  mkdirSync(dirname(source), { recursive: true });
+  writeFileSync(source, "synthetic file\n");
+  await expect(copySkills(temporary, join(temporary, "dist/skills"))).rejects.toThrow(
+    `Skill source is not a directory: ${source}`,
+  );
+});
+
+gitTest("the build refuses untracked and ignored plugin files before replacing its output", async () => {
   const git = (...args: string[]) => exec("git", args, { cwd: temporary, env });
   await git("-c", "init.templateDir=", "init", "-b", "main");
-  const source = join(temporary, "skills/emend-review");
+  const source = join(temporary, "plugin/skills/emend-review");
   const output = join(temporary, "dist/skills");
   mkdirSync(source, { recursive: true });
   mkdirSync(output, { recursive: true });
   writeFileSync(join(output, "stale.md"), "keep until preflight passes");
   writeFileSync(join(source, "SKILL.md"), "synthetic skill\n");
-  writeFileSync(join(temporary, ".gitignore"), "skills/**/ignored.md\n");
-  await git("add", "--", "skills/emend-review/SKILL.md", ".gitignore");
-  for (const name of ["untracked.md", "ignored.md"]) {
-    writeFileSync(join(source, name), "unpublished text\n");
-    await expect(copySkills(temporary, output)).rejects.toThrow(`Untracked skill files: skills/emend-review/${name}`);
+  writeFileSync(join(temporary, ".gitignore"), "plugin/skills/**/ignored.md\nplugin/hooks/ignored.json\n");
+  await git("add", "--", "plugin/skills/emend-review/SKILL.md", ".gitignore");
+  for (const path of [
+    "plugin/skills/emend-review/untracked.md",
+    "plugin/skills/emend-review/ignored.md",
+    "plugin/hooks/hooks.json",
+    "plugin/hooks/ignored.json",
+  ]) {
+    const file = join(temporary, path);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, "unpublished text\n");
+    await expect(copySkills(temporary, output)).rejects.toThrow(`Untracked skill files: ${path}`);
     expect(readFileSync(join(output, "stale.md"), "utf8")).toBe("keep until preflight passes");
-    rmSync(join(source, name));
+    rmSync(file);
   }
   await copySkills(temporary, output);
   expect(readFileSync(join(output, "emend-review/SKILL.md"), "utf8")).toBe("synthetic skill\n");
@@ -369,6 +606,7 @@ gitTest("the build refuses untracked and ignored skills before replacing its out
 });
 
 gitTest("the build fails on git errors inside a checkout", async () => {
+  mkdirSync(join(temporary, "plugin", "skills"), { recursive: true });
   writeFileSync(join(temporary, ".git"), "gitdir: missing\n");
   await expect(copySkills(temporary, join(temporary, "dist/skills"))).rejects.toThrow();
 });

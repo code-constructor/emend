@@ -5,7 +5,7 @@
   "plugins": [
     {
       "name": "emend",
-      "source": "./",
+      "source": "./plugin",
       "description": "Local-first review for work done by coding agents: plans, docs and code."
     }
   ]

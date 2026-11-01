@@ -23,8 +23,10 @@ The work queue is `tasks/`. When asked "what now?", "what's next?" or similar, f
 - `packages/contract`: zod schemas for the API, the review manifest, file roles, capabilities.
 - `packages/core`: pure logic (Markdown to safe blocks, block ids, placing comments, topics). No
   Node-only and no browser-only API; WebCrypto is fine.
-- `skills/`: the review skills. `docs/api.md`: the v1 contract. `sync/`: surfaces shared with
-  hunk-review-skill, and synthetic fixtures. `tasks/`: the work queue.
+- `plugin/`: the Claude Code plugin. `plugin/skills/` holds the review skills, their only copy;
+  `plugin/` holds nothing else but `.claude-plugin/plugin.json`. `docs/api.md`: the v1 contract.
+  `sync/`: surfaces shared with hunk-review-skill, and synthetic fixtures. `tasks/`: the work
+  queue.
 
 ## Commands
 

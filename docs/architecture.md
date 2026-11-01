@@ -13,7 +13,7 @@ workspace scaffold implements the version command and a minimal browser shell.
 | `apps/web` | The React and Vite browser app. |
 | `packages/contract` | Shared schemas for the API, review manifest, file roles and capabilities. |
 | `packages/core` | Pure logic for safe Markdown blocks, block ids, comment placement and topics. |
-| `skills` | Creating reviews and handling reviewer feedback. |
+| `plugin` | The Claude Code plugin. `plugin/skills` holds the skills for creating reviews and handling reviewer feedback. |
 | `docs` | The versioned API contract and architecture. |
 | `sync` | Surfaces shared with hunk-review-skill and synthetic fixtures. |
 | `tasks` | The ordered work queue. |
