@@ -1,32 +1,40 @@
 import { GoMode, MODE_LABELS } from "@emend/contract";
-import { useId } from "react";
+import { RadioGroup } from "../ui/RadioGroup.tsx";
+import { Select } from "../ui/Select.tsx";
+
+const options = GoMode.options.map((mode) => ({ value: mode, label: MODE_LABELS[mode] }));
 
 export function ModePicker({
   value,
   onChange,
   disabled,
+  cards = false,
 }: {
   value: GoMode;
   onChange: (mode: GoMode) => void;
   disabled?: boolean;
+  cards?: boolean;
 }) {
-  const id = useId();
+  if (cards)
+    return (
+      <fieldset disabled={disabled} className="m-0 min-w-0 border-0 p-0">
+        <RadioGroup
+          label="Mode"
+          variant="cards"
+          value={value}
+          onChange={(value) => onChange(GoMode.parse(value))}
+          options={options}
+        />
+      </fieldset>
+    );
   return (
-    <label htmlFor={id} className="block space-y-1 text-sm">
-      <span>Mode</span>
-      <select
-        id={id}
-        className="review-input"
-        disabled={disabled}
-        value={value}
-        onChange={(event) => onChange(GoMode.parse(event.target.value))}
-      >
-        {GoMode.options.map((mode) => (
-          <option key={mode} value={mode}>
-            {MODE_LABELS[mode]}
-          </option>
-        ))}
-      </select>
-    </label>
+    <Select
+      aria-label="Mode"
+      size="sm"
+      options={options}
+      disabled={disabled}
+      value={value}
+      onChange={(event) => onChange(GoMode.parse(event.target.value))}
+    />
   );
 }

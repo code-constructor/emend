@@ -14,10 +14,8 @@ import { ReviewTabs } from "../components/layout/ReviewTabs.tsx";
 import { DocView } from "../components/reading/DocView.tsx";
 import type { HtmlNavigation } from "../components/reading/HtmlDocFrame.tsx";
 import { Writeup } from "../components/reading/Writeup.tsx";
+import { ReviewHeader } from "../components/review/ReviewHeader.tsx";
 import { SendBar } from "../components/send/SendBar.tsx";
-import { AgentStatus, agentStatusOf } from "../components/status/AgentStatus.tsx";
-import { OriginBadge } from "../components/status/OriginBadge.tsx";
-import { StateBadge } from "../components/status/StateBadge.tsx";
 import { Composer } from "../components/threads/Composer.tsx";
 import { ThreadList } from "../components/threads/ThreadList.tsx";
 import { Button } from "../components/ui/Button.tsx";
@@ -28,32 +26,6 @@ import { useInboxCollapsed, useLayout } from "../lib/layout.ts";
 import { openingView } from "../lib/opening-view.ts";
 import { type ReviewSearch, validateReviewSearch } from "../router.tsx";
 
-function RevisionPicker({
-  review,
-  seq,
-  onChange,
-}: {
-  review: ReviewView;
-  seq: number;
-  onChange: (seq: number) => void;
-}) {
-  return (
-    <label className="flex items-center gap-2 text-sm">
-      <select
-        aria-label={`Revision ${seq}`}
-        value={seq}
-        onChange={(event) => onChange(Number(event.target.value))}
-        className="min-h-10 rounded-md border border-line-2 bg-surface px-2"
-      >
-        {review.revisions.map((revision) => (
-          <option key={revision.seq} value={revision.seq}>
-            Revision {revision.seq}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
-}
 function Reading({
   reviewId,
   revision,
@@ -290,41 +262,25 @@ function LoadedReview({
             key={review.id}
             reviewId={review.id}
             revision={revision?.seq}
+            newestRevision={ready}
             revisionError={query.isError}
             unsentCount={review.unsentCount}
+            approved={review.state === "approved"}
             phone={layout === "phone"}
           />
         }
         header={
-          <div className="shrink-0 border-b border-line-1 p-4">
-            <div className="flex flex-wrap items-center gap-2">
-              <OriginBadge origin={review.origin} />
-              <StateBadge state={review.state} />
-            </div>
-            <h1 ref={titleRef} tabIndex={-1} className="mt-2 break-words text-xl font-semibold tracking-tight">
-              {review.title}
-            </h1>
-            {review.importedAt && (
-              <p className="mt-2 break-words text-sm">
-                Copied from {review.origin.name} on {new Date(review.importedAt).toLocaleDateString()}. Comments, Sends
-                and approvals before then were made there.
-              </p>
-            )}
-            <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-fg-2">
-              {review.branch && <span className="break-words">{review.branch}</span>}
-              <RevisionPicker review={review} seq={seq} onChange={setRevision} />
-              <AgentStatus status={agentStatusOf(review)} />
-            </div>
-            {ready > seq && (
-              <div
-                role="status"
-                className="mt-4 flex flex-wrap items-center gap-3 rounded-md bg-info-bg p-3 text-sm text-info-fg"
-              >
-                <span>Revision {ready} is ready. Reload to see it.</span>
-                <Button onClick={() => setRevision(ready)}>Reload</Button>
-              </div>
-            )}
-          </div>
+          (layout !== "phone" || tab !== "diff") && (
+            <ReviewHeader
+              review={review}
+              revision={revision}
+              seq={seq}
+              ready={ready}
+              phone={layout === "phone"}
+              titleRef={titleRef}
+              onRevisionChange={setRevision}
+            />
+          )
         }
         reading={
           <div className="contents" onClickCapture={followReadingLink}>
@@ -412,9 +368,9 @@ export function ReviewPage() {
       pendingFocus.current = true;
     }
     if (query.isError && !query.data) pendingFocus.current = false;
-    if (pendingFocus.current && query.data?.id === reviewId && titleRef.current) {
+    if (pendingFocus.current && query.data?.id === reviewId) {
       pendingFocus.current = false;
-      titleRef.current.focus();
+      titleRef.current?.focus();
     }
   }, [reviewId, query.data, query.isError]);
   if (query.data)

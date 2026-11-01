@@ -186,6 +186,50 @@ test("Menu works without a TooltipProvider", async () => {
   await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
 });
 
+function RadioMenuExample({ onValueChange }: { onValueChange: (value: string) => void }) {
+  const [value, setValue] = useState("one");
+  return (
+    <Menu
+      label="Choose revision"
+      items={[
+        {
+          radioGroup: {
+            value,
+            onValueChange: (next) => {
+              setValue(next);
+              onValueChange(next);
+            },
+            items: [
+              { value: "one", label: "First", hint: "Earlier" },
+              { value: "two", label: "Second", hint: "Newest" },
+            ],
+          },
+        },
+      ]}
+    />
+  );
+}
+
+test("Menu radio groups expose checked items with hints and select by keyboard", async () => {
+  const onValueChange = vi.fn();
+  mount(<RadioMenuExample onValueChange={onValueChange} />);
+  const trigger = screen.getByRole("button", { name: "Choose revision" });
+  fireEvent.keyDown(trigger, { key: "ArrowDown" });
+  const first = await screen.findByRole("menuitemradio", { name: "First Earlier" });
+  const second = screen.getByRole("menuitemradio", { name: "Second Newest" });
+  expect(first.getAttribute("aria-checked")).toBe("true");
+  expect(second.getAttribute("aria-checked")).toBe("false");
+  act(() => second.focus());
+  fireEvent.keyDown(second, { key: "Enter" });
+  expect(onValueChange).toHaveBeenCalledExactlyOnceWith("two");
+  await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+  fireEvent.keyDown(trigger, { key: "ArrowDown" });
+  expect((await screen.findByRole("menuitemradio", { name: "Second Newest" })).getAttribute("aria-checked")).toBe(
+    "true",
+  );
+  expect(screen.getByRole("menuitemradio", { name: "First Earlier" }).getAttribute("aria-checked")).toBe("false");
+});
+
 test("neighbouring tooltips retain their shared provider skip delay", () => {
   vi.useFakeTimers();
   mount(
@@ -904,4 +948,19 @@ test("PairingCodeInput drops a rejected edit's caret before an unrelated owner u
   } finally {
     selection.mockRestore();
   }
+});
+
+test.each([false, true])("long menus use available height and scroll vertically (radio %s)", (radio) => {
+  const entries = Array.from({ length: 150 }, (_, n) => ({ value: String(n), label: `Revision ${n}` }));
+  mount(
+    <Menu
+      label="Long menu"
+      defaultOpen
+      items={radio ? [{ radioGroup: { value: "0", onValueChange: vi.fn(), items: entries } }] : entries}
+    />,
+  );
+  const menu = screen.getByRole("menu");
+  expect(menu.classList.contains("max-h-(--radix-dropdown-menu-content-available-height)")).toBe(true);
+  expect(menu.classList.contains("overflow-y-auto")).toBe(true);
+  expect(within(menu).getAllByRole(radio ? "menuitemradio" : "menuitem")).toHaveLength(150);
 });

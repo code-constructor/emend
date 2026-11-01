@@ -132,6 +132,11 @@ beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 });
 
+async function chooseRevision(seq: number) {
+  fireEvent.keyDown(screen.getByRole("button", { name: /^Revision \d+(?: of|,)/ }), { key: "ArrowDown" });
+  fireEvent.click(await screen.findByRole("menuitemradio", { name: new RegExp(`^Revision ${seq}\\b`) }));
+}
+
 function openingRevision(change: Partial<RevisionView>, previous?: Partial<RevisionView>) {
   const fallback = fetchMock.getMockImplementation();
   fetchMock.mockImplementation(async (path, init) =>
@@ -256,13 +261,15 @@ test.each(["writeup", "docs", "diff"] as const)("revision change falls back when
   // The Docs case goes to a writeup-only revision instead.
   if (tab === "docs")
     openingRevision({ writeupEmpty: false }, { docs: [{ path: "old.md", kind: "markdown", blocks: [] }] });
-  mount(`/r/${id}?rev=1&tab=${tab}`);
+  const { history } = mount(`/r/${id}?rev=1&tab=${tab}`);
   await waitFor(() =>
     expect(
       screen.getByRole("link", { name: tab.charAt(0).toUpperCase() + tab.slice(1) }).getAttribute("aria-current"),
     ).toBe("page"),
   );
-  fireEvent.change(screen.getByLabelText("Revision 1"), { target: { value: "2" } });
+  // The phone Diff tab hides the header, so navigate via a revision link.
+  if (tab === "diff") act(() => history.push(`/r/${id}?rev=2&tab=diff`));
+  else await chooseRevision(2);
   await waitFor(() =>
     expect(screen.getByRole("link", { name: tab === "docs" ? "Writeup" : "Docs" }).getAttribute("aria-current")).toBe(
       "page",
@@ -278,7 +285,7 @@ test("revision picker keeps the visible opening tab even when no tab was in the 
   );
   mount(`/r/${id}?rev=1`);
   await screen.findByRole("heading", { name: "old.md" });
-  fireEvent.change(screen.getByLabelText("Revision 1"), { target: { value: "2" } });
+  await chooseRevision(2);
   await screen.findByRole("heading", { name: "next.md" });
   expect(screen.getByRole("link", { name: "Docs" }).getAttribute("aria-current")).toBe("page");
 });
@@ -434,13 +441,13 @@ test("publish announces the next revision without switching or refetching the cu
   act(() => {
     Events.opened[0]?.emit("publish", { reviewId: id, revision: 2 });
   });
-  expect(await screen.findByText("Revision 2 is ready. Reload to see it.")).toBeTruthy();
-  expect(screen.getByLabelText("Revision 1")).toBeTruthy();
+  expect(await screen.findByText("Revision 2 is ready.")).toBeTruthy();
+  expect(screen.getByRole("button", { name: /^Revision 1(?: of|,)/ })).toBeTruthy();
   expect(fetchMock.mock.calls.filter(([path]) => path.endsWith("/revisions/1"))).toHaveLength(before);
   expect(Events.opened).toHaveLength(1);
   fireEvent.click(screen.getByRole("button", { name: "Reload" }));
   await waitFor(() => expect(history.location.search).toContain("rev=2"));
-  await screen.findByLabelText("Revision 2");
+  await screen.findByRole("button", { name: "Revision 2 of 2" });
   unmount();
   expect(Events.opened[0]?.close).toHaveBeenCalledOnce();
 });
@@ -476,7 +483,7 @@ test("phone menu copies the complete link and links to devices; header selects r
   const writeText = vi.fn().mockResolvedValue(undefined);
   vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
   const { history } = mount(`/r/${id}?rev=1&tab=comments`);
-  await screen.findByLabelText("Revision 1");
+  await screen.findByRole("button", { name: /^Revision 1(?: of|,)/ });
   fireEvent.keyDown(screen.getByRole("button", { name: "More" }), { key: "ArrowDown" });
   const menu = within(await screen.findByRole("menu", { name: "More" }));
   expect(menu.getByRole("menuitem", { name: "Inbox" }).getAttribute("href")).toBe("/");
@@ -485,7 +492,7 @@ test("phone menu copies the complete link and links to devices; header selects r
   expect(writeText).toHaveBeenCalledWith(location.origin + location.pathname + location.search);
   expect(await screen.findByText("Link copied")).toBeTruthy();
   expect(screen.queryByRole("menu")).toBeNull();
-  fireEvent.change(screen.getByLabelText("Revision 1"), { target: { value: "2" } });
+  await chooseRevision(2);
   await waitFor(() => expect(history.location.search).toContain("rev=2"));
   expect(history.location.search).toContain("tab=comments");
 });
@@ -617,15 +624,15 @@ test("review route saves a selected doc span, refreshes its thread, sends it, th
     },
   });
   await screen.findByText("1 unsent comment");
-  expect((screen.getByRole("button", { name: "Approve" }) as HTMLButtonElement).disabled).toBe(true);
-  fireEvent.click(screen.getByRole("button", { name: "Send" }));
-  await screen.findByText("Feedback sent.");
+  expect((screen.getByRole("button", { name: /^Approve/ }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: /^Send(?: \d+)?$/ }));
+  await screen.findByText("Sent 1 comment to the agent");
   expect(screen.getByText("Sent")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
-  expect((screen.getByRole("button", { name: "Approve" }) as HTMLButtonElement).disabled).toBe(false);
+  expect((screen.getByRole("button", { name: /^Approve/ }) as HTMLButtonElement).disabled).toBe(false);
   expect(
     container
-      .querySelector('[aria-label="Send feedback"]')
+      .querySelector('[aria-label="Send and approve"]')
       ?.previousElementSibling?.contains(screen.getByTestId("diff-pane")),
   ).toBe(true);
 });
@@ -785,11 +792,11 @@ test.each(["Send", "Approve"])(
     mount(`/r/${id}?rev=1`);
     await screen.findByText("Overview");
     fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Keep these instructions" } });
-    fireEvent.change(screen.getByLabelText("Revision 1"), { target: { value: "2" } });
+    await chooseRevision(2);
     try {
       await waitFor(() => expect(fetchMock.mock.calls.some(([path]) => path.endsWith("/revisions/2"))).toBe(true));
-      const sendBar = within(screen.getByRole("region", { name: "Send feedback" }));
-      for (const name of ["Send", "Approve"]) {
+      const sendBar = within(screen.getByRole("region", { name: "Send and approve" }));
+      for (const name of [/^Send/, /^Approve/]) {
         const button = sendBar.getByRole("button", { name }) as HTMLButtonElement;
         expect(button.disabled).toBe(true);
         fireEvent.click(button);
@@ -803,9 +810,9 @@ test.each(["Send", "Approve"])(
     await waitFor(() => expect(screen.queryByText("Loading revision…")).toBeNull());
     expect(screen.getByText("Overview")).toBeTruthy();
     expect((screen.getByLabelText("Instructions") as HTMLTextAreaElement).value).toBe("Keep these instructions");
-    for (const name of ["Send", "Approve"])
+    for (const name of [/^Send/, /^Approve/])
       expect((screen.getByRole("button", { name }) as HTMLButtonElement).disabled).toBe(false);
-    fireEvent.click(screen.getByRole("button", { name: action }));
+    fireEvent.click(screen.getByRole("button", { name: new RegExp(`^${action}`) }));
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
         `/api/v1/reviews/${id}/sends`,
@@ -840,17 +847,17 @@ test("failed revision disables Send and Approve with a reason, preserving instru
   mount(`/r/${id}?rev=1`);
   await screen.findByText("Overview");
   fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Keep through failure" } });
-  fireEvent.change(screen.getByLabelText("Revision 1"), { target: { value: "2" } });
+  await chooseRevision(2);
   await screen.findByRole("button", { name: "Retry" });
-  const sendBar = within(screen.getByRole("region", { name: "Send feedback" }));
+  const sendBar = within(screen.getByRole("region", { name: "Send and approve" }));
   expect(sendBar.getByText("Could not load this revision.")).toBeTruthy();
-  for (const name of ["Send", "Approve"])
+  for (const name of [/^Send/, /^Approve/])
     expect((sendBar.getByRole("button", { name }) as HTMLButtonElement).disabled).toBe(true);
   expect((screen.getByLabelText("Instructions") as HTMLTextAreaElement).value).toBe("Keep through failure");
   failed = false;
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
   await screen.findByText("Overview");
-  for (const name of ["Send", "Approve"])
+  for (const name of [/^Send/, /^Approve/])
     expect((sendBar.getByRole("button", { name }) as HTMLButtonElement).disabled).toBe(false);
   expect((screen.getByLabelText("Instructions") as HTMLTextAreaElement).value).toBe("Keep through failure");
 });
@@ -1567,7 +1574,7 @@ test.each(["writeup", "docs"] as const)(
     fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
     const name = tab === "writeup" ? "Writeup" : "Docs";
     await waitFor(() => expect(screen.getByRole("link", { name }).getAttribute("aria-current")).toBe("page"));
-    fireEvent.change(screen.getByLabelText("Revision 1"), { target: { value: "2" } });
+    await chooseRevision(2);
     await waitFor(() => expect(screen.queryByText("Plant a seed.")).toBeNull());
     expect(screen.getByRole("link", { name }).getAttribute("aria-current")).toBe("page");
     const composer = within(screen.getByRole("region", { name: "Resumed comment" }));
@@ -1914,10 +1921,10 @@ test("an approved review at an older revision does not claim that revision was a
       : (fallback?.(path, init) as Promise<Response>),
   );
   mount(`/r/${id}?rev=1`);
-  await screen.findByLabelText("Revision 1");
+  await screen.findByRole("button", { name: /^Revision 1(?: of|,)/ });
   const header = screen.getByRole("heading", { level: 1, name: item.title }).parentElement;
   if (!header) throw new Error("Missing review header");
-  expect(within(header).getAllByText("Approved")).toHaveLength(2);
+  expect(within(header).getAllByText("Approved")).toHaveLength(1);
   expect(within(header).queryByText(/Approved.*rev/i)).toBeNull();
 });
 
@@ -2163,4 +2170,97 @@ test("a cached review with a failed refetch takes heading focus once while its n
   await waitFor(() => expect(client.getQueryState(query.queryKey)?.status).toBe("success"));
   expect(document.activeElement).toBe(devices);
   expect(focus.mock.instances.filter((element) => element === heading)).toHaveLength(1);
+});
+
+test("phone header is absent on Diff and returns with its revision picker on every reading tab", async () => {
+  width = 390;
+  mount(`/r/${id}?tab=writeup`);
+  await screen.findByText("Overview");
+  expect(screen.getByRole("heading", { level: 1, name: item.title })).toBeTruthy();
+  fireEvent.click(screen.getByRole("link", { name: "Diff" }));
+  await screen.findByTestId("diff-pane");
+  expect(screen.queryByRole("heading", { level: 1, name: item.title })).toBeNull();
+  expect(screen.queryByRole("button", { name: /^Revision 1/ })).toBeNull();
+  for (const tab of ["Docs", "Comments", "Writeup"]) {
+    fireEvent.click(screen.getByRole("link", { name: new RegExp(`^${tab}`) }));
+    await screen.findByRole("heading", { level: 1, name: item.title });
+    expect(screen.getByRole("button", { name: "Revision 1 of 1" })).toBeTruthy();
+    expect(screen.queryByTestId("diff-pane")).toBeNull();
+  }
+});
+
+test("revision picker loads the chosen revision and its commit range", async () => {
+  newest = 2;
+  openingRevision(
+    { writeupEmpty: false, base: `abcdef1${"0".repeat(33)}`, head: `1234567${"0".repeat(33)}` },
+    { writeupEmpty: false, base: "0".repeat(40), head: "worktree" },
+  );
+  const { history } = mount(`/r/${id}`);
+  await screen.findByText("abcdef1 → 1234567");
+  await chooseRevision(1);
+  await screen.findByText("0000000 → working tree");
+  expect(history.location.search).toContain("rev=1");
+  expect(screen.getByRole("button", { name: "Revision 1, 2 is newer" })).toBeTruthy();
+  expect(screen.queryByText("abcdef1 → 1234567")).toBeNull();
+});
+
+test("a published revision blocks stale actions even before review metadata catches up", async () => {
+  mount(`/r/${id}`);
+  await screen.findByText("Overview");
+  fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Keep this instruction" } });
+  expect((screen.getByRole("button", { name: "Send 2" }) as HTMLButtonElement).disabled).toBe(false);
+  // newest stays 1 in the metadata fixture; the event is the newest known revision.
+  act(() => Events.opened[0]?.emit("publish", { reviewId: id, revision: 2 }));
+  const reason = "Revision 2 is newer. Switch to it to send or approve.";
+  await screen.findByText(reason);
+  for (const name of ["Send 2", "Approve revision 1"]) {
+    const button = screen.getByRole("button", { name }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    const descriptions = button
+      .getAttribute("aria-describedby")
+      ?.split(" ")
+      .map((key) => document.getElementById(key)?.textContent);
+    expect(descriptions).toContain(reason);
+  }
+  fireEvent.click(screen.getByRole("button", { name: "Reload" }));
+  await waitFor(() =>
+    expect((screen.getByRole("button", { name: "Send 2" }) as HTMLButtonElement).disabled).toBe(false),
+  );
+  expect((screen.getByLabelText("Instructions") as HTMLTextAreaElement).value).toBe("Keep this instruction");
+});
+
+test("phone Diff navigation consumes pending heading focus before a later refetch", async () => {
+  width = 390;
+  let refreshed = false;
+  const fallback = fetchMock.getMockImplementation();
+  fetchMock.mockImplementation(async (path, init) =>
+    path === `/api/v1/reviews/${secondItem.id}`
+      ? Response.json({
+          ...secondItem,
+          updatedAt: refreshed ? "2026-01-02T00:00:00.000Z" : item.updatedAt,
+          revisions: [{ seq: 1, createdAt: item.updatedAt }],
+        })
+      : (fallback?.(path, init) as Promise<Response>),
+  );
+  // A cached Diff revision renders without an intermediate loading header.
+  client.setQueryData(["revision", secondItem.id, 1], revision);
+  const { history } = mount(`/r/${id}?tab=diff`);
+  await screen.findByTestId("diff-pane");
+  act(() => history.push(`/r/${secondItem.id}?tab=diff`));
+  await waitFor(() =>
+    expect(client.getQueryData(reviewQuery(secondItem.id).queryKey)).toMatchObject({ id: secondItem.id }),
+  );
+  await screen.findByTestId("diff-pane");
+  expect(screen.queryByRole("heading", { level: 1 })).toBeNull();
+  fireEvent.click(screen.getByRole("link", { name: "Writeup" }));
+  const heading = await screen.findByRole("heading", { level: 1, name: secondItem.title });
+  const keepFocus = screen.getByRole("button", { name: "More" });
+  act(() => keepFocus.focus());
+  const focus = vi.spyOn(HTMLElement.prototype, "focus");
+  refreshed = true;
+  await act(async () => {
+    await client.refetchQueries({ queryKey: ["review", secondItem.id] });
+  });
+  expect(document.activeElement).toBe(keepFocus);
+  expect(focus.mock.instances).not.toContain(heading);
 });

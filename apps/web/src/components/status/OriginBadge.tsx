@@ -16,10 +16,12 @@ export function OriginBadge({
   origin,
   size = "md",
   dot = false,
+  className,
 }: {
   origin: InboxItem["origin"];
   size?: "md" | "sm";
   dot?: boolean;
+  className?: string;
 }) {
   let hash = 0;
   for (const char of origin.id) hash = (Math.imul(hash, 31) + char.charCodeAt(0)) >>> 0;
@@ -29,7 +31,7 @@ export function OriginBadge({
       <span
         role="img"
         aria-label={`From ${origin.name}`}
-        className={cn("inline-block size-2 shrink-0 rounded-[2px]", tint?.[1])}
+        className={cn("inline-block size-2 shrink-0 rounded-[2px]", tint?.[1], className)}
       />
     );
   return (
@@ -39,6 +41,7 @@ export function OriginBadge({
         "inline-flex shrink-0 items-center whitespace-nowrap rounded-sm pr-1.5 pl-[5px] font-mono font-medium leading-none font-stretch-mono",
         size === "sm" ? "h-[18px] text-[10px]" : "h-5 text-[10.5px]",
         tint?.[0],
+        className,
       )}
     >
       {origin.name}

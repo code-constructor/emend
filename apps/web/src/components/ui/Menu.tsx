@@ -1,7 +1,7 @@
 import * as Primitive from "@radix-ui/react-dropdown-menu";
 import { Slottable } from "@radix-ui/react-slot";
-import { Ellipsis } from "lucide-react";
-import type { ReactElement } from "react";
+import { Check, Ellipsis } from "lucide-react";
+import type { ReactElement, ReactNode } from "react";
 import { Icon, type IconComponent } from "./Icon.tsx";
 import { IconButton } from "./IconButton.tsx";
 import { Kbd } from "./Kbd.tsx";
@@ -10,6 +10,13 @@ import { cn, focusRing } from "./utils.ts";
 export type MenuItem =
   | { separator: true }
   | { heading: string }
+  | {
+      radioGroup: {
+        value: string;
+        onValueChange: (value: string) => void;
+        items: { value: string; label: ReactNode; hint?: string; disabled?: boolean }[];
+      };
+    }
   | {
       label: string;
       icon?: IconComponent;
@@ -42,9 +49,43 @@ export function Menu({ label, trigger, align = "right", size = "md", items, defa
           align={align === "left" ? "start" : "end"}
           sideOffset={4}
           collisionPadding={8}
-          className="z-[calc(var(--z-sheet)+2)] min-w-52 animate-[em-fade_var(--dur-1)_var(--ease-out)] rounded-lg border border-line-1 bg-raised p-1 shadow-3"
+          className={cn(
+            "z-[calc(var(--z-sheet)+2)] max-h-(--radix-dropdown-menu-content-available-height) min-w-52 animate-[em-fade_var(--dur-1)_var(--ease-out)] overflow-y-auto rounded-lg border border-line-1 bg-raised p-1 shadow-3",
+            items.some((item) => "radioGroup" in item) && "min-w-60",
+          )}
         >
           {items.map((item, index) => {
+            if ("radioGroup" in item)
+              return (
+                <Primitive.RadioGroup
+                  // biome-ignore lint/suspicious/noArrayIndexKey: Menu descriptions have no ids and may repeat labels.
+                  key={index}
+                  value={item.radioGroup.value}
+                  onValueChange={item.radioGroup.onValueChange}
+                >
+                  {item.radioGroup.items.map((option) => (
+                    <Primitive.RadioItem
+                      key={option.value}
+                      value={option.value}
+                      disabled={option.disabled}
+                      className={cn(
+                        "flex min-h-8 items-start gap-2.5 rounded-[6px] px-2.5 py-2 font-sans text-13 font-medium leading-(--lh-snug) text-fg-1 data-highlighted:bg-hover data-disabled:pointer-events-none data-disabled:opacity-45 [@media(pointer:coarse)]:min-h-11",
+                        focusRing,
+                      )}
+                    >
+                      <span aria-hidden="true" className="mt-0.5 size-3.5 shrink-0">
+                        <Primitive.ItemIndicator>
+                          <Icon icon={Check} size={14} />
+                        </Primitive.ItemIndicator>
+                      </span>
+                      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                        <span className="flex items-center gap-1.5">{option.label}</span>
+                        {option.hint && <span className="text-fg-3 [font:var(--type-meta)]">{option.hint}</span>}
+                      </span>
+                    </Primitive.RadioItem>
+                  ))}
+                </Primitive.RadioGroup>
+              );
             if ("separator" in item)
               return (
                 // biome-ignore lint/suspicious/noArrayIndexKey: Menu descriptions have no ids and may repeat labels.

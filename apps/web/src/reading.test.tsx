@@ -13,6 +13,7 @@ import { Composer } from "./components/threads/Composer.tsx";
 import { DraftList } from "./components/threads/DraftList.tsx";
 import { ThreadCard } from "./components/threads/ThreadCard.tsx";
 import { ThreadList } from "./components/threads/ThreadList.tsx";
+import { ToastProvider } from "./components/ui/Toast.tsx";
 import { claimDraft } from "./lib/composer-owner.ts";
 import { clearDraftIfUnchanged, draftKey, hasDraft, isDraftSaving, loadDraft, saveDraft } from "./lib/drafts.ts";
 
@@ -40,7 +41,11 @@ function required<T>(value: T | undefined | null): T {
 let client: QueryClient;
 let fetchMock: ReturnType<typeof vi.fn>;
 function mount(ui: ReactNode) {
-  return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+  return render(
+    <QueryClientProvider client={client}>
+      <ToastProvider>{ui}</ToastProvider>
+    </QueryClientProvider>,
+  );
 }
 beforeEach(() => {
   localStorage.clear();
@@ -417,18 +422,19 @@ test("thread groups are ordered, unplaced quotes link to their original revision
   expect(within(unplaced).getByText("seed")).toBeTruthy();
   expect(within(unplaced).getByRole("link", { name: "Revision 1" }).getAttribute("href")).toContain("rev=1");
 });
-test("Send counts review-wide unsent comments, defaults mode, caps instruction and posts the revision on screen", async () => {
-  mount(<SendBar reviewId={id} revision={2} unsentCount={7} />);
+test("Send counts review-wide unsent comments, defaults mode, limits instruction input and posts the revision on screen", async () => {
+  mount(<SendBar reviewId={id} revision={2} newestRevision={2} unsentCount={7} />);
   expect(screen.getByText("7 unsent comments")).toBeTruthy();
   expect((screen.getByLabelText("Mode") as HTMLSelectElement).selectedOptions[0]?.textContent).toBe(
     "Fix what's clear, ask about the rest",
   );
   expect(screen.getAllByRole("option")).toHaveLength(3);
-  expect((screen.getByRole("button", { name: "Approve" }) as HTMLButtonElement).disabled).toBe(true);
-  expect(screen.getByText("Send or delete your 7 unsent comments first.")).toBeTruthy();
-  fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "x".repeat(4001) } });
-  expect(screen.getByText("4000 / 4000")).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  expect((screen.getByRole("button", { name: "Approve revision 2" }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.getByText("Send or delete before approving")).toBeTruthy();
+  fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "x".repeat(4000) } });
+  expect((screen.getByLabelText("Instructions") as HTMLTextAreaElement).maxLength).toBe(4000);
+  expect((screen.getByLabelText("Instructions") as HTMLTextAreaElement).value).toHaveLength(4000);
+  fireEvent.click(screen.getByRole("button", { name: "Send 7" }));
   await waitFor(() =>
     expect(fetchMock).toHaveBeenCalledWith(
       `/api/v1/reviews/${id}/sends`,
@@ -437,7 +443,7 @@ test("Send counts review-wide unsent comments, defaults mode, caps instruction a
       }),
     ),
   );
-  await screen.findByText("Feedback sent.");
+  await screen.findByText("Sent 7 comments to the agent");
 });
 test.each([
   ["stale_revision", 409, "This page is out of date. Reload to see the newest revision."],
@@ -448,14 +454,15 @@ test.each([
   fetchMock.mockResolvedValue(
     Response.json({ error: { code, message: "Synthetic message" } }, { status: Number(status) }),
   );
-  mount(<SendBar reviewId={id} revision={2} unsentCount={0} />);
+  mount(<SendBar reviewId={id} revision={2} newestRevision={2} unsentCount={0} />);
+  fireEvent.change(screen.getByLabelText("Instructions"), { target: { value: "Synthetic instruction" } });
   fireEvent.click(screen.getByRole("button", { name: "Send" }));
   expect((await screen.findByRole("alert")).textContent).toBe(message);
 });
 test("Approve has no mode or instruction, invalidates the displayed revision, review and inbox", async () => {
-  mount(<SendBar reviewId={id} revision={2} unsentCount={0} />);
-  fireEvent.click(screen.getByRole("button", { name: "Approve" }));
-  await screen.findByText("Revision approved.");
+  mount(<SendBar reviewId={id} revision={2} newestRevision={2} unsentCount={0} />);
+  fireEvent.click(screen.getByRole("button", { name: "Approve revision 2" }));
+  await screen.findByText("Approved revision 2");
   expect(fetchMock).toHaveBeenCalledWith(
     `/api/v1/reviews/${id}/sends`,
     expect.objectContaining({ body: JSON.stringify({ revision: 2, kind: "approve" }) }),
@@ -464,11 +471,11 @@ test("Approve has no mode or instruction, invalidates the displayed revision, re
     expect(client.getQueryState(key)?.isInvalidated).toBe(true);
 });
 test("phone Send opens the existing Sheet with mode and instructions", async () => {
-  mount(<SendBar reviewId={id} revision={2} unsentCount={0} phone />);
+  mount(<SendBar reviewId={id} revision={2} newestRevision={2} unsentCount={0} phone />);
   expect(screen.queryByLabelText("Instructions")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Send" }));
   const dialog = await screen.findByRole("dialog");
-  expect(within(dialog).getByLabelText("Mode")).toBeTruthy();
+  expect(within(dialog).getByRole("group", { name: "Mode" })).toBeTruthy();
   expect(within(dialog).getByLabelText("Instructions")).toBeTruthy();
 });
 

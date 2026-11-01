@@ -16,7 +16,15 @@ export const agentDotClasses = {
   none: "border-[1.5px] border-agent-none",
 };
 
-export function AgentStatus({ status, pill = false }: { status: ReturnType<typeof agentStatusOf>; pill?: boolean }) {
+export function AgentStatus({
+  status,
+  pill = false,
+  className,
+}: {
+  status: ReturnType<typeof agentStatusOf>;
+  pill?: boolean;
+  className?: string;
+}) {
   if (!status) return null;
   return (
     <span
@@ -24,6 +32,7 @@ export function AgentStatus({ status, pill = false }: { status: ReturnType<typeo
         "inline-flex items-center gap-1.5 whitespace-nowrap text-12 font-medium leading-[1.2]",
         status === "approved" ? "text-success-fg" : status === "waiting" ? "text-fg-1" : "text-fg-2",
         pill && "h-6 rounded-full border border-line-1 bg-surface pr-[9px] pl-2",
+        className,
       )}
     >
       {status === "approved" ? (
