@@ -145,6 +145,30 @@ test.each(skillFiles)("%s saves private hand-offs without clobbering and checks 
   );
 });
 
+test.each(skillFiles)("%s gives exact harness-specific wait guidance", (path) => {
+  const text = read(path);
+  const guidance = [
+    "Run `emend wait` the way your harness allows a long command. Start one only when no `emend wait`",
+    "you started on this folder is still running; a delegated sub-agent never starts one.",
+    "",
+    '- Claude Code: run `emend wait <review-id> --timeout 86400 --save "<review-folder>"` in the',
+    "  background (`run_in_background`), then end your turn. A background command is not held to the",
+    "  10 minutes of a foreground one, and its completion notification wakes you. If you stop the",
+    "  review loop before the wait ends, stop that command.",
+    "- Codex: run it with `exec_command`. While the wait runs, `exec_command` returns a `session_id`;",
+    "  call `write_stdin` on it with empty `chars` and `yield_time_ms` 300000 until the command exits.",
+    "  If your shell tool takes `timeout_ms` instead, set it above the wait, such as 600000.",
+    "- Anything else: in the foreground. If your shell tool stops commands sooner than 9 minutes, pass",
+    "  a `--timeout` below that limit.",
+    "",
+    "When the command ends, read its output first: the exit code, any error line and any warning.",
+  ].join("\n");
+  expect(text).toContain(guidance);
+  expect(text).not.toContain("Keep the wait alive using the current harness's supported long-command mechanism.");
+  expect(text).not.toContain("Without it, Codex stops the command after 10 seconds.");
+  expect(text).not.toContain("the result is in the saved file");
+});
+
 test.each(skillFiles)("%s saves atomically and preserves legacy results", (path) => {
   const text = read(path);
   expect(text).not.toContain("Delete only what you saw fail.");

@@ -183,6 +183,21 @@ Save the next result with:
 emend wait <review-id> --timeout 540 --save "<review-folder>"
 ```
 
+Run `emend wait` the way your harness allows a long command. Start one only when no `emend wait`
+you started on this folder is still running; a delegated sub-agent never starts one.
+
+- Claude Code: run `emend wait <review-id> --timeout 86400 --save "<review-folder>"` in the
+  background (`run_in_background`), then end your turn. A background command is not held to the
+  10 minutes of a foreground one, and its completion notification wakes you. If you stop the
+  review loop before the wait ends, stop that command.
+- Codex: run it with `exec_command`. While the wait runs, `exec_command` returns a `session_id`;
+  call `write_stdin` on it with empty `chars` and `yield_time_ms` 300000 until the command exits.
+  If your shell tool takes `timeout_ms` instead, set it above the wait, such as 600000.
+- Anything else: in the foreground. If your shell tool stops commands sooner than 9 minutes, pass
+  a `--timeout` below that limit.
+
+When the command ends, read its output first: the exit code, any error line and any warning.
+
 On success, repeat the folder-entry check and ownership listing, then read the file you just wrote before acting. Repeat on `go`.
 On `pending`, delete that file, then wait again or leave the review id and literal folder path for a later invocation.
 On `approve`, report the approved revision and outcomes, record its `deliveryId` as above, and stop.
