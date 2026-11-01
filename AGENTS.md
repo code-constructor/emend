@@ -67,14 +67,19 @@ Each line prevents a real failure. "Before you touch" names the rule file with t
 - Commit only when the owner asks. One logical change per commit; the body names the plan task.
 - Agents never push. The owner pushes `main`. Never push tags, never force-push, never run
   `gh pr merge`. Publishing to npm is the owner's step.
-- Claude Code's Bash runs in its sandbox: network reaches only npm and GitHub, and emend's real
-  state directory is unreadable, because it holds client diffs. Codex's sandbox limits writes,
+- Claude Code's Bash runs in its sandbox, started at the root of the main checkout (not in a
+  subdirectory or a linked worktree). Network reaches only npm and GitHub, plus what the owner
+  approves; on macOS `allowLocalBinding` still lets sandboxed commands reach localhost. emend's
+  real state directory is unreadable, because it holds client diffs, and so are the credential
+  directories and files (SSH, GPG, cloud, registry and tool logins). `.git` is read-only, so
+  `git add` and `git commit` fail there. Codex's sandbox limits writes,
   not reads, so tests never touch the real state directory: the Vitest setup sets a temporary
   `EMEND_HOME`, and every test that needs state uses its own.
 - `.claude/hooks/guard-commands.ts` and `.codex/rules/default.rules` are a seatbelt against
   mistakes, not a wall. Changing them, `.claude/settings.json` or the sandbox needs the owner's
-  approval and `emend-security-reviewer`. If the guard blocks a commit message, commit with
-  `git commit -F <file>`.
+  approval and `emend-security-reviewer`. Outside the sandbox, if the guard blocks a commit
+  message, commit with `git commit -F <file>`. Inside it `.git` is read-only, so commits follow
+  the global commit-signing rule.
 
 ## Who does what
 

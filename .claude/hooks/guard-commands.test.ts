@@ -552,6 +552,7 @@ test("a blocked commit message gets the commit -F hint", () => {
   assert.match(reason, /git commit -F <file>/);
   const long = evaluate('git commit --message "explain wrangler deploy"', fakeContext()) ?? "";
   assert.match(long, /git commit -F <file>/);
+  assert.match(reason, /Inside the sandbox, `\.git` is read-only, so follow the global commit-signing rule instead\./);
 });
 
 test("a block that is not a commit message gets no commit hint", () => {

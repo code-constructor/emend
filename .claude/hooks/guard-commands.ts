@@ -46,7 +46,8 @@ let deadline = Number.POSITIVE_INFINITY;
 
 const PUSH_MESSAGE = "Agents never push in this repo. The owner pushes.";
 const COMMIT_HINT =
-  "If this is only a commit message, write it to a file and use `git commit -F <file>`.";
+  "If this is only a commit message, write it to a file and use `git commit -F <file>`. " +
+  "Inside the sandbox, `.git` is read-only, so follow the global commit-signing rule instead.";
 const SHELLS = new Set(["bash", "sh", "zsh", "dash", "ksh", "fish"]);
 const RUNNERS = new Set(["npx", "pnpx", "bunx"]);
 const SHELL_KEYWORDS = new Set(["!", "{", "if", "then", "elif", "else", "do", "while", "until"]);

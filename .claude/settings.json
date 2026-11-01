@@ -8,18 +8,38 @@
         "registry.npmjs.org",
         "github.com",
         "api.github.com",
-        "codeload.github.com",
-        "localhost",
-        "127.0.0.1"
+        "codeload.github.com"
       ],
-      "allowLocalBinding": true
+      "allowLocalBinding": true,
+      "deniedDomains": [
+        "localhost",
+        "*.localhost",
+        "127.0.0.1",
+        "[::1]",
+        "0.0.0.0",
+        "[::]"
+      ]
     },
     "filesystem": {
       "denyRead": [
         ".env",
         ".env.local",
         "~/.local/share/emend",
-        "~/Library/Application Support/emend"
+        "~/Library/Application Support/emend",
+        "~/.ssh",
+        "~/.gnupg",
+        "~/.aws",
+        "~/.config/gh",
+        "~/.npmrc",
+        "~/.docker",
+        "~/.config/.wrangler",
+        "~/.claude/.credentials.json",
+        "~/.codex/auth.json",
+        "~/.local/share/opencode/auth.json",
+        "~/.kube",
+        "~/.config/rclone",
+        "~/.local/share/keyrings",
+        "~/.config/op"
       ],
       "denyWrite": [
         ".claude/settings.json",
@@ -27,7 +47,8 @@
         ".claude/hooks",
         ".codex",
         ".git/config",
-        ".git/hooks"
+        ".git/hooks",
+        ".git"
       ]
     }
   },
@@ -39,6 +60,7 @@
       "Edit(/.codex/**)",
       "Edit(/.git/config)",
       "Edit(/.git/hooks/**)",
+      "Edit(/.git/**)",
       "Edit(~/.config/git/**)",
       "Edit(~/.gitconfig)",
       "Edit(/.claude/agents/**)",
@@ -50,7 +72,21 @@
       "Read(/**/.env)",
       "Read(/**/.env.*)",
       "Read(~/.local/share/emend/**)",
-      "Read(~/Library/Application Support/emend/**)"
+      "Read(~/Library/Application Support/emend/**)",
+      "Read(~/.ssh/**)",
+      "Read(~/.gnupg/**)",
+      "Read(~/.aws/**)",
+      "Read(~/.config/gh/**)",
+      "Read(~/.npmrc)",
+      "Read(~/.docker/**)",
+      "Read(~/.config/.wrangler/**)",
+      "Read(~/.claude/.credentials.json)",
+      "Read(~/.codex/auth.json)",
+      "Read(~/.local/share/opencode/auth.json)",
+      "Read(~/.kube/**)",
+      "Read(~/.config/rclone/**)",
+      "Read(~/.local/share/keyrings/**)",
+      "Read(~/.config/op/**)"
     ]
   },
   "hooks": {
