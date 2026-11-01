@@ -5,3 +5,9 @@ packages:
 # Dependency install scripts never run. esbuild works from its platform package without one.
 allowBuilds:
   esbuild: false
+
+# GHSA-67mh-4wv8-2f99 is about esbuild's serve dev server. emend never starts it; esbuild 0.18.20
+# arrives only through drizzle-kit (dev only).
+audit:
+  ignore:
+    - GHSA-67mh-4wv8-2f99
