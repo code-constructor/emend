@@ -92,7 +92,15 @@ test("publish stdout is exactly one JSON line and unchanged docs upload nothing 
   try {
     const docs = join(dir, "docs");
     await mkdir(docs);
-    await promisify(execFile)("git", ["init", dir]);
+    await promisify(execFile)("git", ["init", dir], {
+      env: {
+        PATH: process.env.PATH,
+        HOME: dir,
+        LC_ALL: "C",
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_CONFIG_NOSYSTEM: "1",
+      },
+    });
     await writeFile(join(state, "agent.token"), `em_${"a".repeat(43)}`);
     await writeFile(join(state, "instance.json"), JSON.stringify({ id: randomUUID() }));
     await writeFile(join(state, "config.json"), JSON.stringify({ docRoots: [docs] }));
@@ -204,7 +212,15 @@ test.each(["missing", "non-directory parent", "directory", "empty", "truncated",
     const f = await commandFixture();
     const root = await mkdtemp(join(tmpdir(), "emend-manifest-repo-"));
     onTestFinished(() => rm(root, { recursive: true, force: true }));
-    await promisify(execFile)("git", ["-c", "init.templateDir=", "init", root]);
+    await promisify(execFile)("git", ["-c", "init.templateDir=", "init", root], {
+      env: {
+        PATH: process.env.PATH,
+        HOME: root,
+        LC_ALL: "C",
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_CONFIG_NOSYSTEM: "1",
+      },
+    });
     vi.spyOn(process, "cwd").mockReturnValue(root);
     const name = kind === "non-directory parent" ? "plain/review.json" : "review.json";
     const path = join(f.dir, name);
@@ -247,7 +263,15 @@ test("a missing manifest escapes the supplied path on one line", async () => {
   const f = await commandFixture();
   const root = await mkdtemp(join(tmpdir(), "emend-manifest-repo-"));
   onTestFinished(() => rm(root, { recursive: true, force: true }));
-  await promisify(execFile)("git", ["-c", "init.templateDir=", "init", root]);
+  await promisify(execFile)("git", ["-c", "init.templateDir=", "init", root], {
+    env: {
+      PATH: process.env.PATH,
+      HOME: root,
+      LC_ALL: "C",
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_NOSYSTEM: "1",
+    },
+  });
   vi.spyOn(process, "cwd").mockReturnValue(root);
   expect(await run(["publish", "--manifest", "missing\u2028.json", "--key", "synthetic"], f.io)).toBe(1);
   expect(f.stdout).toEqual([]);

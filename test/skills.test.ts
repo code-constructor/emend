@@ -62,20 +62,30 @@ const surfaces = [
 ];
 let temporary: string;
 let env: NodeJS.ProcessEnv;
+const parentEnv = { ...process.env };
 
 beforeEach(() => {
   temporary = mkdtempSync(join(tmpdir(), "emend-skill-files-"));
   const home = join(temporary, "home");
   mkdirSync(home);
-  vi.stubEnv("HOME", home);
-  vi.stubEnv("EMEND_HOME", join(temporary, "state"));
-  vi.stubEnv("GIT_CONFIG_GLOBAL", "/dev/null");
-  vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
-  env = { ...process.env };
+  env = {
+    ...(process.env.PATH !== undefined ? { PATH: process.env.PATH } : {}),
+    ...(process.env.TMPDIR !== undefined ? { TMPDIR: process.env.TMPDIR } : {}),
+    HOME: home,
+    EMEND_HOME: join(temporary, "state"),
+    LC_ALL: "C",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+  };
+  // copySkills and checkSync also start git internally without an env option.
+  for (const key of Object.keys(process.env)) delete process.env[key];
+  Object.assign(process.env, env);
 });
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  for (const key of Object.keys(process.env)) delete process.env[key];
+  Object.assign(process.env, parentEnv);
   rmSync(temporary, { recursive: true, force: true });
 });
 

@@ -126,7 +126,13 @@ async function fixture(format = "sha1", content = "base\n") {
   const run = (...args: string[]) =>
     exec("git", ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false", ...args], {
       cwd: root,
-      env: { PATH: process.env.PATH, HOME: root, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
+      env: {
+        PATH: process.env.PATH,
+        HOME: root,
+        LC_ALL: "C",
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_CONFIG_NOSYSTEM: "1",
+      },
     });
   try {
     await mkdir(root);
@@ -449,7 +455,18 @@ test("linked worktree doc sources cannot read either Git directory, even through
   const linked = `${f.root}-linked`;
   try {
     await f.run("worktree", "add", "-b", "linked", linked);
-    const privateDir = (await exec("git", ["rev-parse", "--absolute-git-dir"], { cwd: linked })).stdout.trim();
+    const privateDir = (
+      await exec("git", ["rev-parse", "--absolute-git-dir"], {
+        cwd: linked,
+        env: {
+          PATH: process.env.PATH,
+          HOME: f.root,
+          LC_ALL: "C",
+          GIT_CONFIG_GLOBAL: "/dev/null",
+          GIT_CONFIG_NOSYSTEM: "1",
+        },
+      })
+    ).stdout.trim();
     await symlink(join(privateDir, "HEAD"), join(linked, "private.md"));
     await symlink(join(f.root, ".git/config"), join(linked, "common.md"));
     for (const source of ["private.md", "common.md"]) {

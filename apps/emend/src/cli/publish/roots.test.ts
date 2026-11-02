@@ -407,7 +407,7 @@ for (const [name, character, literalEscape, quotedEscape] of [
     let decoded: string;
     try {
       const result = await promisify(execFile)("bash", ["--norc", "--noprofile", "-c", `printf %s ${argument}`], {
-        env: { PATH: process.env.PATH, LC_ALL: "C" },
+        env: { PATH: process.env.PATH, HOME: f.home, LC_ALL: "C" },
       });
       decoded = result.stdout;
       expect(result.stderr).toBe("");

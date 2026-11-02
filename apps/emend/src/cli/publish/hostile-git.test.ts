@@ -14,7 +14,13 @@ async function fixture() {
   const run = (...args: string[]) =>
     exec("git", ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false", ...args], {
       cwd: root,
-      env: { PATH: process.env.PATH, HOME: root, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
+      env: {
+        PATH: process.env.PATH,
+        HOME: root,
+        LC_ALL: "C",
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_CONFIG_NOSYSTEM: "1",
+      },
     });
   await run("init", "-b", "main");
   await run("config", "user.name", "Synthetic");

@@ -28,7 +28,7 @@ test.each(["symlink", "oversized"])("direct publish ignores a %s server-url.json
 test.skipIf(process.platform === "win32")("direct publish ignores a FIFO server-url.json", async () => {
   const f = await directFixture();
   const path = join(f.stateDir, "server-url.json");
-  await promisify(execFile)("mkfifo", [path]);
+  await promisify(execFile)("mkfifo", [path], { env: { PATH: process.env.PATH, LC_ALL: "C" } });
   // Release an unsafe blocking reader with valid JSON, so the red test fails on
   // the origin instead of leaving a filesystem read hanging after test timeout.
   const writer = setInterval(() => {

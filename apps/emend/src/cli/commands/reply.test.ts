@@ -39,7 +39,7 @@ test.each(["symlink", "fifo"])(
     if (kind === "symlink") {
       await writeFile(join(f.folder, "target"), "Synthetic body");
       await symlink(join(f.folder, "target"), path);
-    } else await promisify(execFile)("mkfifo", [path]);
+    } else await promisify(execFile)("mkfifo", [path], { env: { PATH: process.env.PATH, LC_ALL: "C" } });
     expect(await run(["reply", commentId, "--status", "held", "--body-file", path], f.io)).toBe(1);
     expect(f.stdout).toEqual([]);
     expect(f.stderr).toHaveLength(1);

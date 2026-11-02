@@ -105,7 +105,9 @@ async function stopped(pid: number) {
     if ((error as NodeJS.ErrnoException).code === "ESRCH") return true;
     throw error;
   }
-  const { stdout } = await promisify(execFile)("/bin/ps", ["-p", String(pid), "-o", "stat="]);
+  const { stdout } = await promisify(execFile)("/bin/ps", ["-p", String(pid), "-o", "stat="], {
+    env: { PATH: process.env.PATH, LC_ALL: "C" },
+  });
   return stdout.trim().startsWith("Z");
 }
 async function fixture(
@@ -204,7 +206,8 @@ fi
   const stdoutPath = join(dir, "stdout");
   const stderrPath = join(dir, "stderr");
   // Own both ends of an OS pipe so closing the reader reaches the writer itself.
-  if (options.closedStdout) await promisify(execFile)("/usr/bin/mkfifo", [stdoutPath]);
+  if (options.closedStdout)
+    await promisify(execFile)("/usr/bin/mkfifo", [stdoutPath], { env: { PATH: process.env.PATH, LC_ALL: "C" } });
   const stdoutReader = options.closedStdout
     ? await open(stdoutPath, constants.O_RDONLY | constants.O_NONBLOCK)
     : undefined;
@@ -549,7 +552,10 @@ test("teardown never signals a completed call's old pid", async () => {
   const f = await fixture({ socketDouble: true });
   await f.ready();
   // This owned sentinel stands in for a pid reused since an earlier fake exited.
-  const sentinel = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+  const sentinel = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    stdio: "ignore",
+    env: { PATH: process.env.PATH, HOME: entryDir, LC_ALL: "C" },
+  });
   const done = new Promise<void>((resolve) => sentinel.once("close", () => resolve()));
   onTestFinished(async () => {
     if (sentinel.exitCode === null && sentinel.signalCode === null) sentinel.kill("SIGKILL");

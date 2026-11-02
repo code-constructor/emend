@@ -1,8 +1,25 @@
 import { execFile } from "node:child_process";
+import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import { FilePath } from "@emend/contract";
-import { expect, test } from "vitest";
+import { afterAll, beforeAll, expect, test } from "vitest";
 import { escapeJson, escapeReference, quoteShellArgument } from "./escape.ts";
+
+let home: string;
+beforeAll(async () => {
+  home = await mkdtemp(join(tmpdir(), "emend-shell-home-"));
+});
+afterAll(async () => {
+  if (home) await rm(home, { recursive: true, force: true });
+});
+
+function decode(shell: string, flags: readonly string[], value: string, locale: string) {
+  return promisify(execFile)(shell, [...flags, "-c", `printf %s ${quoteShellArgument(value)}`], {
+    env: { PATH: process.env.PATH, HOME: home, LC_ALL: locale },
+  });
+}
 
 const shellCases = [
   ["plain path", "/synthetic/docs with spaces", "'/synthetic/docs with spaces'"],
@@ -30,9 +47,7 @@ for (const [shell, flags] of [
     for (const [name, value] of shellCases) {
       test(`${shell} decodes the quoted ${name} under LC_ALL=${locale}`, async ({ skip }) => {
         try {
-          const result = await promisify(execFile)(shell, [...flags, "-c", `printf %s ${quoteShellArgument(value)}`], {
-            env: { PATH: process.env.PATH, LC_ALL: locale },
-          });
+          const result = await decode(shell, flags, value, locale);
           expect(result.stdout).toBe(value);
           expect(result.stderr).toBe("");
         } catch (error) {
@@ -43,6 +58,32 @@ for (const [shell, flags] of [
     }
   }
 }
+
+test("shell quoting children ignore the caller's startup files", async ({ skip }) => {
+  const startup = join(home, "startup.sh");
+  const marker = join(home, "startup-ran");
+  await writeFile(startup, `: > ${quoteShellArgument(marker)}\n`);
+  const previousBashEnv = process.env.BASH_ENV;
+  const previousEnv = process.env.ENV;
+  try {
+    process.env.BASH_ENV = startup;
+    process.env.ENV = startup;
+    const result = await decode("bash", ["--norc", "--noprofile"], "synthetic argument", "C").catch(
+      (error: unknown) => {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") skip("bash is not on PATH");
+        throw error;
+      },
+    );
+    expect(result.stdout).toBe("synthetic argument");
+    expect(result.stderr).toBe("");
+    await expect(access(marker)).rejects.toMatchObject({ code: "ENOENT" });
+  } finally {
+    if (previousBashEnv === undefined) delete process.env.BASH_ENV;
+    else process.env.BASH_ENV = previousBashEnv;
+    if (previousEnv === undefined) delete process.env.ENV;
+    else process.env.ENV = previousEnv;
+  }
+});
 
 test.each([
   0, 10, 127, 128, 159, 0x61c, 0x200b, 0x200c, 0x200d, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2060,

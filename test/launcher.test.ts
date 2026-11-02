@@ -52,7 +52,7 @@ beforeEach(() => {
   root = realpathSync(mkdtempSync(join(tmpdir(), "emend-launcher-")));
   checkout = join(root, "checkout with spaces");
   target = join(root, "bin/emend");
-  env = { PATH: [dirname(process.execPath), "/usr/bin", "/bin"].join(delimiter) };
+  env = { PATH: [dirname(process.execPath), "/usr/bin", "/bin"].join(delimiter), HOME: root, LC_ALL: "C" };
 });
 
 afterEach(() => rmSync(root, { recursive: true, force: true }));

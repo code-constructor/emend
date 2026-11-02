@@ -904,7 +904,7 @@ try {
   try {
     expect(() => lockAttach(f.stateDir)).toThrow("another emend attach is running. Nothing was changed.");
     const child = spawn(process.execPath, [script], {
-      env: { ...process.env, EMEND_HOME: f.stateDir },
+      env: { PATH: process.env.PATH, HOME: f.stateDir, EMEND_HOME: f.stateDir, LC_ALL: "C" },
       stdio: ["ignore", "ignore", "pipe"],
     });
     let stderr = "";
@@ -958,7 +958,7 @@ process.send("locked");
 `,
     );
     const child = spawn(process.execPath, [script], {
-      env: { ...process.env, EMEND_HOME: f.stateDir },
+      env: { PATH: process.env.PATH, HOME: f.stateDir, EMEND_HOME: f.stateDir, LC_ALL: "C" },
       stdio: ["ignore", "ignore", "pipe", "ipc"],
     });
     let stderr = "";

@@ -4,24 +4,45 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
-import { checkSync, globToRegExp, isValidSyncTrailer } from "./check-sync.ts";
+import { fileURLToPath } from "node:url";
+import { checkSync as runCheckSync, globToRegExp, isValidSyncTrailer } from "./check-sync.ts";
 
-// checkSync runs git in this process, so keep the host's git config out of it.
-process.env.GIT_CONFIG_GLOBAL = "/dev/null";
-process.env.GIT_CONFIG_NOSYSTEM = "1";
-delete process.env.SYNC_BASE;
+const home = mkdtempSync(path.join(tmpdir(), "sync-home-"));
+const childEnv = {
+  ...(process.env.PATH !== undefined ? { PATH: process.env.PATH } : {}),
+  ...(process.env.TMPDIR !== undefined ? { TMPDIR: process.env.TMPDIR } : {}),
+  HOME: home,
+  LC_ALL: "C",
+  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_NOSYSTEM: "1",
+};
+const nodeTestContext = process.env.NODE_TEST_CONTEXT;
+// checkSync's internal git calls inherit this process's environment.
+for (const key of Object.keys(process.env)) delete process.env[key];
+Object.assign(process.env, childEnv);
+if (nodeTestContext !== undefined) process.env.NODE_TEST_CONTEXT = nodeTestContext;
 
-const temps: string[] = [];
+const temps: string[] = [home];
 
 after(() => {
   for (const dir of temps) rmSync(dir, { recursive: true, force: true });
 });
 
+function checkSync(options: Parameters<typeof runCheckSync>[0]) {
+  const context = process.env.NODE_TEST_CONTEXT;
+  delete process.env.NODE_TEST_CONTEXT;
+  try {
+    return runCheckSync(options);
+  } finally {
+    if (context !== undefined) process.env.NODE_TEST_CONTEXT = context;
+  }
+}
+
 function git(dir: string, ...args: string[]): string {
   return execFileSync(
     "git",
     ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args],
-    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+    { env: childEnv, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
   );
 }
 
@@ -52,6 +73,45 @@ function makeRepo(manifest?: string): string {
 const contractManifest = JSON.stringify({
   version: 1,
   surfaces: [{ id: "page", self: ["src/contract/**"], counterpart: "page" }],
+});
+
+test("fixture commits and sync checks ignore the caller's GIT_DIR", () => {
+  const decoy = makeRepo();
+  const before = git(decoy, "rev-parse", "HEAD");
+  const previous = process.env.GIT_DIR;
+  try {
+    process.env.GIT_DIR = path.join(decoy, ".git");
+    const dir = makeRepo(contractManifest);
+    commit(dir, { "src/contract/page.ts": "export {};\n" }, "feat(contract): fixture only");
+    assert.equal(git(dir, "log", "-1", "--format=%s").trim(), "feat(contract): fixture only");
+    assert.equal(git(dir, "ls-files", "src/contract/page.ts").trim(), "src/contract/page.ts");
+
+    // Re-enter the real file setup with poisoned input, selecting only a test
+    // that exercises both fixture commits and checkSync's own inherited git calls.
+    const stdout = execFileSync(
+      process.execPath,
+      [
+        "--test",
+        "--test-reporter=tap",
+        "--test-name-pattern=^a commit under sync/ without a trailer fails$",
+        fileURLToPath(import.meta.url),
+      ],
+      {
+        env: { ...childEnv, GIT_DIR: process.env.GIT_DIR },
+        encoding: "utf8",
+        timeout: 10_000,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    assert.match(stdout, /^ok \d+ - a commit under sync\/ without a trailer fails\r?$/m);
+    assert.match(stdout, /^# tests 1\r?$/m);
+    assert.match(stdout, /^# pass 1\r?$/m);
+    assert.equal(git(decoy, "rev-parse", "HEAD"), before);
+    assert.equal(git(decoy, "ls-files").trim(), "README.md");
+  } finally {
+    if (previous === undefined) delete process.env.GIT_DIR;
+    else process.env.GIT_DIR = previous;
+  }
 });
 
 test("globToRegExp matches ** across directories", () => {

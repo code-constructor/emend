@@ -70,7 +70,9 @@ async function stopped(pid: number) {
     throw error;
   }
   // Orphans can briefly remain as zombies until init reaps them; they are already dead.
-  const { stdout } = await promisify(execFile)("/bin/ps", ["-p", String(pid), "-o", "stat="]);
+  const { stdout } = await promisify(execFile)("/bin/ps", ["-p", String(pid), "-o", "stat="], {
+    env: { PATH: process.env.PATH, LC_ALL: "C" },
+  });
   return stdout.trim().startsWith("Z");
 }
 

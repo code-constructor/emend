@@ -46,6 +46,7 @@ function run(root: string, input: string, env: Record<string, string> = {}) {
     // A startup file named by the caller's BASH_ENV or ENV must never run in the test.
     env: {
       ...(process.env.PATH !== undefined ? { PATH: process.env.PATH } : {}),
+      // Keep the caller's HOME for PATH shims (mise, asdf) to find real programs; the hook never reads HOME.
       ...(process.env.HOME !== undefined ? { HOME: process.env.HOME } : {}),
       CLAUDE_PROJECT_DIR: root,
       CLAUDE_CODE_SUBAGENT_MODEL: "",

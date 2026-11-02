@@ -232,7 +232,15 @@ test.each(["nested worktree repo", "docRoot repo"])(
       await mkdir(join(root, "docs"), { recursive: true });
       await mkdir(state);
       await mkdir(join(root, ".git"));
-      await promisify(execFile)("git", ["init", nested]);
+      await promisify(execFile)("git", ["init", nested], {
+        env: {
+          PATH: process.env.PATH,
+          HOME: root,
+          LC_ALL: "C",
+          GIT_CONFIG_GLOBAL: "/dev/null",
+          GIT_CONFIG_NOSYSTEM: "1",
+        },
+      });
       await writeFile(join(state, "config.json"), JSON.stringify({ docRoots: [nested] }));
       await writeFile(join(root, "docs/safe.md"), "synthetic doc");
       const alias = join(root, "docs/n.md");
