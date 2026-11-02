@@ -3,10 +3,10 @@ import { useEffect, useState } from "react";
 import { claimDraft } from "../../lib/composer-owner.ts";
 import { draftKey, type SavedDraft } from "../../lib/drafts.ts";
 import { Composer } from "../threads/Composer.tsx";
-import { Unplaced } from "../threads/Unplaced.tsx";
+import { ThreadCard } from "../threads/ThreadCard.tsx";
 import type { DiffParser } from "./parse-client.ts";
 import { TopicSection } from "./TopicSection.tsx";
-import { type FileLocation, isDiffTarget, resolveFile, targetLabel } from "./targets.ts";
+import { type FileLocation, isDiffTarget, resolveFile } from "./targets.ts";
 
 export type DiffPaneProps = {
   reviewId: string;
@@ -51,6 +51,7 @@ export function DiffPane({ reviewId, revision, parser, resume, onResumeEnd, onRe
     revision: revision.seq,
     threads: revision.threads,
     changedBlocks: revision.changedBlocks,
+    topics: revision.topics,
     active,
     onActive,
     parser,
@@ -69,21 +70,18 @@ export function DiffPane({ reviewId, revision, parser, resume, onResumeEnd, onRe
         <section aria-label="Unplaced comments" className="mb-5 space-y-3">
           <h3 className="font-semibold">Unplaced comments</h3>
           {unplaced.map((thread) => (
-            <div key={thread.id}>
-              <p className="text-sm">{isDiffTarget(thread.target) ? targetLabel(thread.target) : ""}</p>
-              <Unplaced surface="diff" {...context} thread={thread} />
-            </div>
+            <ThreadCard key={thread.id} surface="diff" {...context} thread={thread} />
           ))}
         </section>
       )}
       {active && isDiffTarget(active) && !hasSection(active) && (
         <section data-diff-section className="space-y-2">
-          <p>{targetLabel(active)}</p>
           <Composer
             surface="diff"
             reviewId={reviewId}
             revision={revision.seq}
             target={active}
+            topics={revision.topics}
             onSaved={() => onActive(null)}
             onCancel={() => onActive(null)}
           />

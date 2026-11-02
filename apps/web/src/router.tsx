@@ -1,5 +1,6 @@
 import { FilePath } from "@emend/contract";
 import { createRootRoute, createRoute, createRouter, Link, Outlet, type RouterHistory } from "@tanstack/react-router";
+import { cancelThreadActionFocus } from "./lib/thread-action-focus.ts";
 import { DevicesPage } from "./routes/devices.tsx";
 import { InboxPage } from "./routes/inbox.tsx";
 import { PairPage } from "./routes/pair.tsx";
@@ -54,6 +55,7 @@ export const createWebRouter = (history?: RouterHistory) => {
     history,
     search: { strict: true },
   });
+  router.subscribe("onBeforeNavigate", cancelThreadActionFocus);
   // Initialize with default (uncached) scrolling. Passing a predicate to the
   // constructor enables the cache even when it returns false for some routes.
   // This version has no route-level switch; navigation flags miss direct URLs

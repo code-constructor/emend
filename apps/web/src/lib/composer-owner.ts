@@ -1,7 +1,15 @@
 import { useId, useLayoutEffect, useRef, useSyncExternalStore } from "react";
+import { hasDraft, isDraftSaving, loadDraft, subscribeDrafts } from "./drafts.ts";
 
 type Claim = { surface: string; id?: string };
-type Entry = { members: Map<string, string>; claim?: Claim; handoff?: Claim };
+type Entry = {
+  members: Map<string, string>;
+  cards: Set<string>;
+  replyOpen?: boolean;
+  release?: object;
+  claim?: Claim;
+  handoff?: Claim;
+};
 const entries = new Map<string, Entry>();
 const listeners = new Set<() => void>();
 let version = 0;
@@ -19,7 +27,7 @@ const snapshot = () => version;
 function entry(key: string) {
   let value = entries.get(key);
   if (!value) {
-    value = { members: new Map() };
+    value = { members: new Map(), cards: new Set() };
     entries.set(key, value);
   }
   return value;
@@ -30,7 +38,7 @@ function cancelHandoffs() {
     if (!value.handoff) continue;
     if (value.claim === value.handoff) value.claim = undefined;
     value.handoff = undefined;
-    if (!value.members.size && !value.claim) entries.delete(key);
+    if (!value.cards.size && !value.members.size && !value.claim && !value.release) entries.delete(key);
     changed = true;
   }
   if (changed) notify();
@@ -39,8 +47,65 @@ function cancelHandoffs() {
 export function claimDraft(key: string, surface: string) {
   cancelHandoffs();
   const value = entry(key);
+  value.release = undefined;
   value.claim = { surface };
+  value.replyOpen = true;
   notify();
+}
+function closeReply(key: string) {
+  const value = entries.get(key);
+  if (!value || value.replyOpen === false) return;
+  value.replyOpen = false;
+  value.claim = undefined;
+  value.handoff = undefined;
+  notify();
+}
+/** Cards share visibility; ownership still selects the one editable copy. */
+export function useReplyComposer(key: string) {
+  const id = useId();
+  useSyncExternalStore(subscribe, snapshot, snapshot);
+  const value = entries.get(key);
+  const open = value?.replyOpen ?? !!loadDraft(key).trim();
+  useLayoutEffect(() => {
+    const value = entry(key);
+    value.release = undefined;
+    value.cards.add(id);
+    value.replyOpen ??= !!loadDraft(key).trim();
+    notify();
+    // Close every copy as soon as a successful save clears its draft, even if
+    // query refreshes unmount the submitting composer before its onSaved runs.
+    const unsubscribe = subscribeDrafts(() => {
+      if (isDraftSaving(key) && !hasDraft(key)) closeReply(key);
+    });
+    return () => {
+      unsubscribe();
+      value.cards.delete(id);
+      if (!value.cards.size) {
+        // A card may move from a loading fallback into its inline slot in this
+        // commit. Preserve explicit opening, including a reply with no text.
+        const release = {};
+        value.release = release;
+        queueMicrotask(() => {
+          if (value.release !== release) return;
+          value.release = undefined;
+          value.replyOpen = undefined;
+          if (!value.members.size && !value.claim && !value.handoff && entries.get(key) === value) entries.delete(key);
+          notify();
+        });
+      }
+      notify();
+    };
+  }, [key, id]);
+  return { open, close: () => closeReply(key) };
+}
+/** Closed cards must see intents even before they have mounted an editor. */
+export function useDraftClaim(keys: string | string[], surface: string) {
+  useSyncExternalStore(subscribe, snapshot, snapshot);
+  // A fulfilled claim (including a focused editor's handoff) must not reopen a
+  // card whose saved draft has just disappeared during a revision refresh.
+  return (typeof keys === "string" ? [keys] : keys)
+    .map((key) => entries.get(key)?.claim)
+    .find((claim) => claim?.surface === surface && !claim.id);
 }
 export function useComposerOwner(key: string, surface: string) {
   const id = useId();
@@ -67,12 +132,19 @@ export function useComposerOwner(key: string, surface: string) {
             if (value.handoff !== handoff) return;
             value.handoff = undefined;
             if (value.claim === handoff) value.claim = undefined;
-            if (!value.members.size && entries.get(key) === value) entries.delete(key);
+            if (!value.cards.size && !value.members.size && !value.release && entries.get(key) === value)
+              entries.delete(key);
             notify();
           }, 0);
         } else value.claim = undefined;
       }
-      if (!value.handoff && !value.members.size && (!value.claim || value.claim.surface === surface))
+      if (
+        !value.cards.size &&
+        !value.release &&
+        !value.handoff &&
+        !value.members.size &&
+        (!value.claim || value.claim.surface === surface)
+      )
         entries.delete(key);
       notify();
     };
@@ -101,9 +173,9 @@ export function useComposerOwner(key: string, surface: string) {
       notify();
     }
     focused.current = request;
-    input.current
-      .closest<HTMLElement>("[data-thread-card], [data-diff-section]")
-      ?.scrollIntoView?.({ block: "center" });
+    const anchor = input.current.closest<HTMLElement>("[data-thread-card], [data-diff-section]");
+    if (anchor) anchor.scrollIntoView?.({ block: "center" });
+    else input.current.closest<HTMLElement>(".em-composer")?.scrollIntoView?.({ block: "nearest" });
     input.current.focus({ preventScroll: true });
   });
   return { owns, claim, input };

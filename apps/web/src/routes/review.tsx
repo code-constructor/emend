@@ -20,7 +20,7 @@ import { Composer } from "../components/threads/Composer.tsx";
 import { ThreadList } from "../components/threads/ThreadList.tsx";
 import { Button } from "../components/ui/Button.tsx";
 import { claimDraft } from "../lib/composer-owner.ts";
-import { draftKey, hasDraft, type SavedDraft, subscribeDrafts } from "../lib/drafts.ts";
+import { draftKey, hasDraft, type SavedDraft, saveDraft, subscribeDrafts } from "../lib/drafts.ts";
 import { useReviewEvents } from "../lib/events.ts";
 import { useInboxCollapsed, useLayout } from "../lib/layout.ts";
 import { openingView } from "../lib/opening-view.ts";
@@ -53,8 +53,14 @@ function Reading({
   targeted: boolean;
   onOpenDoc: (path: string) => void;
 }) {
-  const props = { reviewId, revision: revision.seq, threads: revision.threads, changedBlocks: revision.changedBlocks };
-  if (tab === "comments") return <ThreadList {...props} onResume={onResume} />;
+  const props = {
+    reviewId,
+    revision: revision.seq,
+    threads: revision.threads,
+    changedBlocks: revision.changedBlocks,
+    topics: revision.topics,
+  };
+  if (tab === "comments") return <ThreadList {...props} search={search} phone={phone} onResume={onResume} />;
   if (tab === "docs")
     return (
       <DocView
@@ -73,7 +79,6 @@ function Reading({
     <Writeup
       {...props}
       writeup={revision.writeup}
-      topics={revision.topics}
       files={revision.files}
       search={search}
       phone={phone}
@@ -291,6 +296,12 @@ function LoadedReview({
       });
     }
   };
+  const commentOnReview = () => {
+    const target = { kind: "review" } as const;
+    const key = draftKey(review.id, target);
+    if (!hasDraft(key)) saveDraft(key, "");
+    resume({ key, target });
+  };
   // Data/DOM changes may fulfill an existing intent, but only navigation creates one.
   useEffect(() => {
     const current = readingIntent(search, hash, seq);
@@ -359,125 +370,121 @@ function LoadedReview({
   };
   const ready = Math.max(published, review.newestRevision);
   return (
-    <AppFrame isReview>
-      <Panes
-        inbox={<ReviewInbox collapsed={collapsed} onCollapsedChange={setCollapsed} />}
-        tab={tab}
-        hasDiff={hasDiff}
-        phoneTabs={<PhoneTabs {...tabProps} />}
-        sendBar={
-          <SendBar
-            key={review.id}
-            reviewId={review.id}
-            revision={revision?.seq}
-            newestRevision={ready}
-            revisionError={query.isError}
-            unsentCount={review.unsentCount}
-            approved={review.state === "approved"}
-            phone={layout === "phone"}
-          />
-        }
-        header={
-          (layout !== "phone" || tab !== "diff") && (
-            <ReviewHeader
-              review={review}
-              revision={revision}
-              seq={seq}
-              ready={ready}
-              phone={layout === "phone"}
-              titleRef={titleRef}
-              onRevisionChange={setRevision}
-            />
-          )
-        }
-        reading={
-          <div className="contents" onClickCapture={followReadingLink}>
-            {layout !== "phone" && (
-              <ReviewTabs {...tabProps} docsCount={revision?.docs.length ?? 0} idBase={readingId} />
-            )}
-            <div
-              {...(layout !== "phone"
-                ? {
-                    role: "tabpanel" as const,
-                    id: `${readingId}-panel`,
-                    "aria-labelledby": `${readingId}-tab-${readingTab}`,
-                  }
-                : {})}
-            >
-              {query.isPending && (
-                <p role="status" className="p-5">
-                  Loading revision…
-                </p>
-              )}
-              {query.isError && (
-                <div className="p-5">
-                  <p role="alert">Could not load this revision.</p>
-                  <Button onClick={() => void query.refetch()}>Retry</Button>
-                </div>
-              )}
-              {revision && (
-                <Reading
-                  key={`${seq}:${readingTab}`}
-                  reviewId={review.id}
-                  revision={revision}
-                  tab={readingTab}
-                  search={search}
-                  openDoc={openDoc}
-                  targeted={!!hash || !!search.thread}
-                  onOpenDoc={(path) => navigateReading({ ...search, tab: "docs", doc: path, thread: undefined })}
-                  phone={layout === "phone"}
-                  onResume={resume}
-                  htmlNavigation={htmlNavigation}
-                  composingPath={resumed?.target?.kind === "html-span" ? resumed.target.path : undefined}
-                  resumedBlockId={resumedBlockId}
-                />
-              )}
-              {resumed?.target && !isDiffTarget(resumed.target) && (
-                <Composer
-                  surface="resumed"
-                  placeholder={false}
-                  reviewId={review.id}
-                  revision={seq}
-                  target={resumed.target}
-                  threadId={resumed.threadId}
-                  storageKey={resumed.key}
-                  onSaved={endResume}
-                  onCancel={endResume}
-                  wrap={(editor) => (
-                    <section
-                      aria-label="Resumed comment"
-                      className="sticky bottom-0 space-y-3 border-t border-line-2 bg-surface p-3"
-                    >
-                      {resumed.target && "quote" in resumed.target && (
-                        <blockquote className="max-h-24 overflow-auto border-l-2 pl-2 text-sm">
-                          {resumed.target.quote}
-                        </blockquote>
-                      )}
-                      {editor}
-                    </section>
-                  )}
-                />
-              )}
-            </div>
-          </div>
-        }
-        diff={
-          revision ? (
-            <LazyDiffPane
-              key={seq}
+    <AppFrame isReview onCommentReview={revision ? commentOnReview : undefined}>
+      <div className="contents" onClickCapture={followReadingLink}>
+        <Panes
+          inbox={<ReviewInbox collapsed={collapsed} onCollapsedChange={setCollapsed} />}
+          tab={tab}
+          hasDiff={hasDiff}
+          phoneTabs={<PhoneTabs {...tabProps} />}
+          sendBar={
+            <SendBar
+              key={review.id}
               reviewId={review.id}
-              revision={revision}
-              resume={resumed?.target && isDiffTarget(resumed.target) ? resumed : undefined}
-              onResumeEnd={endResume}
-              onRendered={onDiffRendered}
+              revision={revision?.seq}
+              newestRevision={ready}
+              revisionError={query.isError}
+              unsentCount={review.unsentCount}
+              approved={review.state === "approved"}
+              phone={layout === "phone"}
             />
-          ) : (
-            <p role={query.isError ? "alert" : "status"} className="p-5">
-              {query.isError ? "Could not load this revision." : "Loading revision…"}
-            </p>
-          )
-        }
-      />
+          }
+          header={
+            (layout !== "phone" || tab !== "diff") && (
+              <ReviewHeader
+                review={review}
+                revision={revision}
+                seq={seq}
+                ready={ready}
+                phone={layout === "phone"}
+                titleRef={titleRef}
+                onRevisionChange={setRevision}
+                onCommentReview={commentOnReview}
+              />
+            )
+          }
+          reading={
+            <div className="contents">
+              {layout !== "phone" && (
+                <ReviewTabs {...tabProps} docsCount={revision?.docs.length ?? 0} idBase={readingId} />
+              )}
+              <div
+                {...(layout !== "phone"
+                  ? {
+                      role: "tabpanel" as const,
+                      id: `${readingId}-panel`,
+                      "aria-labelledby": `${readingId}-tab-${readingTab}`,
+                    }
+                  : {})}
+              >
+                {query.isPending && (
+                  <p role="status" className="p-5">
+                    Loading revision…
+                  </p>
+                )}
+                {query.isError && (
+                  <div className="p-5">
+                    <p role="alert">Could not load this revision.</p>
+                    <Button onClick={() => void query.refetch()}>Retry</Button>
+                  </div>
+                )}
+                {revision && (
+                  <Reading
+                    key={`${seq}:${readingTab}`}
+                    reviewId={review.id}
+                    revision={revision}
+                    tab={readingTab}
+                    search={search}
+                    openDoc={openDoc}
+                    targeted={!!hash || !!search.thread}
+                    onOpenDoc={(path) => navigateReading({ ...search, tab: "docs", doc: path, thread: undefined })}
+                    phone={layout === "phone"}
+                    onResume={resume}
+                    htmlNavigation={htmlNavigation}
+                    composingPath={resumed?.target?.kind === "html-span" ? resumed.target.path : undefined}
+                    resumedBlockId={resumedBlockId}
+                  />
+                )}
+                {resumed?.target && !isDiffTarget(resumed.target) && (
+                  <Composer
+                    surface="resumed"
+                    placeholder={false}
+                    reviewId={review.id}
+                    revision={seq}
+                    target={resumed.target}
+                    topics={revision?.topics}
+                    threadId={resumed.threadId}
+                    storageKey={resumed.key}
+                    onSaved={endResume}
+                    onCancel={endResume}
+                    wrap={(editor) => (
+                      <section aria-label="Resumed comment" className="sticky bottom-0 px-4 pt-4 pb-8 md:pr-8 md:pl-14">
+                        {editor}
+                      </section>
+                    )}
+                  />
+                )}
+              </div>
+            </div>
+          }
+          diff={
+            revision ? (
+              <LazyDiffPane
+                key={seq}
+                reviewId={review.id}
+                revision={revision}
+                resume={resumed?.target && isDiffTarget(resumed.target) ? resumed : undefined}
+                onResumeEnd={endResume}
+                onRendered={onDiffRendered}
+              />
+            ) : (
+              <p role={query.isError ? "alert" : "status"} className="p-5">
+                {query.isError ? "Could not load this revision." : "Loading revision…"}
+              </p>
+            )
+          }
+        />
+      </div>
     </AppFrame>
   );
 }

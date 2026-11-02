@@ -1,6 +1,7 @@
 import type { InboxItem } from "@emend/contract";
 import { Link } from "@tanstack/react-router";
 import { MessageSquare, Pencil } from "lucide-react";
+import { plural } from "../../lib/count.ts";
 import { relativeTime } from "../../lib/time.ts";
 import { agentDotClasses, agentStatusLabels, agentStatusOf } from "../status/AgentStatus.tsx";
 import { OriginBadge } from "../status/OriginBadge.tsx";
@@ -58,7 +59,7 @@ export function ReviewRow({ review, now, onOpen }: { review: InboxItem; now: num
             <span className="inline-flex items-center gap-[3px]">
               <Icon icon={MessageSquare} size={11} />
               {review.openThreads}
-              <span className="sr-only">{review.openThreads === 1 ? " open thread" : " open threads"}</span>
+              <span className="sr-only">{plural(review.openThreads, " open thread")}</span>
             </span>
           )}
           {review.unsentCount > 0 && (

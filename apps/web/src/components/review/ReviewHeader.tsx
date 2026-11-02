@@ -1,10 +1,12 @@
 import type { ReviewView, RevisionView } from "@emend/contract";
-import { FileText, GitBranch, GitCommitHorizontal } from "lucide-react";
+import { FileText, GitBranch, GitCommitHorizontal, MessageSquarePlus } from "lucide-react";
 import type { Ref } from "react";
+import { plural } from "../../lib/count.ts";
 import { AgentStatus, agentStatusOf } from "../status/AgentStatus.tsx";
 import { OriginBadge } from "../status/OriginBadge.tsx";
 import { StateBadge } from "../status/StateBadge.tsx";
 import { Banner } from "../ui/Banner.tsx";
+import { Button } from "../ui/Button.tsx";
 import { Icon } from "../ui/Icon.tsx";
 import { cn } from "../ui/utils.ts";
 import { RevisionPicker } from "./RevisionPicker.tsx";
@@ -17,6 +19,7 @@ export function ReviewHeader({
   phone,
   titleRef,
   onRevisionChange,
+  onCommentReview,
 }: {
   review: ReviewView;
   revision?: RevisionView;
@@ -25,6 +28,7 @@ export function ReviewHeader({
   phone: boolean;
   titleRef: Ref<HTMLHeadingElement>;
   onRevisionChange: (seq: number) => void;
+  onCommentReview?: () => void;
 }) {
   const agent = agentStatusOf(review);
   const commits =
@@ -40,13 +44,20 @@ export function ReviewHeader({
         phone ? "px-4 py-3" : "px-5 pt-3 pb-2.5",
       )}
     >
-      <h1
-        ref={titleRef}
-        tabIndex={-1}
-        className="m-0 text-pretty wrap-anywhere text-[17px] font-semibold leading-[1.3] tracking-[-0.01em] text-fg-1"
-      >
-        {review.title}
-      </h1>
+      <div className="flex items-start gap-3">
+        <h1
+          ref={titleRef}
+          tabIndex={-1}
+          className="m-0 min-w-0 flex-1 text-pretty wrap-anywhere text-[17px] font-semibold leading-[1.3] tracking-[-0.01em] text-fg-1"
+        >
+          {review.title}
+        </h1>
+        {!phone && (
+          <Button variant="ghost" size="sm" icon={MessageSquarePlus} disabled={!revision} onClick={onCommentReview}>
+            Comment on review
+          </Button>
+        )}
+      </div>
       <div className="flex flex-wrap items-center gap-2 text-fg-3 [font:var(--type-meta)]">
         <span className="inline-flex min-w-0 items-center gap-1.5 wrap-anywhere">
           <OriginBadge origin={review.origin} dot className="size-[7px] opacity-85" />
@@ -85,7 +96,7 @@ export function ReviewHeader({
         {revision?.files.length === 0 && (
           <span className={metaItem}>
             <Icon icon={FileText} size={13} />
-            {revision.docs.length} {revision.docs.length === 1 ? "doc" : "docs"} · no code changes
+            {revision.docs.length} {plural(revision.docs.length, "doc")} · no code changes
           </span>
         )}
         <RevisionPicker review={review} seq={seq} onChange={onRevisionChange} />

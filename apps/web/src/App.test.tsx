@@ -704,7 +704,7 @@ test("reload discovers drafts without a supplied target; Resume restores text an
   const scroll = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => {});
   const second = mount(`/r/${id}?tab=comments`);
   const drafts = within(await screen.findByRole("region", { name: "Unsaved comments" }));
-  expect(drafts.getByText("seed")).toBeTruthy();
+  expect(drafts.getByText("Recover after reload")).toBeTruthy();
   fireEvent.click(drafts.getByRole("button", { name: "Resume" }));
   expect(((await screen.findByLabelText("Comment")) as HTMLTextAreaElement).value).toBe("Recover after reload");
   await waitFor(() =>
@@ -716,7 +716,7 @@ test("reload discovers drafts without a supplied target; Resume restores text an
   const restored = within(await screen.findByRole("region", { name: "Unsaved comments" }));
   fireEvent.click(restored.getByRole("button", { name: "Discard" }));
   expect(localStorage.getItem(draftKey(id, draftTarget))).toBeNull();
-  expect(restored.queryByRole("button", { name: "Resume" })).toBeNull();
+  expect(screen.queryByRole("region", { name: "Unsaved comments" })).toBeNull();
 });
 test("unreadable draft targets offer only Discard and other reviews' drafts stay hidden", async () => {
   const key = `emend.draft.${id}.not-json`;
@@ -772,16 +772,17 @@ test("saved reply clears before delayed metadata while revision refresh regroups
     return Response.json({ ...item, revisions: [{ seq: 1, createdAt: item.updatedAt }] });
   });
   mount(`/r/${id}?tab=comments`);
+  fireEvent.click(await screen.findByRole("button", { name: "Reply" }));
   const original = await screen.findByLabelText("Reply");
   fireEvent.change(original, { target: { value: "Saved reply" } });
   const key = `${draftKey(id, draftTarget)}.reply.${id}`;
   expect(localStorage.getItem(key)).toBe("Saved reply");
-  fireEvent.click(screen.getByRole("button", { name: "Add reply" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save comment" }));
   try {
     await screen.findByText("Saved reply", { selector: "p" });
-    expect(original.isConnected).toBe(false);
+    await waitFor(() => expect(original.isConnected).toBe(false));
     expect(localStorage.getItem(key)).toBeNull();
-    expect((screen.getByLabelText("Reply") as HTMLTextAreaElement).value).toBe("");
+    expect(screen.queryByRole("textbox", { name: "Reply" })).toBeNull();
   } finally {
     metadata.resolve(Response.json({ ...item, revisions: [{ seq: 1, createdAt: item.updatedAt }] }));
   }
@@ -900,7 +901,7 @@ test("unplaced thread navigates through the router to its original revision", as
     return fallback(path, init);
   });
   const { history } = mount(`/r/${id}?rev=2&tab=comments`);
-  fireEvent.click(await screen.findByRole("link", { name: "Revision 1" }));
+  fireEvent.click(await screen.findByRole("link", { name: "revision 1" }));
   await waitFor(() => expect(history.location.search).toContain("rev=1"));
   expect(history.location.search).toContain(`thread=${id}`);
   expect(history.location.hash).toBe(`#thread-${id}`);
@@ -945,9 +946,9 @@ test("resuming a placed reply focuses its single thread composer and save clears
   expect(history.location.search).toContain("tab=comments");
   await waitFor(() => expect(document.activeElement).toBe(reply));
   expect(scroll.mock.instances.some((node) => (node as HTMLElement).id === `thread-${id}`)).toBe(true);
-  fireEvent.click(screen.getByRole("button", { name: "Add reply" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save comment" }));
   await screen.findByText("Follow-up", { selector: "p" });
-  expect(screen.getAllByLabelText("Reply").map((field) => (field as HTMLTextAreaElement).value)).toEqual([""]);
+  expect(screen.queryByRole("textbox", { name: "Reply" })).toBeNull();
   expect(localStorage.getItem(draftKey(id, draftTarget, id))).toBeNull();
 });
 
@@ -1228,14 +1229,16 @@ test("a resumed span draft scrolls to its block once, including after thread SSE
   mount(`/r/${id}?tab=comments`);
   fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
   await screen.findByText("Plant a seed.");
-  await waitFor(() => expect(scroll).toHaveBeenCalledTimes(1));
-  expect((scroll.mock.instances[0] as HTMLElement).id).toBe(`block-${draftBlock.id}`);
-  expect(scroll.mock.calls[0]).toEqual([{ block: "center" }]);
+  await waitFor(() => expect(scroll).toHaveBeenCalledTimes(2));
+  const blockScroll = scroll.mock.instances.findIndex((node) => (node as HTMLElement).id === `block-${draftBlock.id}`);
+  expect(blockScroll).toBeGreaterThanOrEqual(0);
+  expect(scroll.mock.calls[blockScroll]).toEqual([{ block: "center" }]);
   const instructions = screen.getByLabelText("Instructions");
   act(() => instructions.focus());
   const focus = vi.spyOn(HTMLElement.prototype, "focus");
+  expect(scroll.mock.calls).toContainEqual([{ block: "nearest" }]);
   await fixture.update();
-  expect(scroll).toHaveBeenCalledTimes(1);
+  expect(scroll).toHaveBeenCalledTimes(2);
   expect(focus).not.toHaveBeenCalled();
   expect(document.activeElement).toBe(instructions);
 });
@@ -1298,11 +1301,12 @@ test("changing the hash on a loaded revision creates one new intent, unaffected 
   expect(windowScroll).not.toHaveBeenCalled();
 });
 
-test("following a thread link again creates one new intent, unaffected by SSE", async () => {
+test("resuming a thread again creates one new intent, unaffected by SSE", async () => {
   const fixture = navigationFixture({ unplaced: true });
   const scroll = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => {});
+  localStorage.setItem(draftKey(id, draftTarget, id), "Resume twice");
   mount(`/r/${id}?tab=comments`);
-  fireEvent.click(await screen.findByRole("link", { name: "Revision 1" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
   const reply = screen.getByLabelText("Reply");
   await waitFor(() => expect(document.activeElement).toBe(reply));
   expect(scroll).toHaveBeenCalledTimes(1);
@@ -1313,7 +1317,7 @@ test("following a thread link again creates one new intent, unaffected by SSE", 
   expect(document.activeElement).toBe(instructions);
   expect(focus).not.toHaveBeenCalled();
   expect(scroll).toHaveBeenCalledTimes(1);
-  fireEvent.click(screen.getByRole("link", { name: "Revision 1" }));
+  fireEvent.click(screen.getByRole("button", { name: "Resume" }));
   await waitFor(() => expect(document.activeElement).toBe(reply));
   expect(focus).toHaveBeenCalledTimes(1);
   expect(scroll).toHaveBeenCalledTimes(2);
@@ -1363,9 +1367,12 @@ function withDiff(threads: ThreadView[] = [diffThread], file: Partial<FileView> 
   );
 }
 test("Resume claims the Comments reply from the diff, focuses it and keeps thread ids unique", async () => {
-  withDiff();
+  withDiff([
+    { ...diffThread, comments: diffThread.comments.map((comment) => ({ ...comment, sent: true, sentOn: 1 })) },
+  ]);
   mount(`/r/${id}`);
   const diff = within(await screen.findByTestId("diff-pane"));
+  fireEvent.click(await diff.findByRole("button", { name: "Reply" }));
   const input = await diff.findByLabelText("Reply");
   input.focus();
   fireEvent.change(input, { target: { value: "Follow-up" } });
@@ -1407,20 +1414,22 @@ test("Resume of a lines draft opens the phone Diff tab and focuses its file comp
     after: [],
   };
   localStorage.setItem(draftKey(id, target), "Line draft");
-  const scroll = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => {});
+
   const { history } = mount(`/r/${id}?tab=comments`);
   const drafts = within(await screen.findByRole("region", { name: "Unsaved comments" }));
   fireEvent.click(drafts.getByRole("button", { name: "Resume" }));
   await waitFor(() => expect(history.location.search).toContain("tab=diff"));
-  const section = await screen.findByRole("region", { name: "File new.txt" });
-  const input = await within(section).findByLabelText("Comment");
+  const section = await screen.findByRole("region", { name: "File new.txt", hidden: true });
+  const input = await within(await screen.findByRole("dialog", { name: "New comment" })).findByLabelText("Comment");
   expect((input as HTMLTextAreaElement).value).toBe("Line draft");
   await waitFor(() => expect(document.activeElement).toBe(input));
-  expect(scroll.mock.instances).toContain(section);
+  expect(section.contains(input)).toBe(false);
   expect(screen.queryByRole("region", { name: "Resumed comment" })).toBeNull();
 });
 test("a delayed diff reply save cannot clear newer text after Comments claims the key", async () => {
-  withDiff();
+  withDiff([
+    { ...diffThread, comments: diffThread.comments.map((comment) => ({ ...comment, sent: true, sentOn: 1 })) },
+  ]);
   const fallback = fetchMock.getMockImplementation();
   let finish = () => {};
   const submitted: string[] = [];
@@ -1437,10 +1446,11 @@ test("a delayed diff reply save cannot clear newer text after Comments claims th
   });
   mount(`/r/${id}`);
   const diff = within(await screen.findByTestId("diff-pane"));
+  fireEvent.click(await diff.findByRole("button", { name: "Reply" }));
   const input = await diff.findByLabelText("Reply");
   act(() => input.focus());
   fireEvent.change(input, { target: { value: "First reply" } });
-  fireEvent.click(diff.getByRole("button", { name: "Add reply" }));
+  fireEvent.click(diff.getByRole("button", { name: "Save comment" }));
   await waitFor(() => expect(submitted).toHaveLength(1));
   fireEvent.click(screen.getByRole(width < 768 ? "link" : "tab", { name: /Comments/ }));
   fireEvent.click(
@@ -1448,23 +1458,23 @@ test("a delayed diff reply save cannot clear newer text after Comments claims th
   );
   const reading = within(screen.getByTestId("reading-pane"));
   const editor = (await reading.findByLabelText("Reply")) as HTMLTextAreaElement;
-  expect((reading.getByRole("button", { name: "Add reply" }) as HTMLButtonElement).disabled).toBe(true);
+  expect((reading.getByRole("button", { name: "Save comment" }) as HTMLButtonElement).disabled).toBe(true);
   expect(editor.disabled).toBe(false);
   fireEvent.change(editor, { target: { value: "Second unsent reply" } });
   await act(async () => finish());
   await waitFor(() =>
-    expect((reading.getByRole("button", { name: "Add reply" }) as HTMLButtonElement).disabled).toBe(false),
+    expect((reading.getByRole("button", { name: "Save comment" }) as HTMLButtonElement).disabled).toBe(false),
   );
   expect(editor.value).toBe("Second unsent reply");
   expect(localStorage.getItem(draftKey(id, diffTarget, id))).toBe("Second unsent reply");
-  fireEvent.click(reading.getByRole("button", { name: "Add reply" }));
+  fireEvent.click(reading.getByRole("button", { name: "Save comment" }));
   await waitFor(() =>
     expect(submitted).toEqual([
       JSON.stringify({ body: "First reply" }),
       JSON.stringify({ body: "Second unsent reply" }),
     ]),
   );
-  await waitFor(() => expect(editor.value).toBe(""));
+  await waitFor(() => expect(reading.queryByRole("textbox", { name: "Reply" })).toBeNull());
 });
 test("a pending edit resumes in Comments and a completed PATCH preserves newer edit text", async () => {
   withDiff();
@@ -1486,7 +1496,7 @@ test("a pending edit resumes in Comments and a completed PATCH preserves newer e
   const diff = within(await screen.findByTestId("diff-pane"));
   fireEvent.click(await diff.findByRole("button", { name: "Edit" }));
   fireEvent.change(diff.getByLabelText("Edit comment"), { target: { value: "First edit" } });
-  fireEvent.click(diff.getByRole("button", { name: "Save edit" }));
+  fireEvent.click(diff.getByRole("button", { name: "Save changes" }));
   await waitFor(() => expect(submitted).toHaveLength(1));
   fireEvent.click(screen.getByRole(width < 768 ? "link" : "tab", { name: /Comments/ }));
   const drafts = within(await screen.findByRole("region", { name: "Unsaved comments" }));
@@ -1495,15 +1505,15 @@ test("a pending edit resumes in Comments and a completed PATCH preserves newer e
   const reading = within(screen.getByTestId("reading-pane"));
   const input = (await reading.findByLabelText("Edit comment")) as HTMLTextAreaElement;
   expect(document.activeElement).toBe(input);
-  expect((reading.getByRole("button", { name: "Save edit" }) as HTMLButtonElement).disabled).toBe(true);
+  expect((reading.getByRole("button", { name: "Save changes" }) as HTMLButtonElement).disabled).toBe(true);
   fireEvent.change(input, { target: { value: "Second unsent edit" } });
   await act(async () => finish());
   await waitFor(() =>
-    expect((reading.getByRole("button", { name: "Save edit" }) as HTMLButtonElement).disabled).toBe(false),
+    expect((reading.getByRole("button", { name: "Save changes" }) as HTMLButtonElement).disabled).toBe(false),
   );
   expect(input.value).toBe("Second unsent edit");
   expect(localStorage.getItem(editDraftKey(id, id))).toBe("Second unsent edit");
-  fireEvent.click(reading.getByRole("button", { name: "Save edit" }));
+  fireEvent.click(reading.getByRole("button", { name: "Save changes" }));
   await waitFor(() => expect(localStorage.getItem(editDraftKey(id, id))).toBeNull());
   expect(submitted).toEqual([JSON.stringify({ body: "First edit" }), JSON.stringify({ body: "Second unsent edit" })]);
 });
@@ -1527,25 +1537,24 @@ test.each(
   fetchMock.mockImplementation((path, init) =>
     init?.method === "POST" ? Promise.resolve(Response.json({})) : (fallback?.(path, init) as Promise<Response>),
   );
-  mount(`/r/${id}?tab=comments`);
+  const { history } = mount(`/r/${id}?tab=comments`);
   fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
   const pane = await screen.findByTestId("diff-pane");
-  const editor = (await within(pane).findByLabelText("Comment")) as HTMLTextAreaElement;
+  const composer = within(size === 390 ? await screen.findByRole("dialog", { name: "New comment" }) : pane);
+  const editor = (await composer.findByLabelText("Comment")) as HTMLTextAreaElement;
   expect(editor.value).toBe("Resume this draft");
   await waitFor(() => expect(document.activeElement).toBe(editor));
-  if (size === 390)
-    expect(
-      screen.getByRole("link", { name: "Diff" }).getAttribute(width < 768 ? "aria-current" : "aria-selected"),
-    ).toBe(width < 768 ? "page" : "true");
+  if (size === 390) expect(history.location.search).toContain("tab=diff");
   // Deleting the draft's text while editing does not mean Discard.
   fireEvent.change(editor, { target: { value: "" } });
   expect(screen.getByTestId("diff-pane")).toBe(pane);
   fireEvent.change(editor, { target: { value: "Resume this draft" } });
   if (end === "discard") {
+    if (size === 390) fireEvent.click(composer.getByRole("button", { name: "Cancel" }));
     fireEvent.click(screen.getByRole(width < 768 ? "link" : "tab", { name: /Comments/ }));
     const drafts = within(await screen.findByRole("region", { name: "Unsaved comments" }));
     fireEvent.click(drafts.getByRole("button", { name: "Discard" }));
-  } else fireEvent.click(within(pane).getByRole("button", { name: end === "save" ? "Save comment" : "Cancel" }));
+  } else fireEvent.click(composer.getByRole("button", { name: end === "save" ? "Save comment" : "Cancel" }));
   await waitFor(() => expect(screen.queryByTestId("diff-pane")).toBeNull());
   expect(screen.queryByRole("link", { name: "Diff" })).toBeNull();
   expect(localStorage.getItem(key)).toBe(end === "cancel" ? "Resume this draft" : null);
@@ -1565,17 +1574,15 @@ test.each([390, 1280])("a removed HTML draft keeps Docs visible at %s px until c
   openingRevision({ writeupEmpty: false });
   const target: Target = { kind: "html-span", path: "removed.html", quote: "seed", prefix: "", suffix: "" };
   localStorage.setItem(draftKey(id, target), "HTML draft");
-  mount(`/r/${id}?tab=comments`);
+  const { history } = mount(`/r/${id}?tab=comments`);
   fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
-  const composer = within(await screen.findByRole("region", { name: "Resumed comment" }));
-  expect((composer.getByLabelText("Comment") as HTMLTextAreaElement).value).toBe("HTML draft");
-  await waitFor(() =>
-    expect(
-      screen
-        .getByRole(width < 768 ? "link" : "tab", { name: /^Docs(?: \d+)?$/ })
-        .getAttribute(width < 768 ? "aria-current" : "aria-selected"),
-    ).toBe(width < 768 ? "page" : "true"),
+  const composer = within(
+    await screen.findByRole(size === 390 ? "dialog" : "region", {
+      name: size === 390 ? "New comment" : "Resumed comment",
+    }),
   );
+  expect((composer.getByLabelText("Comment") as HTMLTextAreaElement).value).toBe("HTML draft");
+  await waitFor(() => expect(history.location.search).toContain("tab=docs"));
   fireEvent.click(composer.getByRole("button", { name: "Cancel" }));
   await waitFor(() => expect(screen.queryByRole(width < 768 ? "link" : "tab", { name: /^Docs(?: \d+)?$/ })).toBeNull());
   expect(screen.queryByRole("region", { name: "Resumed comment" })).toBeNull();
@@ -1607,14 +1614,14 @@ test.each(["writeup", "docs"] as const)(
         : { docs: [{ path: "old.md", kind: "markdown", blocks: [block] }] },
     );
     localStorage.setItem(draftKey(id, target), "Keep editing");
-    mount(`/r/${id}?rev=1&tab=comments`);
+    const { history } = mount(`/r/${id}?rev=1&tab=comments`);
     fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
     const name = tab === "writeup" ? "Writeup" : "Docs";
-    await waitFor(() => expect(screen.getByRole("link", { name }).getAttribute("aria-current")).toBe("page"));
-    await chooseRevision(2);
+    await waitFor(() => expect(history.location.search).toContain(`tab=${tab}`));
+    await act(async () => history.push(`/r/${id}?rev=2&tab=${tab}`));
     await waitFor(() => expect(screen.queryByText("Plant a seed.")).toBeNull());
-    expect(screen.getByRole("link", { name }).getAttribute("aria-current")).toBe("page");
-    const composer = within(screen.getByRole("region", { name: "Resumed comment" }));
+    expect(history.location.search).toContain(`tab=${tab}`);
+    const composer = within(screen.getByRole("dialog", { name: "New comment" }));
     expect((composer.getByLabelText("Comment") as HTMLTextAreaElement).value).toBe("Keep editing");
     fireEvent.click(composer.getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByRole("link", { name })).toBeNull());
@@ -1627,16 +1634,13 @@ test.each(["writeup", "docs"] as const)(
 test("an unplaced reading draft resumed beside Diff stays visible when resized to a phone", async () => {
   openingRevision({ files: [{ ...diffFile, topic: null }], writeup: { sections: [] } });
   localStorage.setItem(draftKey(id, draftTarget), "Unplaced writeup draft");
-  mount(`/r/${id}?tab=diff`);
+  const { history } = mount(`/r/${id}?tab=diff`);
   fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
   expect(((await screen.findByLabelText("Comment")) as HTMLTextAreaElement).value).toBe("Unplaced writeup draft");
   act(() => resize(390));
   expect(((await screen.findByLabelText("Comment")) as HTMLTextAreaElement).value).toBe("Unplaced writeup draft");
-  expect(
-    screen
-      .getByRole(width < 768 ? "link" : "tab", { name: /Comments/ })
-      .getAttribute(width < 768 ? "aria-current" : "aria-selected"),
-  ).toBe(width < 768 ? "page" : "true");
+  expect(history.location.search).toContain("tab=comments");
+  expect(screen.getByRole("dialog", { name: "New comment" })).toBeTruthy();
 });
 
 test.each([null, "2026-01-02T00:00:00.000Z"])("shows provenance only for copied reviews (%s)", async (importedAt) => {
@@ -1775,7 +1779,7 @@ test("single origin omits the machine filter; subtitle excludes moved and comple
     { ...item, id: "44444444-4444-4444-8444-444444444444", movedTo: "https://hub.example/r/new" },
   ]);
   mount();
-  await screen.findByText("1 need you · 1 machine");
+  await screen.findByText("1 needs you · 1 machine");
   expect(screen.queryByRole("combobox", { name: "Machine" })).toBeNull();
 });
 
@@ -1963,7 +1967,7 @@ test("an approved review at an older revision does not claim that revision was a
   );
   mount(`/r/${id}?rev=1`);
   await screen.findByRole("button", { name: /^Revision 1(?: of|,)/ });
-  const header = screen.getByRole("heading", { level: 1, name: item.title }).parentElement;
+  const header = screen.getByRole("heading", { level: 1, name: item.title }).parentElement?.parentElement;
   if (!header) throw new Error("Missing review header");
   expect(within(header).getAllByText("Approved")).toHaveLength(1);
   expect(within(header).queryByText(/Approved.*rev/i)).toBeNull();

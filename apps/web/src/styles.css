@@ -7,6 +7,7 @@
 @import "./styles/base.css";
 @import "./styles/prose.css";
 @import "./styles/reading.css";
+@import "./styles/threads.css";
 
 @layer components {
   .review-input {

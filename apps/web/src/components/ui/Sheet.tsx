@@ -1,6 +1,6 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
-import { type ComponentProps, type ReactNode, useRef } from "react";
+import { type ComponentProps, type ReactNode, type RefObject, useRef } from "react";
 import { IconButton } from "./IconButton.tsx";
 import { isToastInteraction, overlayClass } from "./overlay.ts";
 import { cn } from "./utils.ts";
@@ -16,6 +16,8 @@ export interface SheetProps {
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
   onInteractOutside?: ComponentProps<typeof Dialog.Content>["onInteractOutside"];
+  initialFocus?: RefObject<HTMLElement | null>;
+  returnFocus?: () => HTMLElement | null;
 }
 
 const sides = {
@@ -36,6 +38,8 @@ export function Sheet({
   open,
   onOpenChange,
   onInteractOutside,
+  initialFocus,
+  returnFocus,
 }: SheetProps) {
   const content = useRef<HTMLDivElement>(null);
   const opener = useRef<HTMLElement | null>(null);
@@ -56,12 +60,13 @@ export function Sheet({
                 ? document.activeElement
                 : null;
             event.preventDefault();
-            content.current?.focus();
+            (initialFocus?.current ?? content.current)?.focus();
           }}
           onCloseAutoFocus={(event) => {
-            if (!trigger && opener.current?.isConnected) {
+            const target = returnFocus?.() ?? opener.current;
+            if (!trigger && target?.isConnected) {
               event.preventDefault();
-              opener.current.focus();
+              target.focus({ preventScroll: true });
             }
           }}
           {...(description ? {} : { "aria-describedby": undefined })}

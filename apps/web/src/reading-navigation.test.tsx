@@ -9,6 +9,7 @@ import { App } from "./App.tsx";
 import type { DiffPaneProps } from "./components/diff/DiffPane.tsx";
 import { blockLink } from "./components/threads/ThreadCard.tsx";
 import { draftKey } from "./lib/drafts.ts";
+import { cancelThreadActionFocus } from "./lib/thread-action-focus.ts";
 import { validateReviewSearch } from "./router.tsx";
 
 const loading = vi.hoisted(() => ({ ready: undefined as Promise<void> | undefined }));
@@ -134,11 +135,13 @@ beforeEach(() => {
   );
 });
 afterEach(async () => {
+  cancelThreadActionFocus();
   cleanup();
   client.clear();
   await (window as unknown as Window).happyDOM.abort();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 function mount(search = "?tab=writeup&rev=1") {
   const history = createMemoryHistory({ initialEntries: [`/r/${id}${search}`] });
@@ -795,7 +798,8 @@ test.each(["block", "doc-thread", "html-thread"])("a Comments URL with a %s hash
   const hash = kind === "block" ? `block-${docBlock.id}` : `thread-${id}`;
   const { history, container } = mount(`?tab=comments#${hash}`);
   await screen.findByRole("tabpanel", { name: "Comments 2" });
-  await screen.findByLabelText("Reply");
+  await waitFor(() => expect(document.getElementById(`thread-${id}`)).toBeTruthy());
+  expect(screen.queryByRole("textbox", { name: "Reply" })).toBeNull();
   expect(searchParams(history).get("tab")).toBe("comments");
   expect(searchParams(history).has("doc")).toBe(false);
   expect(history.location.hash).toBe(`#${hash}`);
@@ -845,4 +849,427 @@ test("a data refresh that opens a sole doc does not take heading focus", async (
   });
   await screen.findByRole("heading", { name: plainDoc.path });
   expect(document.activeElement).toBe(instructions);
+});
+
+function placedWriteupThread(): ThreadView {
+  return {
+    id,
+    createdOn: 1,
+    state: "sent",
+    target: { kind: "writeup-span", blockId: "t-seed-body-12345678", quote: "Keep growing", prefix: "", suffix: "" },
+    placement: {
+      status: "placed",
+      location: { kind: "writeup-span", blockId: "t-seed-body-12345678", start: 0, end: 12 },
+    },
+    comments: [{ id, author: "user", body: "A synthetic question", sent: true, sentOn: 1 }],
+  };
+}
+test.each(
+  ["reply", "edit"].flatMap((kind) =>
+    ["immediate", "regroup", "focus elsewhere", "navigate"].map((next) => ({ kind, next })),
+  ),
+)("fix2 phone $kind Save returns focus through a Comments regroup: $next", async ({ kind, next }) => {
+  width = 390;
+  const thread = placedWriteupThread();
+  const editing = kind === "edit";
+  if (editing) thread.comments = thread.comments.map((comment) => ({ ...comment, sent: false, sentOn: null }));
+  const beforeGroup = editing ? "Unsent" : "Sent";
+  const afterGroup = editing ? "Unplaced" : "Unsent";
+  const action = editing ? "Edit" : "Reply";
+  currentRevision.threads = [thread];
+  const original = vi.mocked(fetch).getMockImplementation();
+  vi.mocked(fetch).mockImplementation(async (path, init) => {
+    if (
+      (path === `/api/v1/threads/${id}/comments` && init?.method === "POST") ||
+      (path === `/api/v1/comments/${id}` && init?.method === "PATCH")
+    )
+      return Response.json({ commentId: "22222222-2222-4222-8222-222222222222" }, { status: 201 });
+    return original?.(path, init) as Promise<Response>;
+  });
+  const { history } = mount("?tab=comments&rev=1");
+  const before = within(await screen.findByRole("region", { name: beforeGroup }));
+  const opener = before.getByRole("button", { name: action });
+  const oldCard = opener.closest("[data-thread-card]");
+  fireEvent.click(opener);
+  const input = await screen.findByRole("textbox", { name: editing ? "Edit comment" : "Reply" });
+  await waitFor(() => expect(document.activeElement).toBe(input));
+  fireEvent.change(input, { target: { value: "Check the seedlings" } });
+  currentRevision.threads = [
+    editing
+      ? {
+          ...thread,
+          placement: { status: "unplaced", reason: "not-placed" },
+          comments: thread.comments.map((comment) => ({ ...comment, body: "Check the seedlings" })),
+        }
+      : {
+          ...thread,
+          comments: [
+            ...thread.comments,
+            {
+              id: "22222222-2222-4222-8222-222222222222",
+              author: "user",
+              body: "Check the seedlings",
+              sent: false,
+              sentOn: null,
+            },
+          ],
+        },
+  ];
+  const refresh = Promise.withResolvers<Response>();
+  revisionReply = refresh.promise;
+  if (next === "immediate") refresh.resolve(Response.json(currentRevision));
+  fireEvent.click(screen.getByRole("button", { name: editing ? "Save changes" : "Save comment" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  if (next !== "immediate") {
+    const oldButton = before.getByRole("button", { name: action });
+    await waitFor(() => expect(document.activeElement).toBe(oldButton));
+  }
+  const more = screen.getByRole("button", { name: "More" });
+  if (next === "focus elsewhere") act(() => more.focus());
+  if (next === "navigate") {
+    // Programmatic navigation does not itself move focus. Return to the same
+    // thread so a stale return intent would steal focus on its replacement.
+    await act(async () => history.push(`/r/${id}?tab=writeup&rev=1`));
+    await screen.findByRole("heading", { name: "Topic 1: Plant a seed" });
+    await act(async () => history.push(`/r/${id}?tab=comments&rev=1`));
+    await screen.findByRole("region", { name: beforeGroup });
+  }
+  await act(async () => refresh.resolve(Response.json(currentRevision)));
+  const after = within(await screen.findByRole("region", { name: afterGroup }));
+  const currentButton = after.getByRole("button", { name: action });
+  expect(currentButton.closest("[data-thread-card]")).not.toBe(oldCard);
+  expect(oldCard?.isConnected).toBe(false);
+  if (next === "regroup" || next === "immediate")
+    await waitFor(() => expect(document.activeElement).toBe(currentButton));
+  else if (next === "focus elsewhere") expect(document.activeElement).toBe(more);
+  else expect(document.activeElement).not.toBe(currentButton);
+});
+test.each([
+  ...["Cancel", "Save"].flatMap((close) => ["pointer", "keyboard", "timeout"].map((next) => ({ close, next }))),
+  ...["Cancel", "Escape", "Close"].map((close) => ({ close, next: "refresh" })),
+])("fix3 phone Reply $close cannot reclaim focus on a later refresh after $next", async ({ close, next }) => {
+  width = 390;
+  const thread = placedWriteupThread();
+  currentRevision.threads = [thread];
+  const original = vi.mocked(fetch).getMockImplementation();
+  vi.mocked(fetch).mockImplementation(async (path, init) => {
+    if (path === `/api/v1/threads/${id}/comments` && init?.method === "POST")
+      return Response.json({ commentId: "22222222-2222-4222-8222-222222222222" }, { status: 201 });
+    return original?.(path, init) as Promise<Response>;
+  });
+  mount("?tab=comments&rev=1");
+  fireEvent.click(await screen.findByRole("button", { name: "Reply" }));
+  const input = await screen.findByRole("textbox", { name: "Reply" });
+  await waitFor(() => expect(document.activeElement).toBe(input));
+  if (close === "Save") {
+    fireEvent.change(input, { target: { value: "Check the seedlings" } });
+    currentRevision.threads = [
+      {
+        ...thread,
+        comments: [
+          ...thread.comments,
+          {
+            id: "22222222-2222-4222-8222-222222222222",
+            author: "user",
+            body: "Check the seedlings",
+            sent: false,
+            sentOn: null,
+          },
+        ],
+      },
+    ];
+  }
+  if (next === "timeout") vi.useFakeTimers();
+  if (close === "Escape") fireEvent.keyDown(input, { key: "Escape" });
+  else fireEvent.click(screen.getByRole("button", { name: close === "Save" ? "Save comment" : close }));
+  if (next === "timeout") await act(async () => vi.advanceTimersByTimeAsync(20));
+  else await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Reply" })));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  const returned = screen.getByRole("button", { name: "Reply" });
+  expect(document.activeElement).toBe(returned);
+  const content = screen.getByText("A synthetic question");
+  if (next === "pointer") {
+    fireEvent.pointerDown(content);
+    // happy-dom does not perform the browser's blur on non-focusable content.
+    act(() => returned.blur());
+    fireEvent.click(content);
+  } else if (next === "keyboard") {
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    act(() => returned.blur());
+  } else if (next === "timeout") {
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+    act(() => returned.blur());
+  }
+  if (next !== "refresh") expect(document.activeElement).toBe(document.body);
+  await act(async () => {
+    client.setQueryData(["revision", id, 1], {
+      ...currentRevision,
+      threads: [
+        {
+          ...thread,
+          state: "answered",
+          comments: [
+            ...(currentRevision.threads[0]?.comments ?? []).map((comment) => ({ ...comment, sent: true, sentOn: 1 })),
+            {
+              id: "33333333-3333-4333-8333-333333333333",
+              author: "agent",
+              body: "The seedlings are checked",
+              sent: false,
+              sentOn: null,
+              outcome: "explained",
+            },
+          ],
+        },
+      ],
+    });
+    if (next === "timeout") await vi.advanceTimersByTimeAsync(20);
+  });
+  if (next === "timeout") expect(screen.getByRole("region", { name: "Answered" })).toBeTruthy();
+  else await screen.findByRole("region", { name: "Answered" });
+  expect(returned.isConnected).toBe(false);
+  expect(document.activeElement).toBe(document.body);
+});
+test.each([1280, 768, 390])("Comment on review opens and saves Whole review at %s px", async (pixels) => {
+  width = pixels;
+  mount();
+  await screen.findByRole("heading", { name: "Topic 1: Plant a seed" });
+  if (pixels === 390) {
+    fireEvent.keyDown(screen.getByRole("button", { name: "More" }), { key: "ArrowDown" });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Comment on review" }));
+    await screen.findByRole("dialog", { name: "New comment" });
+  } else fireEvent.click(screen.getByRole("button", { name: "Comment on review" }));
+  expect(await screen.findByText("Whole review")).toBeTruthy();
+  const input = screen.getByRole("textbox", { name: "Comment" });
+  await waitFor(() => expect(document.activeElement).toBe(input));
+  fireEvent.change(input, { target: { value: "Review the whole garden" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save comment" }));
+  await waitFor(() =>
+    expect(fetch).toHaveBeenCalledWith(
+      `/api/v1/reviews/${id}/threads`,
+      expect.objectContaining({
+        method: "POST",
+        credentials: "same-origin",
+        body: JSON.stringify({ revision: 1, target: { kind: "review" }, body: "Review the whole garden" }),
+      }),
+    ),
+  );
+  await waitFor(() => expect(screen.queryByRole("textbox", { name: "Comment" })).toBeNull());
+});
+test("whole review threads appear in Comments without a Show in place link", async () => {
+  currentRevision.threads = [
+    {
+      ...placedWriteupThread(),
+      target: { kind: "review" },
+      placement: { status: "placed", location: { kind: "review" } },
+    },
+  ];
+  mount("?tab=comments");
+  expect(await screen.findByText("Whole review")).toBeTruthy();
+  expect(screen.getByText("A synthetic question")).toBeTruthy();
+  expect(screen.queryByRole("link", { name: "Show in place" })).toBeNull();
+});
+test.each([1280, 390])("Show in place routes to and scrolls a writeup thread at %s px", async (pixels) => {
+  width = pixels;
+  currentRevision.threads = [placedWriteupThread()];
+  const scroll = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => {});
+  const { history } = mount("?tab=comments&rev=1");
+  fireEvent.click(await screen.findByRole("link", { name: "Show in place" }));
+  await screen.findByRole("heading", { name: "Topic 1: Plant a seed" });
+  expect(searchParams(history).get("tab")).toBe("writeup");
+  expect(history.location.hash).toBe(`#thread-${id}`);
+  await waitFor(() => expect(scroll.mock.instances).toContain(document.getElementById(`thread-${id}`)));
+  expect(screen.queryByRole("textbox", { name: "Reply" })).toBeNull();
+});
+test.each([1280, 390])("Show in place reaches a line thread, using the phone Diff tab at %s px", async (pixels) => {
+  width = pixels;
+  const target = {
+    kind: "lines" as const,
+    path: "seed.txt",
+    side: "new" as const,
+    start: 5,
+    end: 5,
+    lines: ["seed"],
+    before: [],
+    after: [],
+  };
+  currentRevision.files = currentRevision.files.map((file) => ({ ...file, hasNew: true }));
+  currentRevision.threads = [{ ...placedWriteupThread(), target, placement: { status: "placed", location: target } }];
+  const scroll = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => {});
+  const { history } = mount("?tab=comments&rev=1");
+  fireEvent.click(await screen.findByRole("link", { name: "Show in place" }));
+  await act(async () => loaded.resolve());
+  await screen.findByTestId("diff-pane");
+  expect(searchParams(history).get("tab")).toBe(pixels === 390 ? "diff" : "comments");
+  await waitFor(() => expect(scroll.mock.instances).toContain(document.getElementById(`diff-thread-${id}`)));
+});
+test("desktop block composer is inline after the block's threads, with one quote", async () => {
+  currentRevision.threads = [placedWriteupThread()];
+  const { container } = mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Comment on block" }));
+  const input = screen.getByRole("textbox", { name: "Comment" });
+  expect(document.activeElement).toBe(input);
+  const block = container.querySelector("[data-commenting]");
+  const thread = document.getElementById(`thread-${id}`);
+  expect(block?.contains(input)).toBe(true);
+  expect((thread?.compareDocumentPosition(input) ?? 0) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(input.closest("form")?.querySelectorAll("mark")).toHaveLength(1);
+  expect(input.closest("form")?.querySelector("blockquote")).toBeNull();
+});
+test("task 1.13 at 390 × 844 portals the composer outside reading; Cancel leaves Send before the bottom tabs", async () => {
+  width = 390;
+  vi.stubGlobal("innerWidth", 390);
+  vi.stubGlobal("innerHeight", 844);
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Comment on block" }));
+  const reading = screen.getByTestId("reading-pane");
+  const sheet = await screen.findByRole("dialog", { name: "New comment" });
+  const input = within(sheet).getByRole("textbox", { name: "Comment" });
+  expect(reading.contains(sheet)).toBe(false);
+  expect(document.activeElement).toBe(input);
+  expect(reading.querySelector("[data-commenting]")).toBeTruthy();
+  expect(reading.querySelector("textarea")).toBeNull();
+  fireEvent.change(input, { target: { value: "Keep the phone draft" } });
+  fireEvent.click(within(sheet).getByRole("button", { name: "Cancel" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  const send = screen.getByRole("button", { name: /^Send/ });
+  const tabs = screen.getByRole("navigation", { name: "Review tabs" });
+  expect(reading.contains(send)).toBe(false);
+  expect(reading.compareDocumentPosition(send) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(send.compareDocumentPosition(tabs) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  fireEvent.click(within(tabs).getByRole("link", { name: /Comments/ }));
+  const drafts = within(await screen.findByRole("region", { name: "Unsaved comments" }));
+  expect(drafts.getByText("Keep the phone draft")).toBeTruthy();
+});
+
+test.each(["Comment on review", "Comment on block"])("fix1 %s scrolls its own composer into view", async (action) => {
+  const scroll = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => {});
+  mount();
+  await screen.findByRole("heading", { name: "Topic 1: Plant a seed" });
+  fireEvent.click(screen.getByRole("button", { name: action }));
+  const editor = await screen.findByRole("textbox", { name: "Comment" });
+  const call = scroll.mock.instances.findIndex((node) => {
+    const element = node as HTMLElement;
+    return element.classList.contains("em-composer") && element.contains(editor);
+  });
+  expect(call).toBeGreaterThanOrEqual(0);
+  expect(scroll.mock.calls[call]).toEqual([{ block: "nearest" }]);
+  if (action === "Comment on review") {
+    const slot = screen.getByRole("region", { name: "Resumed comment" });
+    expect(slot.classList.contains("sticky")).toBe(true);
+    expect(slot.classList.contains("bottom-0")).toBe(true);
+  }
+});
+test("fix1 blank Comment on review cancellation leaves no draft or editor after a tab switch", async () => {
+  mount();
+  await screen.findByRole("heading", { name: "Topic 1: Plant a seed" });
+  fireEvent.click(screen.getByRole("button", { name: "Comment on review" }));
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(localStorage.getItem(draftKey(id, { kind: "review" }))).toBeNull();
+  fireEvent.click(screen.getByRole("tab", { name: "Comments 2" }));
+  await screen.findByText("No comments yet.");
+  fireEvent.click(screen.getByRole("tab", { name: "Writeup" }));
+  await screen.findByRole("heading", { name: "Topic 1: Plant a seed" });
+  expect(screen.queryByRole("textbox", { name: "Comment" })).toBeNull();
+});
+test("fix1 an unplaced diff revision link preserves Instructions and creates a router intent", async () => {
+  currentRevision.threads = [
+    {
+      ...placedWriteupThread(),
+      target: { kind: "file", path: "removed.txt" },
+      placement: { status: "unplaced", reason: "file-gone" },
+    },
+  ];
+  currentReview.newestRevision = 2;
+  currentReview.revisions.push({ seq: 2, createdAt: "2026-01-02T00:00:00.000Z" });
+  const { history } = mount("?rev=2&tab=writeup");
+  await act(async () => loaded.resolve());
+  const diff = within(await screen.findByTestId("diff-pane"));
+  const link = await diff.findByRole("link", { name: "revision 1" });
+  fireEvent.change(screen.getByRole("textbox", { name: "Instructions" }), {
+    target: { value: "Keep these instructions" },
+  });
+  const click = new MouseEvent("click", { button: 0, bubbles: true, cancelable: true });
+  fireEvent(link, click);
+  expect(click.defaultPrevented).toBe(true);
+  await waitFor(() => expect(searchParams(history).get("rev")).toBe("1"));
+  expect(searchParams(history).get("tab")).toBe("comments");
+  expect(searchParams(history).get("thread")).toBe(id);
+  expect((screen.getByRole("textbox", { name: "Instructions" }) as HTMLTextAreaElement).value).toBe(
+    "Keep these instructions",
+  );
+  const editor = await screen.findByRole("textbox", { name: "Reply" });
+  expect(document.activeElement).toBe(editor);
+});
+test("fix1 Resume expands a resolved card and focuses its unsent edit", async () => {
+  const thread = placedWriteupThread();
+  currentRevision.threads = [
+    {
+      ...thread,
+      state: "resolved",
+      comments: thread.comments.map((comment) => ({ ...comment, sent: false, sentOn: null })),
+    },
+  ];
+  localStorage.setItem(`emend.draft.${id}.edit.${id}`, "Resume this edit");
+  mount("?tab=comments");
+  fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+  const editor = await screen.findByRole("textbox", { name: "Edit comment" });
+  expect((editor as HTMLTextAreaElement).value).toBe("Resume this edit");
+  expect(document.activeElement).toBe(editor);
+});
+test("fix1 closing a phone selection sheet restores focus in the reading pane", async () => {
+  width = 390;
+  mount();
+  const button = await screen.findByRole("button", { name: "Comment on block" });
+  act(() => button.focus());
+  fireEvent.click(button);
+  const sheet = await screen.findByRole("dialog", { name: "New comment" });
+  fireEvent.click(within(sheet).getByRole("button", { name: "Close" }));
+  await waitFor(() => expect(screen.getByTestId("reading-pane").contains(document.activeElement)).toBe(true));
+});
+
+test.each(["Cancel", "Save comment"])("fix1 Resume then %s closes replies in both real panes", async (action) => {
+  const target = { kind: "file" as const, path: "seed.txt" };
+  currentRevision.threads = [{ ...placedWriteupThread(), target, placement: { status: "placed", location: target } }];
+  const request = vi.mocked(fetch).getMockImplementation();
+  vi.mocked(fetch).mockImplementation((path, init) => {
+    if (path === `/api/v1/threads/${id}/comments`)
+      return Promise.resolve(Response.json({ commentId: id }, { status: 201 }));
+    if (!request) throw new Error("Missing synthetic request handler");
+    return request(path, init);
+  });
+  mount();
+  await act(async () => loaded.resolve());
+  const diff = within(await screen.findByTestId("diff-pane"));
+  fireEvent.click(await diff.findByRole("button", { name: "Reply" }));
+  fireEvent.change(diff.getByRole("textbox", { name: "Reply" }), { target: { value: "A reply in two panes" } });
+  fireEvent.click(screen.getByRole("tab", { name: "Comments 2" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+  const comments = within(screen.getByTestId("reading-pane"));
+  expect(document.activeElement).toBe(comments.getByRole("textbox", { name: "Reply" }));
+  fireEvent.click(comments.getByRole("button", { name: action }));
+  await waitFor(() => expect(screen.queryByRole("textbox", { name: "Reply" })).toBeNull());
+  expect(diff.getByRole("button", { name: "Reply" }).hasAttribute("data-composer-placeholder")).toBe(false);
+  expect(comments.getByRole("button", { name: "Reply" }).hasAttribute("data-composer-placeholder")).toBe(false);
+  expect(localStorage.getItem(draftKey(id, target, id))).toBe(action === "Cancel" ? "A reply in two panes" : null);
+});
+
+test("fix1 a removed phone selection prompt returns focus to the reading pane", async () => {
+  width = 390;
+  mount();
+  const text = await screen.findByText("Keep growing");
+  const selection = window.getSelection();
+  if (!selection || !text.firstChild) throw new Error("Missing synthetic selection");
+  const range = document.createRange();
+  range.selectNodeContents(text.firstChild);
+  selection.removeAllRanges();
+  selection.addRange(range);
+  fireEvent.mouseUp(text);
+  selection.removeAllRanges();
+  const prompt = screen.getByRole("button", { name: "Comment on selection" });
+  act(() => prompt.focus());
+  fireEvent.click(prompt);
+  const sheet = await screen.findByRole("dialog", { name: "New comment" });
+  expect(prompt.isConnected).toBe(false);
+  fireEvent.keyDown(within(sheet).getByRole("textbox", { name: "Comment" }), { key: "Escape" });
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId("reading-pane")));
 });

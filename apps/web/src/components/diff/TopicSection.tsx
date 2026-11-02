@@ -38,6 +38,7 @@ export function TopicSection({ topic, files, ...context }: DiffContext & { topic
             reviewId={context.reviewId}
             revision={context.revision}
             target={active}
+            topics={context.topics}
             onSaved={close}
             onCancel={close}
           />

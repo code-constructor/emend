@@ -1,8 +1,10 @@
-import { LIMITS, type Target } from "@emend/contract";
-import { type ReactNode, type RefObject, useId, useSyncExternalStore } from "react";
+import { LIMITS, type Target, type TopicMeta } from "@emend/contract";
+import { Lock } from "lucide-react";
+import { type ReactNode, type RefObject, useId, useLayoutEffect, useRef, useSyncExternalStore } from "react";
 import { mutationMessage, useReviewMutation } from "../../api/mutations.ts";
 import { useComposerOwner } from "../../lib/composer-owner.ts";
 import {
+  clearDraft,
   draftKey,
   editDraftKey,
   hasDraft,
@@ -11,18 +13,24 @@ import {
   saveDraft,
   subscribeDrafts,
 } from "../../lib/drafts.ts";
+import { useLayout } from "../../lib/layout.ts";
 import { clipText } from "../../lib/selection.ts";
+import { targetLabel } from "../diff/targets.ts";
 import { Button } from "../ui/Button.tsx";
+import { Icon } from "../ui/Icon.tsx";
+import { Sheet } from "../ui/Sheet.tsx";
 
 export function Composer({
   reviewId,
   revision,
   target,
+  topics,
   threadId,
   commentId,
   storageKey,
   onSaved,
   onCancel,
+  returnFocus,
   surface = "reading",
   wrap,
   placeholder = true,
@@ -30,6 +38,7 @@ export function Composer({
   reviewId: string;
   revision: number;
   target: Target;
+  topics?: TopicMeta[];
   threadId?: string;
   commentId?: string;
   storageKey?: string;
@@ -38,12 +47,31 @@ export function Composer({
   placeholder?: boolean;
   onSaved?: () => void;
   onCancel?: () => void;
+  returnFocus?: (saved: boolean) => HTMLElement | null;
 }) {
   const key = storageKey ?? (commentId ? editDraftKey(reviewId, commentId) : draftKey(reviewId, target, threadId));
   const owner = useComposerOwner(key, surface);
+  const phone = useLayout() === "phone";
+  const saved = useRef(false);
+  useLayoutEffect(() => {
+    saved.current = false;
+    if (!phone) return;
+    // A successful compare-and-clear can unmount this editor before onSaved,
+    // which runs after invalidation. Keep the close reason for Sheet's callback.
+    return subscribeDrafts(() => {
+      if (isDraftSaving(key) && !hasDraft(key)) saved.current = true;
+    });
+  }, [key, phone]);
+  const cancel = onCancel
+    ? () => {
+        saved.current = false;
+        if (!loadDraft(key).trim()) clearDraft(key);
+        onCancel();
+      }
+    : undefined;
   if (!owner.owns)
     return placeholder ? (
-      <Button data-composer-placeholder onClick={owner.claim} onFocus={owner.claim}>
+      <Button variant="ghost" size="sm" data-composer-placeholder onClick={owner.claim} onFocus={owner.claim}>
         {commentId ? "Edit" : threadId ? "Reply" : "Comment"}
       </Button>
     ) : null;
@@ -56,32 +84,53 @@ export function Composer({
       reviewId={reviewId}
       revision={revision}
       target={target}
+      topics={topics}
+      phone={phone}
       threadId={threadId}
       commentId={commentId}
       onSaved={onSaved}
-      onCancel={onCancel}
+      onCancel={cancel}
     />
   );
+  if (phone)
+    return (
+      <Sheet
+        side="bottom"
+        title={commentId ? "Edit comment" : threadId ? "Reply" : "New comment"}
+        open
+        initialFocus={owner.input}
+        returnFocus={() => returnFocus?.(saved.current) ?? null}
+        onOpenChange={(open) => {
+          if (!open && !isDraftSaving(key)) cancel?.();
+        }}
+      >
+        {editor}
+      </Sheet>
+    );
   return wrap ? wrap(editor) : editor;
 }
 function DraftComposer({
+  phone,
   inputRef,
   onFocus,
   storageKey,
   reviewId,
   revision,
   target,
+  topics,
   threadId,
   commentId,
   onSaved,
   onCancel,
 }: {
+  phone: boolean;
   inputRef: RefObject<HTMLTextAreaElement | null>;
   onFocus: () => void;
   storageKey: string;
   reviewId: string;
   revision: number;
   target: Target;
+  topics?: TopicMeta[];
   threadId?: string;
   commentId?: string;
   onSaved?: () => void;
@@ -90,12 +139,32 @@ function DraftComposer({
   const body = useSyncExternalStore(subscribeDrafts, () => loadDraft(storageKey));
   const field = useId();
   const mutation = useReviewMutation(reviewId, storageKey);
+  const { label, icon } = targetLabel(target, topics);
+  const saveLabel = commentId ? "Save changes" : "Save comment";
+  const shortcut = /Mac|iPhone|iPad|iPod/.test(navigator.platform) ? "⌘↵" : "Ctrl ↵";
   return (
     <form
-      className="space-y-2"
+      className="em-composer"
+      onKeyDown={(event) => {
+        if (event.key === "Escape" && onCancel && !phone) {
+          event.preventDefault();
+          event.stopPropagation();
+          if (!mutation.isPending && !isDraftSaving(storageKey)) onCancel?.();
+        }
+        if (
+          event.key === "Enter" &&
+          (event.metaKey || event.ctrlKey) &&
+          !event.nativeEvent.isComposing &&
+          event.nativeEvent.keyCode !== 229
+        ) {
+          event.preventDefault();
+          event.currentTarget.requestSubmit();
+        }
+      }}
       onSubmit={(event) => {
         event.preventDefault();
-        if (!body.trim() || mutation.isPending || isDraftSaving(storageKey)) return;
+        if (!body.trim() || body.length > LIMITS.commentBodyChars || mutation.isPending || isDraftSaving(storageKey))
+          return;
         mutation.mutate(
           {
             path: commentId
@@ -115,7 +184,19 @@ function DraftComposer({
         );
       }}
     >
-      <label htmlFor={field} className="block text-sm font-medium">
+      <div className="em-composer__target">
+        <Icon icon={icon} size={13} />
+        <span>
+          {commentId ? "Edit · " : threadId ? "Reply · " : ""}
+          {label}
+        </span>
+      </div>
+      {"quote" in target && (
+        <p className="em-thread-quote line-clamp-3">
+          <mark>{target.quote}</mark>
+        </p>
+      )}
+      <label htmlFor={field} className="sr-only">
         {commentId ? "Edit comment" : threadId ? "Reply" : "Comment"}
       </label>
       <textarea
@@ -123,7 +204,8 @@ function DraftComposer({
         onFocus={onFocus}
         id={field}
         data-reply-composer={threadId ? true : undefined}
-        className="review-input min-h-24"
+        className="em-composer__input"
+        placeholder={commentId ? undefined : "Comment. Saved as unsent until you press Send."}
         maxLength={LIMITS.commentBodyChars}
         value={body}
         onChange={(event) => {
@@ -131,16 +213,31 @@ function DraftComposer({
           saveDraft(storageKey, next);
         }}
       />
-      {mutation.error && <p role="alert">{mutationMessage(mutation.error)}</p>}
-      <div className="flex gap-2">
-        <Button type="submit" disabled={!body.trim() || body.length > LIMITS.commentBodyChars || mutation.isPending}>
-          {commentId ? "Save edit" : threadId ? "Add reply" : "Save comment"}
-        </Button>
+      {mutation.error && (
+        <p className="px-3" role="alert">
+          {mutationMessage(mutation.error)}
+        </p>
+      )}
+      <div className="em-composer__foot">
+        <span className="em-composer__hint">
+          <Icon icon={Lock} size={12} />
+          Draft kept in this browser
+        </span>
         {onCancel && (
-          <Button disabled={mutation.isPending} onClick={onCancel}>
+          <Button variant="ghost" size={phone ? "lg" : "sm"} disabled={mutation.isPending} onClick={onCancel}>
             Cancel
           </Button>
         )}
+        <Button
+          type="submit"
+          variant="primary"
+          size={phone ? "lg" : "sm"}
+          kbd={phone ? undefined : shortcut}
+          aria-label={saveLabel}
+          disabled={!body.trim() || body.length > LIMITS.commentBodyChars || mutation.isPending}
+        >
+          {saveLabel}
+        </Button>
       </div>
     </form>
   );

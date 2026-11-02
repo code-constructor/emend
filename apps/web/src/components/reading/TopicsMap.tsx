@@ -1,3 +1,4 @@
+import { plural } from "../../lib/count.ts";
 import type { rankedTopics } from "../../lib/topics.ts";
 import { TopicRank } from "../status/TopicRank.tsx";
 import { TopicMeta } from "./TopicMeta.tsx";
@@ -39,7 +40,7 @@ export function TopicsMap({
                 <TopicMeta topic={topic} />
                 {count > 0 && (
                   <span>
-                    {count} {count === 1 ? "file" : "files"}
+                    {count} {plural(count, "file")}
                   </span>
                 )}
               </div>

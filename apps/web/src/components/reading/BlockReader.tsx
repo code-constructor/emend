@@ -1,4 +1,5 @@
 import type { RenderedBlock, RevisionView, Target } from "@emend/contract";
+import { TextSelect } from "lucide-react";
 import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
 import { claimDraft } from "../../lib/composer-owner.ts";
 import { draftKey } from "../../lib/drafts.ts";
@@ -13,6 +14,7 @@ export type ReaderProps = {
   revision: number;
   changedBlocks: RevisionView["changedBlocks"];
   threads: RevisionView["threads"];
+  topics?: RevisionView["topics"];
   resumedBlockId?: string;
 };
 export type ReaderGroup = {
@@ -36,6 +38,7 @@ export function BlockReader({
   revision,
   changedBlocks,
   threads,
+  topics,
   groups,
   resumedBlockId,
 }: ReaderProps & {
@@ -43,14 +46,23 @@ export function BlockReader({
 }) {
   const headingBase = useId();
   const root = useRef<HTMLDivElement>(null);
+  const opener = useRef<HTMLElement | null>(null);
   const [target, setTarget] = useState<Target | null>(null);
   const [composing, setComposing] = useState(false);
   const [error, setError] = useState("");
   const openComposer = (next: Target) => {
+    opener.current =
+      document.activeElement instanceof HTMLElement && root.current?.contains(document.activeElement)
+        ? document.activeElement
+        : null;
     claimDraft(draftKey(reviewId, next), "reading");
     setTarget(next);
     setComposing(true);
     setError("");
+  };
+  const close = () => {
+    setComposing(false);
+    setTarget(null);
   };
   const changes = new Map(changedBlocks.map((block) => [block.blockId, block.revision]));
   const targets = useMemo(
@@ -117,13 +129,35 @@ export function BlockReader({
       >
         {blockThreads.get(block.id)?.map((thread) => (
           <div key={thread.id} className="mt-2.5 mb-1.5">
-            <ThreadCard reviewId={reviewId} revision={revision} thread={thread} changedBlocks={changedBlocks} />
+            <ThreadCard
+              reviewId={reviewId}
+              revision={revision}
+              thread={thread}
+              changedBlocks={changedBlocks}
+              topics={topics}
+            />
           </div>
         ))}
+        {composing && target && "blockId" in target && target.blockId === block.id && (
+          <Composer
+            reviewId={reviewId}
+            revision={revision}
+            target={target}
+            topics={topics}
+            onSaved={close}
+            onCancel={close}
+            returnFocus={() =>
+              opener.current?.isConnected
+                ? opener.current
+                : (root.current?.closest<HTMLElement>("[data-reading-scroll]") ?? root.current)
+            }
+            wrap={(editor) => <div className="mt-3">{editor}</div>}
+          />
+        )}
       </Block>
     ));
   return (
-    <div ref={root} className="px-4 pt-4 pb-8 md:pt-7 md:pr-8 md:pb-[72px] md:pl-14">
+    <div ref={root} tabIndex={-1} className="px-4 pt-4 pb-8 md:pt-7 md:pr-8 md:pb-[72px] md:pl-14">
       <p className="mb-6 text-fg-3 [font:var(--type-meta)]">Select text to comment.</p>
       {groups.map((group, index) => (
         <section
@@ -154,32 +188,14 @@ export function BlockReader({
           ))}
         </section>
       ))}
-      {(error || target) && (
+      {!composing && (error || target) && (
         <div className="sticky bottom-0 space-y-3 rounded-lg border border-line-2 bg-raised p-3 shadow-2">
           {error && <p role="status">{error}</p>}
-          {target &&
-            (composing ? (
-              <>
-                <blockquote className="max-h-24 overflow-auto border-l-2 pl-2 text-sm">
-                  {"quote" in target && target.quote}
-                </blockquote>
-                <Composer
-                  reviewId={reviewId}
-                  revision={revision}
-                  target={target}
-                  onSaved={() => {
-                    setComposing(false);
-                    setTarget(null);
-                  }}
-                  onCancel={() => {
-                    setComposing(false);
-                    setTarget(null);
-                  }}
-                />
-              </>
-            ) : (
-              <Button onClick={() => openComposer(target)}>Comment on selection</Button>
-            ))}
+          {target && (
+            <Button variant="primary" size="sm" icon={TextSelect} onClick={() => openComposer(target)}>
+              Comment on selection
+            </Button>
+          )}
         </div>
       )}
     </div>

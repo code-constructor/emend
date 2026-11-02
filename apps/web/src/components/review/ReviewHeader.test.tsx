@@ -67,7 +67,7 @@ test("header title, origin, branch, commits, doc count and focus ref use loaded 
   expect(screen.getByText("1 doc · no code changes")).toBeTruthy();
   expect(screen.queryByText("Open")).toBeNull();
   expect(screen.getByText("Agent waiting")).toBeTruthy();
-  expect(screen.queryByRole("button", { name: "Comment on review" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Comment on review" })).toBeTruthy();
 });
 
 test.each([

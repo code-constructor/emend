@@ -1,0 +1,535 @@
+import { LIMITS, type Target, type ThreadView, type UnplacedReason } from "@emend/contract";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { type ReactNode, useState } from "react";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { claimDraft } from "../../lib/composer-owner.ts";
+import { plural } from "../../lib/count.ts";
+import { draftKey, editDraftKey, hasDraft, loadDraft, saveDraft } from "../../lib/drafts.ts";
+import { cancelThreadActionFocus, useThreadActionFocus } from "../../lib/thread-action-focus.ts";
+import { OutcomeBadge } from "../status/OutcomeBadge.tsx";
+import { shownThreadState, ThreadStateBadge } from "../status/ThreadStateBadge.tsx";
+import { Composer } from "./Composer.tsx";
+import { DraftList } from "./DraftList.tsx";
+import { ThreadCard, threadPlaceLink } from "./ThreadCard.tsx";
+import { ThreadList } from "./ThreadList.tsx";
+
+const id = "11111111-1111-4111-8111-111111111111";
+const target: Target = { kind: "writeup-span", blockId: "overview-12345678", quote: "Seed", prefix: "", suffix: "" };
+const base: ThreadView = {
+  id,
+  target,
+  state: "sent",
+  createdOn: 1,
+  placement: { status: "placed", location: { kind: "writeup-span", blockId: target.blockId, start: 0, end: 4 } },
+  comments: [{ id, author: "user", body: "A synthetic comment", sent: true, sentOn: 1 }],
+};
+let client: QueryClient;
+let fetchMock: ReturnType<typeof vi.fn>;
+let width: number;
+beforeEach(() => {
+  width = 1280;
+  localStorage.clear();
+  window.dispatchEvent(new StorageEvent("storage", { key: null }));
+  client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  fetchMock = vi.fn(async () => Response.json({ threadId: id, commentId: id }, { status: 201 }));
+  vi.stubGlobal("fetch", fetchMock);
+  vi.stubGlobal("matchMedia", (query: string) => ({
+    matches: width >= Number(query.match(/\d+/)?.[0] ?? Infinity),
+    addEventListener() {},
+    removeEventListener() {},
+  }));
+});
+afterEach(() => {
+  cancelThreadActionFocus();
+  cleanup();
+  client.clear();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
+function mount(children: ReactNode) {
+  return render(<QueryClientProvider client={client}>{children}</QueryClientProvider>);
+}
+function card(thread = base) {
+  return <ThreadCard reviewId={id} revision={2} thread={thread} changedBlocks={[]} />;
+}
+
+test.each(["unsent", "open", "sent", "answered", "resolved"] as const)("thread badge labels %s", (state) => {
+  const { container } = render(<ThreadStateBadge state={state} />);
+  expect(screen.getByText(state[0]?.toUpperCase() + state.slice(1))).toBeTruthy();
+  expect(container.querySelector('[aria-hidden="true"]')).toBeTruthy();
+});
+test.each(["fixed", "explained", "held", "declined"] as const)("outcome badge labels %s", (outcome) => {
+  render(<OutcomeBadge outcome={outcome} />);
+  expect(screen.getByText(outcome[0]?.toUpperCase() + outcome.slice(1))).toBeTruthy();
+});
+test.each(["open", "sent", "answered", "resolved"] as const)(
+  "shown state derives unsent over %s only for user comments",
+  (state) => {
+    const thread: ThreadView = {
+      ...base,
+      state,
+      comments: [
+        ...base.comments,
+        { id: "agent", author: "agent", body: "Explained", sent: false, sentOn: null, outcome: "explained" },
+      ],
+    };
+    expect(shownThreadState(thread)).toBe(state);
+    thread.comments.push({ id: "unsent", author: "user", body: "Follow-up", sent: false, sentOn: null });
+    expect(shownThreadState(thread)).toBe("unsent");
+  },
+);
+test("never-sent comments have Edit and Delete, with no reply or resolution actions", () => {
+  mount(
+    card({
+      ...base,
+      state: "open",
+      comments: base.comments.map((comment) => ({ ...comment, sent: false, sentOn: null })),
+    }),
+  );
+  expect(screen.getByText("Unsent")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Edit" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Delete" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Reply" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Resolve" })).toBeNull();
+  expect(screen.queryByRole("textbox")).toBeNull();
+});
+test("Reply focuses one editor; Cancel keeps its draft under Unsaved comments; a fresh claim reopens it", async () => {
+  mount(
+    <>
+      {card()}
+      <DraftList reviewId={id} onResume={(draft) => claimDraft(draft.key, "reading")} />
+    </>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+  const input = screen.getByRole("textbox", { name: "Reply" });
+  expect(document.activeElement).toBe(input);
+  expect(screen.queryByRole("button", { name: "Reply" })).toBeNull();
+  expect(screen.getByText("Reply · Writeup · Overview")).toBeTruthy();
+  fireEvent.change(input, { target: { value: "Follow-up draft" } });
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(screen.queryByRole("textbox")).toBeNull();
+  expect(within(screen.getByRole("region", { name: "Unsaved comments" })).getByText("Follow-up draft")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Reply" })));
+  fireEvent.click(screen.getByRole("button", { name: "Save comment" }));
+  await waitFor(() => expect(screen.queryByRole("textbox")).toBeNull());
+  expect(hasDraft(draftKey(id, target, id))).toBe(false);
+});
+test("a reply draft opens on mount and a claim can arrive before the card mounts", async () => {
+  const key = draftKey(id, target, id);
+  saveDraft(key, "Saved locally");
+  const view = mount(card());
+  expect((screen.getByRole("textbox", { name: "Reply" }) as HTMLTextAreaElement).value).toBe("Saved locally");
+  view.unmount();
+  act(() => claimDraft(key, "reading"));
+  mount(card());
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Reply" })));
+});
+test("resolved cards expose only Reopen and the Comments copy starts collapsed", () => {
+  mount(
+    <ThreadCard
+      reviewId={id}
+      revision={2}
+      thread={{ ...base, state: "resolved" }}
+      changedBlocks={[]}
+      surface="comments"
+    />,
+  );
+  expect(screen.queryByText("A synthetic comment")).toBeNull();
+  expect(screen.getByRole("button", { name: "Expand thread" }).getAttribute("aria-expanded")).toBe("false");
+  fireEvent.click(screen.getByRole("button", { name: "Expand thread" }));
+  expect(screen.getByText("A synthetic comment")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Collapse thread" }).getAttribute("aria-expanded")).toBe("true");
+  expect(screen.getByRole("button", { name: "Reopen" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Reply" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Resolve" })).toBeNull();
+});
+const reasons: [UnplacedReason, string][] = [
+  ["block-gone", "The block this comment was on is gone."],
+  ["ambiguous", "The quoted text now appears more than once."],
+  ["topic-gone", "The topic this comment was on is gone."],
+  ["file-gone", "The file this comment was on is no longer in the diff."],
+  ["lines-gone", "The lines this comment was on are gone."],
+  ["not-placed", "This comment has no place in this revision."],
+];
+test.each(reasons)("unplaced %s explains its reason and links only across revisions", (reason, sentence) => {
+  const thread: ThreadView = { ...base, placement: { status: "unplaced", reason } };
+  const view = mount(card(thread));
+  expect(
+    screen.getByText(
+      (_, element) => element?.tagName === "SPAN" && element.textContent === `${sentence} Made on revision 1.`,
+    ),
+  ).toBeTruthy();
+  const href = screen.getByRole("link", { name: "revision 1" }).getAttribute("href");
+  expect(href).toBe(`/r/${id}?rev=1&tab=comments&thread=${id}#thread-${id}`);
+  view.unmount();
+  mount(<ThreadCard reviewId={id} revision={1} thread={thread} changedBlocks={[]} />);
+  expect(screen.getByText(sentence)).toBeTruthy();
+  expect(screen.queryByRole("link")).toBeNull();
+});
+test("Comments groups follow shown state, place unplaced first over state, hide empties and count drafts", () => {
+  const threads: ThreadView[] = (["resolved", "open", "answered", "sent"] as const).map((state, index) => ({
+    ...base,
+    id: `thread-${index}`,
+    state,
+  }));
+  threads.push({ ...base, id: "unsent", comments: base.comments.map((comment) => ({ ...comment, sent: false })) });
+  threads.push({ ...base, id: "unplaced", state: "resolved", placement: { status: "unplaced", reason: "block-gone" } });
+  saveDraft(draftKey(id, { kind: "review" }), "Review draft");
+  const view = mount(
+    <ThreadList reviewId={id} revision={2} threads={threads} changedBlocks={[]} onResume={() => {}} />,
+  );
+  expect(screen.getAllByRole("heading", { level: 2 }).map((node) => node.textContent)).toEqual([
+    "Unsaved comments1",
+    "Unsent1",
+    "Sent1",
+    "Answered1",
+    "Open1",
+    "Unplaced1",
+    "Resolved1",
+  ]);
+  view.unmount();
+  localStorage.clear();
+  window.dispatchEvent(new StorageEvent("storage", { key: null }));
+  mount(<ThreadList reviewId={id} revision={2} threads={[]} changedBlocks={[]} onResume={() => {}} />);
+  expect(screen.queryByRole("heading")).toBeNull();
+  expect(screen.getByText("No comments yet.")).toBeTruthy();
+  expect(screen.getByText("Select text in the writeup or a doc, or click a line in the diff.")).toBeTruthy();
+});
+test.each([{ metaKey: true }, { ctrlKey: true }])(
+  "composer saves with %j Enter, ignoring IME and ordinary Enter",
+  async (modifier) => {
+    const cancel = vi.fn();
+    mount(<Composer reviewId={id} revision={2} target={target} onCancel={cancel} />);
+    const input = screen.getByRole("textbox", { name: "Comment" });
+    expect((screen.getByRole("button", { name: "Save comment" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(input, { target: { value: "Please explain" } });
+    fireEvent.keyDown(input, { key: "Enter", ...modifier, isComposing: true });
+    fireEvent.keyDown(input, { key: "Enter", ...modifier, keyCode: 229 });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(fetchMock).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: "Enter", ...modifier });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    await waitFor(() => expect(loadDraft(draftKey(id, target))).toBe(""));
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(cancel).toHaveBeenCalledOnce();
+  },
+);
+test("editing changes the target prefix and save label, and Cancel discards the edit", () => {
+  mount(card({ ...base, comments: base.comments.map((comment) => ({ ...comment, sent: false, sentOn: null })) }));
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  const input = screen.getByRole("textbox", { name: "Edit comment" });
+  expect(input.getAttribute("placeholder")).toBeNull();
+  expect(screen.getByText("Edit · Writeup · Overview")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Save changes" })).toBeTruthy();
+  fireEvent.change(input, { target: { value: "An edit" } });
+  fireEvent.keyDown(input, { key: "Escape" });
+  expect(hasDraft(editDraftKey(id, id))).toBe(false);
+  expect(screen.queryByRole("textbox")).toBeNull();
+});
+function PhoneComposer() {
+  const [open, setOpen] = useState(true);
+  return open && <Composer reviewId={id} revision={2} target={target} onCancel={() => setOpen(false)} />;
+}
+test.each(["Close", "Cancel", "Escape", "overlay"])(
+  "phone opens a focused New comment sheet; %s keeps the draft",
+  async (action) => {
+    width = 390;
+    const { container } = mount(<PhoneComposer />);
+    const dialog = await screen.findByRole("dialog", { name: "New comment" });
+    const input = within(dialog).getByRole("textbox", { name: "Comment" });
+    expect(container.contains(dialog)).toBe(false);
+    expect(document.activeElement).toBe(input);
+    expect(dialog.querySelector("kbd")).toBeNull();
+    fireEvent.change(input, { target: { value: "Keep this phone draft" } });
+    if (action === "Escape") fireEvent.keyDown(input, { key: "Escape" });
+    else if (action === "overlay") {
+      // Radix installs its outside pointer listener after the opening event.
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+      const overlay = document.querySelector(".bg-overlay");
+      if (!overlay) throw new Error("Missing sheet overlay");
+      fireEvent.pointerDown(overlay, { button: 0, pointerType: "mouse" });
+      fireEvent.pointerUp(overlay, { button: 0, pointerType: "mouse" });
+      fireEvent.click(overlay);
+    } else fireEvent.click(within(dialog).getByRole("button", { name: action }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(loadDraft(draftKey(id, target))).toBe("Keep this phone draft");
+  },
+);
+test.each(["MacIntel", "Linux x86_64"])("desktop keyboard hint follows %s", (platform) => {
+  vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+  mount(<Composer reviewId={id} revision={2} target={target} />);
+  expect(screen.getByText(platform === "MacIntel" ? "⌘↵" : "Ctrl ↵")).toBeTruthy();
+});
+test("comment limits clip without splitting a surrogate pair and mutation errors preserve text", async () => {
+  fetchMock.mockResolvedValue(Response.json({ error: { code: "stale_revision", message: "stale" } }, { status: 409 }));
+  mount(<Composer reviewId={id} revision={2} target={target} />);
+  const input = screen.getByRole("textbox", { name: "Comment" }) as HTMLTextAreaElement;
+  fireEvent.change(input, { target: { value: `${"a".repeat(LIMITS.commentBodyChars - 1)}🌱` } });
+  expect(input.value.isWellFormed()).toBe(true);
+  expect(input.value.length).toBeLessThanOrEqual(LIMITS.commentBodyChars);
+  fireEvent.click(screen.getByRole("button", { name: "Save comment" }));
+  expect((await screen.findByRole("alert")).textContent).toBe(
+    "This page is out of date. Reload to see the newest revision.",
+  );
+  expect(loadDraft(draftKey(id, target))).toBe(input.value);
+});
+test.each([
+  "<script>evil()</script>",
+  '<img src=x onerror="evil()">',
+  "[link](javascript:evil())",
+  "<b>raw HTML</b>",
+  '<svg onload="evil()"></svg>',
+  'graph TD; A-->B; click A "javascript:evil()"',
+])("hostile comment, quote and path remain text: %s", (hostile) => {
+  const target: Target = {
+    kind: "doc-span",
+    blockId: "doc-12345678-12345678",
+    quote: hostile,
+    prefix: "",
+    suffix: "",
+    path: hostile,
+  };
+  const thread: ThreadView = {
+    ...base,
+    target,
+    comments: [{ id, author: "user", sent: false, sentOn: null, body: hostile }],
+  };
+  const { container } = mount(
+    <>
+      {card(thread)}
+      <Composer reviewId={id} revision={2} target={target} />
+    </>,
+  );
+  expect(screen.getAllByText(hostile).length).toBeGreaterThanOrEqual(4);
+  expect(container.querySelector('script, img, [onerror], [onload], a[href^="javascript:"], iframe')).toBeNull();
+});
+test("Show in place uses placement, preserves revision and encodes doc paths", () => {
+  const path = "docs/a b#c.md";
+  for (const kind of ["doc-span", "html-span"] as const) {
+    const thread: ThreadView = {
+      ...base,
+      placement: { status: "placed", location: { kind, path, blockId: "doc-12345678-12345678", start: 0, end: 4 } },
+    };
+    const url = new URL(threadPlaceLink(id, thread, { rev: 2, tab: "comments" }, false) ?? "", "http://localhost");
+    expect(url.searchParams.get("doc")).toBe(path);
+    expect(url.searchParams.get("tab")).toBe("docs");
+    expect(url.searchParams.get("rev")).toBe("2");
+    expect(url.searchParams.get("thread")).toBe(kind === "html-span" ? id : null);
+    expect(url.hash).toBe(`#thread-${id}`);
+  }
+  expect(
+    threadPlaceLink(id, { ...base, placement: { status: "placed", location: { kind: "review" } } }, {}, false),
+  ).toBeUndefined();
+});
+test("singular counts include nouns and irregular verb agreement", () => {
+  for (const noun of ["comment", "line", "doc", "file", "machine", "open thread"]) {
+    expect(`${1} ${plural(1, noun)}`).toBe(`1 ${noun}`);
+    expect(`${0} ${plural(0, noun)}`).toBe(`0 ${noun}s`);
+    expect(`${2} ${plural(2, noun)}`).toBe(`2 ${noun}s`);
+  }
+  expect(plural(1, "needs", "need")).toBe("needs");
+  expect(plural(2, "needs", "need")).toBe("need");
+});
+
+test.each(["Cancel", "Escape"].flatMap((action) => ["", " \n "].map((body) => ({ action, body }))))(
+  "fix1 blank reply $action with $body removes its key and stays closed on remount",
+  ({ action, body }) => {
+    const view = mount(card());
+    fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+    const input = screen.getByRole("textbox", { name: "Reply" });
+    if (body) fireEvent.change(input, { target: { value: body } });
+    if (action === "Escape") fireEvent.keyDown(input, { key: "Escape" });
+    else fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(hasDraft(draftKey(id, target, id))).toBe(false);
+    view.unmount();
+    mount(card());
+    expect(screen.queryByRole("textbox", { name: "Reply" })).toBeNull();
+  },
+);
+test("fix1 a persisted blank reply does not open on mount", () => {
+  saveDraft(draftKey(id, target, id), " \n ");
+  mount(card());
+  expect(screen.queryByRole("textbox", { name: "Reply" })).toBeNull();
+});
+test("fix2 an open blank reply is released after a commit with no card", async () => {
+  const view = mount(card());
+  fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+  expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Reply" }));
+  view.unmount();
+  await act(async () => {});
+  mount(card());
+  expect(screen.queryByRole("textbox", { name: "Reply" })).toBeNull();
+});
+test.each(["Cancel", "Escape"])("fix1 a blank new composer clears its draft on %s", (action) => {
+  mount(<Composer reviewId={id} revision={2} target={target} onCancel={() => {}} />);
+  const input = screen.getByRole("textbox", { name: "Comment" });
+  fireEvent.change(input, { target: { value: " \n " } });
+  if (action === "Escape") fireEvent.keyDown(input, { key: "Escape" });
+  else fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(hasDraft(draftKey(id, target))).toBe(false);
+});
+test("fix1 phone Escape calls Cancel exactly once", () => {
+  width = 390;
+  const cancel = vi.fn();
+  mount(<Composer reviewId={id} revision={2} target={target} onCancel={cancel} />);
+  fireEvent.keyDown(screen.getByRole("textbox", { name: "Comment" }), { key: "Escape" });
+  expect(cancel).toHaveBeenCalledTimes(1);
+});
+test("fix1 Escape without Cancel passes through untouched", () => {
+  const keydown = vi.fn();
+  const { container } = mount(<Composer reviewId={id} revision={2} target={target} />);
+  container.addEventListener("keydown", keydown);
+  const event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+  fireEvent(screen.getByRole("textbox", { name: "Comment" }), event);
+  expect(event.defaultPrevented).toBe(false);
+  expect(keydown).toHaveBeenCalledOnce();
+});
+test.each(["Cancel", "Save comment"])("fix1 %s closes a resumed reply in every mounted copy", async (action) => {
+  const view = mount(<ThreadCard reviewId={id} revision={2} thread={base} changedBlocks={[]} surface="diff" />);
+  fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Reply" }), { target: { value: "Shared reply" } });
+  mount(
+    <>
+      <ThreadCard reviewId={id} revision={2} thread={base} changedBlocks={[]} surface="comments" />
+      <DraftList reviewId={id} onResume={(draft) => claimDraft(draft.key, "comments")} />
+    </>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+  expect(view.container.querySelector("textarea")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: action }));
+  await waitFor(() => expect(screen.queryByRole("textbox", { name: "Reply" })).toBeNull());
+  expect(document.querySelectorAll("[data-composer-placeholder]")).toHaveLength(0);
+  expect(screen.getAllByRole("button", { name: "Reply" })).toHaveLength(2);
+  expect(loadDraft(draftKey(id, target, id))).toBe(action === "Cancel" ? "Shared reply" : "");
+});
+test.each([false, true])("fix1 resolved card expands for its edit draft or pending claim (claim=%s)", async (claim) => {
+  const thread: ThreadView = {
+    ...base,
+    state: "resolved",
+    comments: base.comments.map((comment) => ({ ...comment, sent: false, sentOn: null })),
+  };
+  const key = editDraftKey(id, id);
+  if (!claim) saveDraft(key, "Unsent edit draft");
+  mount(<ThreadCard reviewId={id} revision={2} thread={thread} changedBlocks={[]} surface="comments" />);
+  if (claim) {
+    expect(screen.getByRole("button", { name: "Expand thread" })).toBeTruthy();
+    act(() => {
+      saveDraft(key, "Unsent edit draft");
+      claimDraft(key, "comments");
+    });
+  }
+  const editor = await screen.findByRole("textbox", { name: "Edit comment" });
+  expect((editor as HTMLTextAreaElement).value).toBe("Unsent edit draft");
+  if (claim) expect(document.activeElement).toBe(editor);
+});
+test.each(["reply", "edit"])("fix1 closing a phone %s sheet focuses its new action button", async (kind) => {
+  width = 390;
+  mount(
+    card(
+      kind === "reply"
+        ? base
+        : { ...base, comments: base.comments.map((comment) => ({ ...comment, sent: false, sentOn: null })) },
+    ),
+  );
+  const name = kind === "reply" ? "Reply" : "Edit";
+  const opener = screen.getByRole("button", { name });
+  act(() => opener.focus());
+  fireEvent.click(opener);
+  const sheet = await screen.findByRole("dialog", { name: kind === "reply" ? "Reply" : "Edit comment" });
+  fireEvent.click(within(sheet).getByRole("button", { name: "Cancel" }));
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name })));
+});
+
+function FocusReturnProbe({ generation = 0, copy = false }: { generation?: number; copy?: boolean }) {
+  const action = useThreadActionFocus(id, id, "comments", "reply", false);
+  return (
+    <>
+      <button type="button" key={generation} ref={action.ref}>
+        Reply
+      </button>
+      {copy && (
+        <button type="button" ref={action.ref}>
+          Reply copy
+        </button>
+      )}
+      <button type="button" onClick={() => action.returnFocus(true)}>
+        Return after Save
+      </button>
+      <button type="button" onClick={() => action.returnFocus(false)}>
+        Return after Cancel
+      </button>
+      <button
+        type="button"
+        onPointerDown={(event) => event.stopPropagation()}
+        onKeyDown={(event) => event.stopPropagation()}
+      >
+        Other action
+      </button>
+    </>
+  );
+}
+test("fix3 a saved focus handoff ends at its first replacement and clears its timer", async () => {
+  vi.useFakeTimers();
+  const view = render(<FocusReturnProbe />);
+  fireEvent.click(screen.getByRole("button", { name: "Return after Save" }));
+  const first = screen.getByRole("button", { name: "Reply" });
+  expect(document.activeElement).toBe(first);
+  fireEvent.focusIn(first);
+  expect(vi.getTimerCount()).toBe(1);
+  await act(async () => view.rerender(<FocusReturnProbe generation={1} />));
+  expect(first.isConnected).toBe(false);
+  expect(document.activeElement).toBe(screen.getByRole("button", { name: "Reply" }));
+  expect(vi.getTimerCount()).toBe(0);
+  await act(async () => view.rerender(<FocusReturnProbe generation={2} />));
+  expect(document.activeElement).toBe(document.body);
+});
+test("fix3 BODY is insufficient to restore when the last focused button is still connected", async () => {
+  vi.useFakeTimers();
+  const view = render(<FocusReturnProbe />);
+  fireEvent.click(screen.getByRole("button", { name: "Return after Save" }));
+  const first = screen.getByRole("button", { name: "Reply" });
+  act(() => first.blur());
+  await act(async () => view.rerender(<FocusReturnProbe copy />));
+  expect(first.isConnected).toBe(true);
+  expect(document.activeElement).toBe(document.body);
+});
+test.each([999, 1000])("fix3 a Save handoff is bounded at 1000 ms (replacement at %s ms)", async (elapsed) => {
+  vi.useFakeTimers();
+  const view = render(<FocusReturnProbe />);
+  fireEvent.click(screen.getByRole("button", { name: "Return after Save" }));
+  await act(async () => vi.advanceTimersByTimeAsync(elapsed));
+  expect(vi.getTimerCount()).toBe(elapsed < 1000 ? 1 : 0);
+  await act(async () => view.rerender(<FocusReturnProbe generation={1} />));
+  expect(document.activeElement).toBe(elapsed < 1000 ? screen.getByRole("button", { name: "Reply" }) : document.body);
+  expect(vi.getTimerCount()).toBe(0);
+});
+test.each(["pointer", "keyboard", "focus", "body focus", "navigation"])(
+  "fix3 %s retires a Save handoff and clears its timer",
+  async (event) => {
+    vi.useFakeTimers();
+    const view = render(<FocusReturnProbe />);
+    fireEvent.click(screen.getByRole("button", { name: "Return after Save" }));
+    const other = screen.getByRole("button", { name: "Other action" });
+    if (event === "pointer") fireEvent.pointerDown(other);
+    else if (event === "keyboard") fireEvent.keyDown(other, { key: "Escape" });
+    else if (event === "focus") act(() => other.focus());
+    else if (event === "body focus") fireEvent.focusIn(document.body);
+    else cancelThreadActionFocus();
+    expect(vi.getTimerCount()).toBe(0);
+    act(() => (document.activeElement as HTMLElement).blur());
+    await act(async () => view.rerender(<FocusReturnProbe generation={1} />));
+    expect(document.activeElement).toBe(document.body);
+  },
+);
+test("fix3 Cancel returns focus without scheduling a handoff", async () => {
+  vi.useFakeTimers();
+  const view = render(<FocusReturnProbe />);
+  fireEvent.click(screen.getByRole("button", { name: "Return after Cancel" }));
+  expect(document.activeElement).toBe(screen.getByRole("button", { name: "Reply" }));
+  expect(vi.getTimerCount()).toBe(0);
+  await act(async () => view.rerender(<FocusReturnProbe generation={1} />));
+  expect(document.activeElement).toBe(document.body);
+});

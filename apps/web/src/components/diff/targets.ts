@@ -1,4 +1,7 @@
-import type { FileView, Target } from "@emend/contract";
+import type { FileView, Target, TopicMeta } from "@emend/contract";
+import { FileCode, FileText, ListTree, MessageSquare, TextSelect } from "lucide-react";
+import { plural } from "../../lib/count.ts";
+import { rankedTopics } from "../../lib/topics.ts";
 export type DiffTarget = Extract<Target, { kind: "lines" | "file" | "topic" }>;
 export function isDiffTarget(target: Target): target is DiffTarget {
   return target.kind === "lines" || target.kind === "file" || target.kind === "topic";
@@ -15,13 +18,37 @@ export function resolveFile(files: FileView[], target: FileLocation) {
   });
   return matches.length === 1 ? matches[0] : undefined;
 }
-export function lineLabel(target: { start: number; end: number; side: string }) {
-  return `${target.start === target.end ? `Line ${target.end}` : `Lines ${target.start}–${target.end}`}, ${target.side} side`;
-}
-export function targetLabel(target: DiffTarget) {
-  return target.kind === "topic"
-    ? `Topic ${target.slug}`
-    : target.kind === "file"
-      ? `File ${target.path}`
-      : `${target.path}: ${lineLabel(target)}`;
+export function targetLabel(target: Target, topics: TopicMeta[] = []) {
+  switch (target.kind) {
+    case "writeup-span": {
+      const slug = /^t-(.+)-(?:why|example|body)-[\da-f]{8}(?:-\d+)?$/.exec(target.blockId)?.[1];
+      const topic = topics.find((topic) => topic.slug === slug);
+      const section =
+        topic?.title ??
+        Object.entries({ overview: "Overview", tldr: "TL;DR", decisions: "Decisions", glossary: "Glossary" }).find(
+          ([key]) => target.blockId.startsWith(`${key}-`),
+        )?.[1];
+      return { label: section ? `Writeup · ${section}` : "Writeup", icon: TextSelect };
+    }
+    case "doc-span":
+    case "html-span":
+      return { label: target.path, icon: TextSelect };
+    case "lines":
+      return {
+        label: `${target.path} · ${plural(target.end - target.start + 1, "line")} ${target.start === target.end ? target.start : `${target.start}–${target.end}`}${target.side === "old" ? " (old)" : ""}`,
+        icon: FileCode,
+      };
+    case "file":
+      return { label: target.path, icon: FileText };
+    case "topic": {
+      const topic = topics.find((topic) => topic.slug === target.slug);
+      const rank = rankedTopics(topics).find((entry) => entry.topic.slug === target.slug)?.rank;
+      return {
+        label: `Topic${rank ? ` ${String(rank).padStart(2, "0")}` : ""} · ${topic?.title ?? target.slug}`,
+        icon: ListTree,
+      };
+    }
+    case "review":
+      return { label: "Whole review", icon: MessageSquare };
+  }
 }

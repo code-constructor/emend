@@ -117,7 +117,7 @@ test.each([false, true])("identical rename preserves line thread under the heade
   await waitFor(() => expect(document.querySelector("diffs-container")).toBeTruthy());
   const header = screen.getByText("Rename comment").closest("[data-file-header]");
   expect(header).toBeTruthy();
-  expect(within(header as HTMLElement).getByText("Line 2, new side")).toBeTruthy();
+  expect(within(header as HTMLElement).getByText("new.txt · line 2")).toBeTruthy();
   expect(screen.getAllByText("Rename comment")).toHaveLength(1);
 });
 test.each([{ path: "pnpm-lock.yaml" }, { path: "binary.txt", flag: "binary" as const }])(
@@ -126,7 +126,7 @@ test.each([{ path: "pnpm-lock.yaml" }, { path: "binary.txt", flag: "binary" as c
     await mount(revision([file(values)], [thread("Hidden diff comment", { ...target, path: values.path })]));
     near(values.path);
     expect(screen.getByText("Hidden diff comment").closest("[data-file-header]")).toBeTruthy();
-    expect(screen.getByText("Line 2, new side")).toBeTruthy();
+    expect(screen.getByText(`${values.path} · line 2`)).toBeTruthy();
     expect(fetchMock).not.toHaveBeenCalled();
   },
 );
@@ -144,9 +144,9 @@ test("placed threads with missing sections join the top list with target labels"
   );
   const list = within(screen.getByRole("region", { name: "Unplaced comments" }));
   for (let i = 0; i < 3; i++) expect(list.getByText(`Missing ${i}`)).toBeTruthy();
-  expect(list.getByText("File gone.txt")).toBeTruthy();
-  expect(list.getByText("Topic gone")).toBeTruthy();
-  expect(list.getByText("gone.txt: Line 2, new side")).toBeTruthy();
+  expect(list.getByText("gone.txt")).toBeTruthy();
+  expect(list.getByText("Topic · gone")).toBeTruthy();
+  expect(list.getByText("gone.txt · line 2")).toBeTruthy();
 });
 test("header threads and unplaced threads retain their visible locations", async () => {
   const unplaced = thread("Unplaced line comment");
@@ -167,7 +167,7 @@ test("header threads and unplaced threads retain their visible locations", async
   expect(screen.getByText("File comment").closest("[data-file-header]")).toBeTruthy();
   expect(screen.getByText("Topic comment").closest("[data-topic-header]")).toBeTruthy();
   const header = screen.getByText("Old range comment").closest("[data-file-header]");
-  expect(within(header as HTMLElement).getByText("Lines 1–2, old side")).toBeTruthy();
+  expect(within(header as HTMLElement).getByText("old.txt · lines 1–2 (old)")).toBeTruthy();
   expect(
     within(screen.getByRole("region", { name: "Unplaced comments" })).getByText("Unplaced line comment"),
   ).toBeTruthy();
@@ -177,12 +177,14 @@ test("real slots place line threads and adding a same-line thread keeps the exis
     async (path: string) => new Response(path.endsWith("/old") ? "one\nold\n" : "one\ntwo\n"),
   );
   const first = thread("First line comment");
+  first.comments = first.comments.map((comment) => ({ ...comment, sent: true, sentOn: 1 }));
   const value = revision([file()], [first]);
   await mount(value);
   near("new.txt");
   await waitFor(() =>
     expect(document.getElementById(`diff-thread-${first.id}`)?.closest("diffs-container")).toBeTruthy(),
   );
+  fireEvent.click(screen.getByRole("button", { name: "Reply" }));
   const original = within(document.getElementById(`diff-thread-${first.id}`) as HTMLElement).getByLabelText("Reply");
   fireEvent.focus(original);
   fireEvent.change(original, { target: { value: "Follow-up" } });
@@ -243,7 +245,11 @@ test.each(["file", "old", "new"] as const)("ambiguous %s target appears only in 
   expect(screen.getAllByText("Ambiguous comment")).toHaveLength(1);
   expect(within(screen.getByRole("region", { name: "Unplaced comments" })).getByText("Ambiguous comment")).toBeTruthy();
 });
-test.each(["Edit comment", "Reply"])("%s text and focus survive fallback moving inline", async (label) => {
+test.each([
+  { label: "Edit comment", text: "Unsaved replacement" },
+  { label: "Reply", text: "Unsaved replacement" },
+  { label: "Reply", text: "" },
+])("$label with '$text' and focus survive fallback moving inline", async ({ label, text }) => {
   const pending: (() => void)[] = [];
   fetchMock.mockImplementation(
     (path: string) =>
@@ -252,13 +258,15 @@ test.each(["Edit comment", "Reply"])("%s text and focus survive fallback moving 
       }),
   );
   const value = thread("Original comment");
+  if (label === "Reply") value.comments = value.comments.map((comment) => ({ ...comment, sent: true, sentOn: 1 }));
   await mount(revision([file()], [value]));
   near("new.txt");
   await waitFor(() => expect(pending).toHaveLength(2));
   if (label === "Edit comment") fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  if (label === "Reply") fireEvent.click(screen.getByRole("button", { name: "Reply" }));
   const input = screen.getByLabelText(label);
   act(() => input.focus());
-  fireEvent.change(input, { target: { value: "Unsaved replacement" } });
+  if (text) fireEvent.change(input, { target: { value: text } });
   await act(async () => {
     for (const resolve of pending) resolve();
   });
@@ -266,6 +274,6 @@ test.each(["Edit comment", "Reply"])("%s text and focus survive fallback moving 
     expect(document.getElementById(`diff-thread-${value.id}`)?.closest("diffs-container")).toBeTruthy(),
   );
   const moved = screen.getByLabelText(label) as HTMLTextAreaElement;
-  expect(moved.value).toBe("Unsaved replacement");
+  expect(moved.value).toBe(text);
   await waitFor(() => expect(document.activeElement).toBe(moved));
 });

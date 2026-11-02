@@ -1,5 +1,5 @@
 import type { HtmlSpanTarget } from "@emend/contract";
-import { ShieldCheck } from "lucide-react";
+import { ShieldCheck, TextSelect } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { claimDraft } from "../../lib/composer-owner.ts";
 import { draftKey } from "../../lib/drafts.ts";
@@ -17,6 +17,7 @@ export function HtmlDocFrame({
   reviewId,
   revision,
   threads,
+  topics,
   changedBlocks,
   navigation,
   docNavigation,
@@ -31,6 +32,8 @@ export function HtmlDocFrame({
   composerOpen?: boolean;
 }) {
   const frame = useRef<HTMLIFrameElement>(null);
+  const root = useRef<HTMLDivElement>(null);
+  const opener = useRef<HTMLElement | null>(null);
   const loads = useRef(0);
   const gone = useRef(false);
   const [away, setAway] = useState(false);
@@ -127,7 +130,7 @@ export function HtmlDocFrame({
     setTarget(null);
   };
   return (
-    <div className="space-y-4" id={`html-doc-${path}`}>
+    <div ref={root} tabIndex={-1} className="space-y-4" id={`html-doc-${path}`}>
       <div>
         <iframe
           ref={mountFrame}
@@ -177,19 +180,45 @@ export function HtmlDocFrame({
           >
             Show in doc
           </Button>
-          <ThreadCard reviewId={reviewId} revision={revision} changedBlocks={changedBlocks} thread={thread} />
+          <ThreadCard
+            reviewId={reviewId}
+            revision={revision}
+            changedBlocks={changedBlocks}
+            thread={thread}
+            topics={topics}
+          />
         </div>
       ))}
       {target && !composerOpen && (
-        <div className="sticky bottom-0 space-y-3 rounded-lg border border-line-2 bg-raised p-3 shadow-2">
+        <div
+          className={
+            composing ? "pt-3" : "sticky bottom-0 space-y-3 rounded-lg border border-line-2 bg-raised p-3 shadow-2"
+          }
+        >
           {composing ? (
-            <>
-              <blockquote className="max-h-24 overflow-auto border-l-2 pl-2 text-sm">{target.quote}</blockquote>
-              <Composer reviewId={reviewId} revision={revision} target={target} onSaved={close} onCancel={close} />
-            </>
+            <Composer
+              reviewId={reviewId}
+              revision={revision}
+              target={target}
+              topics={topics}
+              onSaved={close}
+              onCancel={close}
+              returnFocus={() =>
+                opener.current?.isConnected
+                  ? opener.current
+                  : (root.current?.closest<HTMLElement>("[data-reading-scroll]") ?? root.current)
+              }
+            />
           ) : (
             <Button
+              variant="primary"
+              size="sm"
+              icon={TextSelect}
               onClick={() => {
+                opener.current =
+                  document.activeElement instanceof HTMLElement && root.current?.contains(document.activeElement)
+                    ? document.activeElement
+                    : null;
                 claimDraft(draftKey(reviewId, target), "reading");
                 setComposing(true);
               }}

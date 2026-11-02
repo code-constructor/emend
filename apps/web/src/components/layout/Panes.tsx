@@ -32,6 +32,7 @@ export function Panes({
               aria-label="Reading"
               data-testid="reading-pane"
               data-reading-scroll
+              tabIndex={-1}
               className="min-w-0 flex-1 overflow-y-auto"
             >
               {reading}

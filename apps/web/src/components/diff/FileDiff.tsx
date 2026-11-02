@@ -6,6 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { type ReactElement, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { splitLines } from "../../../../../packages/core/src/place/linemap.ts";
 import { getText } from "../../api/client.ts";
+import { plural } from "../../lib/count.ts";
 import { useLayout } from "../../lib/layout.ts";
 import { Composer } from "../threads/Composer.tsx";
 import { ThreadCard } from "../threads/ThreadCard.tsx";
@@ -13,7 +14,7 @@ import { Button } from "../ui/Button.tsx";
 import { LineComposer } from "./LineComposer.tsx";
 import { linesTarget } from "./linesTarget.ts";
 import { type DiffParser, parseOffThread } from "./parse-client.ts";
-import { type FileLocation, lineLabel } from "./targets.ts";
+import type { FileLocation } from "./targets.ts";
 
 export type ParsedDiff = FileDiffMetadata;
 type Annotation = DiffLineAnnotation<ReactElement>;
@@ -115,6 +116,7 @@ export type DiffContext = {
   revision: number;
   threads: ThreadView[];
   changedBlocks: RevisionView["changedBlocks"];
+  topics?: RevisionView["topics"];
   active: Target | null;
   onActive: (target: Target | null) => void;
   parser?: DiffParser;
@@ -183,6 +185,7 @@ export function FileDiff({ file, ...context }: DiffContext & { file: FileView })
             reviewId={context.reviewId}
             revision={context.revision}
             target={active}
+            topics={context.topics}
             onSaved={close}
             onCancel={close}
           />
@@ -195,11 +198,8 @@ export function FileDiff({ file, ...context }: DiffContext & { file: FileView })
             ({ location }) =>
               !slots.has(`annotation-${location.side === "old" ? "deletions" : "additions"}-${location.end}`),
           )
-          .map(({ thread, location }) => (
-            <div key={thread.id}>
-              <p className="text-sm">{lineLabel(location)}</p>
-              <ThreadCard surface="diff" {...context} thread={thread} />
-            </div>
+          .map(({ thread }) => (
+            <ThreadCard key={thread.id} surface="diff" {...context} thread={thread} />
           ))}
       </header>
       {selected && (
@@ -207,6 +207,7 @@ export function FileDiff({ file, ...context }: DiffContext & { file: FileView })
           reviewId={context.reviewId}
           revision={context.revision}
           target={selected}
+          topics={context.topics}
           onSaved={close}
           onCancel={close}
         />
@@ -352,7 +353,7 @@ function FileBody({
         </Button>
       </div>
     );
-  if (collapsed) return <Summary text={`Collapsed: ${lines} lines`} onExpand={onExpand} />;
+  if (collapsed) return <Summary text={`Collapsed: ${lines} ${plural(lines, "line")}`} onExpand={onExpand} />;
   return (
     <div>
       {error && (

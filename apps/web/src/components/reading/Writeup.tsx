@@ -101,5 +101,5 @@ export function Writeup({
       ),
     });
   }
-  return <BlockReader {...props} groups={groups} />;
+  return <BlockReader {...props} topics={topics} groups={groups} />;
 }

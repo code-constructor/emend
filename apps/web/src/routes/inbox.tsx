@@ -8,6 +8,7 @@ import { Button } from "../components/ui/Button.tsx";
 import { IconButton } from "../components/ui/IconButton.tsx";
 import { Select } from "../components/ui/Select.tsx";
 import { TextField } from "../components/ui/TextField.tsx";
+import { plural } from "../lib/count.ts";
 
 export function Inbox({
   compact = false,
@@ -54,8 +55,8 @@ export function Inbox({
             <h1 className="text-24 font-semibold leading-(--lh-tight) tracking-(--tracking-tight)">Inbox</h1>
             {query.data && (
               <p className="mt-1 text-14 text-fg-3">
-                {attention ? `${attention} need you` : "Nothing needs you"} · {origins.length}{" "}
-                {origins.length === 1 ? "machine" : "machines"}
+                {attention ? `${attention} ${plural(attention, "needs", "need")} you` : "Nothing needs you"} ·{" "}
+                {origins.length} {plural(origins.length, "machine")}
               </p>
             )}
           </div>

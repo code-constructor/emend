@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { ChevronLeft, Ellipsis, Inbox, Link as LinkIcon, QrCode, Smartphone } from "lucide-react";
+import { ChevronLeft, Ellipsis, Inbox, Link as LinkIcon, MessageSquarePlus, QrCode, Smartphone } from "lucide-react";
 import type { ReactNode } from "react";
 import { useLayout } from "../../lib/layout.ts";
 import { Icon } from "../ui/Icon.tsx";
@@ -8,7 +8,15 @@ import { Menu, type MenuItem } from "../ui/Menu.tsx";
 import { useToast } from "../ui/Toast.tsx";
 import { cn } from "../ui/utils.ts";
 
-export function AppFrame({ isReview = false, children }: { isReview?: boolean; children: ReactNode }) {
+export function AppFrame({
+  isReview = false,
+  children,
+  onCommentReview,
+}: {
+  isReview?: boolean;
+  children: ReactNode;
+  onCommentReview?: () => void;
+}) {
   const layout = useLayout();
   const toast = useToast();
   async function copyLink() {
@@ -28,6 +36,9 @@ export function AppFrame({ isReview = false, children }: { isReview?: boolean; c
   const menuItems: MenuItem[] = isReview
     ? [
         { label: "Copy link", icon: LinkIcon, onSelect: () => void copyLink() },
+        ...(onCommentReview
+          ? [{ label: "Comment on review", icon: MessageSquarePlus, onSelect: onCommentReview }]
+          : []),
         { separator: true },
         { label: "Inbox", icon: Inbox, asChild: true, children: <Link to="/">Inbox</Link> },
         devices,

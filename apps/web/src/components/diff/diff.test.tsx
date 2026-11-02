@@ -292,14 +292,14 @@ test("selection maps deletions/additions, refuses mixed sides, and shows range e
   await screen.findByTestId("rendered-diff");
   const select = (range: Selection | null) => act(() => renderer.props.at(-1)?.options.onLineSelectionEnd(range));
   select({ side: "additions", start: 10, end: 12 });
-  expect(screen.getByText("Lines 10–12, new side")).toBeTruthy();
+  expect(screen.getByText("source.ts · lines 10–12")).toBeTruthy();
   fireEvent.change(screen.getByLabelText("Comment"), { target: { value: "New selection" } });
   fireEvent.click(screen.getByRole("button", { name: "Save comment" }));
   await waitFor(() =>
     expect(fetchMock.mock.calls.some(([, init]) => init?.body?.toString().includes('"side":"new"'))).toBe(true),
   );
   select({ side: "deletions", start: 12, end: 10 });
-  expect(screen.getByText("Lines 10–12, old side")).toBeTruthy();
+  expect(screen.getByText("old.ts · lines 10–12 (old)")).toBeTruthy();
   select({ side: "deletions", endSide: "additions", start: 1, end: 2 });
   expect(screen.getByRole("alert").textContent).toBe("Select lines on one side.");
   expect(screen.queryByLabelText("Comment")).toBeNull();

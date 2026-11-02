@@ -36,6 +36,11 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
+function frameByTitle() {
+  const frame = screen.getAllByTitle(path).find((node) => node instanceof HTMLIFrameElement);
+  if (!frame) throw new Error("Missing titled frame");
+  return frame;
+}
 function mount(threads: ThreadView[] = [], navigation?: { threadId: string; intent: unknown }) {
   const ui = (values: ThreadView[], docNavigation?: DocNavigation) => (
     <QueryClientProvider client={client}>
@@ -117,7 +122,7 @@ test("parent fragment changes and Reload establish fresh baselines; unexpected l
   const original = frame;
   for (const fragment of ["first", "second", "second"]) {
     navigateFragment(fragment);
-    const target = screen.getByTitle(path) as HTMLIFrameElement;
+    const target = frameByTitle() as HTMLIFrameElement;
     const post = vi.fn();
     Object.defineProperty(target, "contentWindow", { value: { postMessage: post } });
     fireEvent.load(target);
@@ -131,11 +136,11 @@ test("parent fragment changes and Reload establish fresh baselines; unexpected l
     new MessageEvent("message", { source: original.contentWindow, data: { type: "emend:anchor", ...anchor } }),
   );
   expect(screen.queryByText("Comment on selection")).toBeNull();
-  const target = screen.getByTitle(path) as HTMLIFrameElement;
+  const target = frameByTitle() as HTMLIFrameElement;
   fireEvent.load(target);
   expect(screen.getByText("This doc navigated away.")).toBeTruthy();
   fireEvent.click(screen.getByText(`Reload ${path}`));
-  const restored = screen.getByTitle(path);
+  const restored = frameByTitle();
   expect(restored.getAttribute("src")).toBe(doc.contentUrl);
   fireEvent.load(restored);
   expect(screen.queryByText("This doc navigated away.")).toBeNull();
@@ -151,7 +156,7 @@ test.each([false, true])("opening a doc fragment replaces an earlier thread scro
     expect(post).toHaveBeenCalledWith({ type: "emend:scroll", threadId: id }, "*");
   }
   fragment("new-heading");
-  const target = screen.getByTitle(path) as HTMLIFrameElement;
+  const target = frameByTitle() as HTMLIFrameElement;
   const nextPost = vi.fn();
   Object.defineProperty(target, "contentWindow", { value: { postMessage: nextPost } });
   fireEvent.load(target);
@@ -168,7 +173,7 @@ test("only this frame proposes anchors; composer freezes the quote and only revi
   message({ type: "emend:anchor", ...anchor });
   expect(fetchMock).not.toHaveBeenCalled();
   fireEvent.click(screen.getByText("Comment on selection"));
-  expect(screen.getByText("seeds").tagName).toBe("BLOCKQUOTE");
+  expect(screen.getByText("seeds").tagName).toBe("MARK");
   message({ type: "emend:anchor", ...anchor, quote: "replacement" });
   expect(screen.queryByText("replacement")).toBeNull();
   fireEvent.change(screen.getByLabelText("Comment"), { target: { value: "Please explain" } });

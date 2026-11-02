@@ -2,6 +2,7 @@ import { DEFAULT_MODE, type GoMode, LIMITS, MODE_LABELS } from "@emend/contract"
 import { Check, Pencil, Send } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { mutationMessage, useReviewMutation } from "../../api/mutations.ts";
+import { plural } from "../../lib/count.ts";
 import { Button } from "../ui/Button.tsx";
 import { inputClass, inputSizes } from "../ui/field.tsx";
 import { Icon } from "../ui/Icon.tsx";
@@ -82,7 +83,7 @@ export function SendBar({
       : unsentCount === 0 && !instruction.trim()
         ? "Write a comment or an instruction first."
         : undefined;
-  const commentCount = `${unsentCount} ${unsentCount === 1 ? "comment" : "comments"}`;
+  const commentCount = `${unsentCount} ${plural(unsentCount, "comment")}`;
   const changeInstruction = (value: string) => {
     if (!submitting.current) mutation.reset();
     setInstruction(value);
@@ -164,7 +165,7 @@ export function SendBar({
             ? "unsent"
             : "Nothing to send"
           : unsentCount > 0
-            ? `${unsentCount} unsent ${unsentCount === 1 ? "comment" : "comments"}`
+            ? `${unsentCount} unsent ${plural(unsentCount, "comment")}`
             : "No unsent comments"}
       </span>
       <span className="text-fg-3 [font:var(--type-meta)]">

@@ -263,7 +263,7 @@ test("thread edits and deletes only unsent comments, replies, resolves and reope
   const view = mount(<ThreadCard reviewId={id} revision={2} thread={thread} changedBlocks={[]} />);
   fireEvent.click(screen.getByRole("button", { name: "Edit" }));
   fireEvent.change(screen.getByLabelText("Edit comment"), { target: { value: "Edited comment" } });
-  fireEvent.click(screen.getByRole("button", { name: "Save edit" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
   await waitFor(() =>
     expect(fetchMock).toHaveBeenCalledWith(
       `/api/v1/comments/${id}`,
@@ -274,6 +274,16 @@ test("thread edits and deletes only unsent comments, replies, resolves and reope
   await waitFor(() =>
     expect(fetchMock).toHaveBeenCalledWith(`/api/v1/comments/${id}`, expect.objectContaining({ method: "DELETE" })),
   );
+  expect(screen.queryByRole("button", { name: "Resolve" })).toBeNull();
+  view.unmount();
+  const sent = mount(
+    <ThreadCard
+      reviewId={id}
+      revision={2}
+      changedBlocks={[]}
+      thread={{ ...thread, comments: thread.comments.map((comment) => ({ ...comment, sent: true, sentOn: 1 })) }}
+    />,
+  );
   fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
   await waitFor(() =>
     expect(fetchMock).toHaveBeenCalledWith(
@@ -281,8 +291,8 @@ test("thread edits and deletes only unsent comments, replies, resolves and reope
       expect.objectContaining({ method: "POST" }),
     ),
   );
-  view.unmount();
-  mount(
+  sent.unmount();
+  const resolved = mount(
     <ThreadCard
       reviewId={id}
       revision={2}
@@ -306,15 +316,26 @@ test("thread edits and deletes only unsent comments, replies, resolves and reope
   );
   expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
-  expect(screen.getByText("Sent")).toBeTruthy();
-  expect(screen.getByText("fixed")).toBeTruthy();
+  expect(screen.getByText("Resolved")).toBeTruthy();
+  expect(screen.getByText("Fixed")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Reply" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Reopen" }));
   await waitFor(() =>
     expect(fetchMock).toHaveBeenCalledWith(`/api/v1/threads/${id}/reopen`, expect.objectContaining({ method: "POST" })),
   );
+  resolved.unmount();
+  mount(
+    <ThreadCard
+      reviewId={id}
+      revision={2}
+      changedBlocks={[]}
+      thread={{ ...thread, comments: thread.comments.map((comment) => ({ ...comment, sent: true, sentOn: 1 })) }}
+    />,
+  );
   fetchMock.mockResolvedValue(Response.json({ commentId: id }, { status: 201 }));
+  fireEvent.click(screen.getByRole("button", { name: "Reply" }));
   fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "Follow-up" } });
-  fireEvent.click(screen.getByRole("button", { name: "Add reply" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save comment" }));
   await waitFor(() =>
     expect(fetchMock).toHaveBeenCalledWith(
       `/api/v1/threads/${id}/comments`,
@@ -407,21 +428,17 @@ test("thread groups are ordered, unplaced quotes link to their original revision
     history: createMemoryHistory({ initialEntries: ["/"] }),
   });
   mount(<RouterProvider router={router} />);
-  await screen.findByRole("heading", { name: "Unplaced" });
+  await screen.findByRole("heading", { name: "Unplaced 1" });
 
   expect(screen.getAllByRole("heading", { level: 2 }).map((heading) => heading.textContent)).toEqual([
-    "Unsaved comments",
-    "Open",
-    "Sent",
-    "Answered",
-    "Resolved",
-    "Unplaced",
+    "Answered1",
+    "Unplaced1",
   ]);
   const changed = screen.getByRole("link", { name: "Changed in revision 3" });
   expect(changed.getAttribute("href")).toContain(`#block-${block.id}`);
   const unplaced = screen.getByRole("region", { name: "Unplaced" });
   expect(within(unplaced).getByText("seed")).toBeTruthy();
-  expect(within(unplaced).getByRole("link", { name: "Revision 1" }).getAttribute("href")).toContain("rev=1");
+  expect(within(unplaced).getByRole("link", { name: "revision 1" }).getAttribute("href")).toContain("rev=1");
 });
 test("Send counts review-wide unsent comments, defaults mode, limits instruction input and posts the revision on screen", async () => {
   mount(<SendBar reviewId={id} revision={2} newestRevision={2} unsentCount={7} />);
