@@ -35,6 +35,7 @@ function Reading({
   htmlNavigation,
   composingPath,
   resumedBlockId,
+  activeThreadId,
   search,
   phone,
   openDoc,
@@ -49,6 +50,7 @@ function Reading({
   htmlNavigation?: HtmlNavigation;
   composingPath?: string;
   resumedBlockId?: string;
+  activeThreadId?: string;
   search: ReviewSearch;
   phone: boolean;
   openDoc?: RevisionView["docs"][number];
@@ -62,6 +64,7 @@ function Reading({
     threads: revision.threads,
     changedBlocks: revision.changedBlocks,
     topics: revision.topics,
+    activeThreadId,
   };
   if (tab === "comments") return <ThreadList {...props} search={search} phone={phone} onResume={onResume} />;
   if (tab === "docs")
@@ -450,6 +453,7 @@ function LoadedReview({
                     search={search}
                     openDoc={openDoc}
                     targeted={!!hash || !!search.thread}
+                    activeThreadId={readingIntent(search, hash, seq).threadId}
                     onOpenDoc={(path) => navigateReading({ ...search, tab: "docs", doc: path, thread: undefined })}
                     phone={layout === "phone"}
                     onResume={resume}

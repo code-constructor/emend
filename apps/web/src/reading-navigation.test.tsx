@@ -5,7 +5,7 @@ import { createMemoryHistory } from "@tanstack/react-router";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { Window } from "happy-dom";
 import type { ComponentProps, ReactNode } from "react";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { App } from "./App.tsx";
 import type { DiffPaneProps } from "./components/diff/DiffPane.tsx";
 import type { ParsedDiff } from "./components/diff/FileDiff.tsx";
@@ -898,6 +898,90 @@ function placedWriteupThread(): ThreadView {
     comments: [{ id, author: "user", body: "A synthetic question", sent: true, sentOn: 1 }],
   };
 }
+
+describe("comment highlight navigation", () => {
+  let highlights: Map<string, Set<Range>>;
+  beforeEach(() => {
+    highlights = new Map();
+    vi.stubGlobal("CSS", { highlights });
+    vi.stubGlobal("Highlight", class extends Set<Range> {});
+  });
+  const ranges = (active = false) => [...(highlights.get(active ? "emend-comment-active" : "emend-comment") ?? [])];
+  const quotes = (active = false) => ranges(active).map((range) => range.toString());
+
+  test.each([1280, 390].flatMap((pixels) => ["writeup", "docs"].map((tab) => ({ pixels, tab }))))(
+    "$tab hash/search targets, tab/doc/revision switches and unmount at $pixels px",
+    async ({ pixels, tab }) => {
+      width = pixels;
+      const thread = placedWriteupThread();
+      const blocks = currentRevision.writeup.sections.flatMap((section) => section.blocks);
+      if (tab === "docs") {
+        thread.target = {
+          ...thread.target,
+          kind: "doc-span",
+          path: "seed.md",
+          blockId: "t-seed-body-12345678",
+          quote: "Keep growing",
+          prefix: "",
+          suffix: "",
+        };
+        thread.placement = {
+          status: "placed",
+          location: { kind: "doc-span", path: "seed.md", blockId: "t-seed-body-12345678", start: 0, end: 12 },
+        };
+        currentRevision.docs = [
+          { kind: "markdown", path: "seed.md", blocks },
+          { kind: "markdown", path: "water.md", blocks },
+        ];
+      }
+      currentRevision.threads = [thread];
+      const query = `?tab=${tab}${tab === "docs" ? "&doc=seed.md" : ""}`;
+      const url = (tail = "") => `/r/${id}${query}&rev=1${tail}`;
+      const view = mount(`${query}&rev=1#thread-${id}`);
+      await waitFor(() => expect(quotes(true)).toEqual(["Keep growing"]));
+      expect(quotes()).toEqual([]);
+
+      await act(async () => view.history.push(url()));
+      await waitFor(() => expect(quotes()).toEqual(["Keep growing"]));
+      expect(quotes(true)).toEqual([]);
+      await act(async () => view.history.push(url(`&thread=${id}`)));
+      await waitFor(() => expect(quotes(true)).toEqual(["Keep growing"]));
+      expect(quotes()).toEqual([]);
+
+      if (tab === "docs") {
+        const previous = ranges(true)[0];
+        await act(async () => view.history.push(`/r/${id}?tab=docs&doc=water.md&rev=1`));
+        await screen.findByRole("heading", { name: "water.md" });
+        expect(quotes()).toEqual([]);
+        expect(quotes(true)).toEqual([]);
+        await act(async () => view.history.push(url()));
+        await waitFor(() => expect(quotes()).toEqual(["Keep growing"]));
+        expect(ranges()).not.toContain(previous);
+      }
+
+      await act(async () => view.history.push(`/r/${id}?tab=comments&rev=1`));
+      await waitFor(() => expect(highlights.size).toBe(0));
+      await act(async () => view.history.push(url()));
+      await waitFor(() => expect(quotes()).toEqual(["Keep growing"]));
+      const previous = ranges()[0];
+      const nextBlocks = blocks.map((block) => ({ ...block, text: "Keep sowing!", html: "<p>Keep sowing!</p>" }));
+      currentRevision = {
+        ...currentRevision,
+        writeup: { sections: currentRevision.writeup.sections.map((section) => ({ ...section, blocks: nextBlocks })) },
+        docs: currentRevision.docs.map((doc) => (doc.kind === "markdown" ? { ...doc, blocks: nextBlocks } : doc)),
+      };
+      await act(async () => view.history.push(`/r/${id}${query}&rev=2`));
+      await waitFor(() => expect(quotes()).toEqual(["Keep sowing!"]));
+      expect(ranges()).not.toContain(previous);
+      if (pixels === 390) {
+        await act(async () => view.history.push(`/r/${id}?tab=diff&rev=2`));
+        await waitFor(() => expect(highlights.size).toBe(0));
+      }
+      view.unmount();
+      expect(highlights.size).toBe(0);
+    },
+  );
+});
 test.each(
   ["reply", "edit"].flatMap((kind) =>
     ["immediate", "regroup", "focus elsewhere", "navigate"].map((next) => ({ kind, next })),

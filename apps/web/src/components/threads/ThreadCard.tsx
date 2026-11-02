@@ -12,8 +12,9 @@ import {
   Unlink,
   User,
 } from "lucide-react";
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { mutationMessage, useReviewMutation } from "../../api/mutations.ts";
+import { trackCommentCard } from "../../lib/comment-highlights.ts";
 import { claimDraft, useDraftClaim, useReplyComposer } from "../../lib/composer-owner.ts";
 import {
   clearDraft,
@@ -93,6 +94,10 @@ export function ThreadCard({
   showInPlace,
   surface = "reading",
 }: ThreadProps) {
+  const highlightCard = useCallback(
+    (card: HTMLElement | null) => (card ? trackCommentCard(card, thread.id) : undefined),
+    [thread.id],
+  );
   const mutation = useReviewMutation(reviewId);
   const key = draftKey(reviewId, thread.target, thread.id);
   const keys = [key, ...thread.comments.map((comment) => editDraftKey(reviewId, comment.id))];
@@ -117,6 +122,7 @@ export function ThreadCard({
   const canReply = !resolved && thread.comments.some((comment) => comment.author === "agent" || comment.sent);
   return (
     <article
+      ref={highlightCard}
       data-thread-card
       id={`${surface === "diff" ? "diff-thread" : "thread"}-${thread.id}`}
       className="em-thread"

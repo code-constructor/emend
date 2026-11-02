@@ -1,12 +1,12 @@
 import type { RevisionView } from "@emend/contract";
 import { Link } from "@tanstack/react-router";
 import { ArrowLeft, ChevronRight, FileCode, FileText } from "lucide-react";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { DocNavigation } from "../../lib/frame-messages.ts";
 import type { ReviewSearch } from "../../router.tsx";
 import { Button } from "../ui/Button.tsx";
 import { Icon } from "../ui/Icon.tsx";
-import { BlockReader, type ReaderProps } from "./BlockReader.tsx";
+import { BlockReader, type ReaderGroup, type ReaderProps } from "./BlockReader.tsx";
 import { HtmlDocFrame, type HtmlNavigation } from "./HtmlDocFrame.tsx";
 
 export function DocView({
@@ -57,6 +57,35 @@ export function DocView({
     setDestination(doc.kind === "html" && next.fragment ? next : undefined);
     onOpenDoc(doc.path);
   };
+  const content =
+    openDoc?.kind === "html" ? (
+      <HtmlDocFrame
+        key={openDoc.contentUrl}
+        {...props}
+        path={openDoc.path}
+        contentUrl={openDoc.contentUrl}
+        navigation={navigation}
+        docNavigation={destination?.path === openDoc.path ? destination : undefined}
+        onNavigate={follow}
+        composerOpen={composingPath === openDoc.path}
+      />
+    ) : undefined;
+  const groups = useMemo<ReaderGroup[]>(
+    () =>
+      openDoc
+        ? [
+            {
+              key: openDoc.path,
+              id: `doc-${openDoc.path}`,
+              labelledBy: headingId,
+              path: openDoc.path,
+              blocks: openDoc.kind === "markdown" ? openDoc.blocks : [],
+              content,
+            },
+          ]
+        : [],
+    [openDoc, headingId, content],
+  );
   if (!openDoc)
     return (
       <>
@@ -117,32 +146,7 @@ export function DocView({
           {openDoc.path}
         </h2>
       </div>
-      <BlockReader
-        key={openDoc.path}
-        {...props}
-        groups={[
-          {
-            key: openDoc.path,
-            id: `doc-${openDoc.path}`,
-            labelledBy: headingId,
-            path: openDoc.path,
-            blocks: openDoc.kind === "markdown" ? openDoc.blocks : [],
-            content:
-              openDoc.kind === "html" ? (
-                <HtmlDocFrame
-                  key={openDoc.contentUrl}
-                  {...props}
-                  path={openDoc.path}
-                  contentUrl={openDoc.contentUrl}
-                  navigation={navigation}
-                  docNavigation={destination?.path === openDoc.path ? destination : undefined}
-                  onNavigate={follow}
-                  composerOpen={composingPath === openDoc.path}
-                />
-              ) : undefined,
-          },
-        ]}
-      />
+      <BlockReader key={openDoc.path} {...props} groups={groups} />
     </div>
   );
 }

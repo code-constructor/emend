@@ -1,6 +1,8 @@
 import type { RenderedBlock, RevisionView, Target } from "@emend/contract";
 import { TextSelect } from "lucide-react";
-import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { mapBlockText } from "../../lib/block-ranges.ts";
+import { registerCommentRanges, supportsCommentHighlights } from "../../lib/comment-highlights.ts";
 import { claimDraft } from "../../lib/composer-owner.ts";
 import { draftKey } from "../../lib/drafts.ts";
 import { blockAnchor, selectionToAnchor } from "../../lib/selection.ts";
@@ -16,6 +18,7 @@ export type ReaderProps = {
   threads: RevisionView["threads"];
   topics?: RevisionView["topics"];
   resumedBlockId?: string;
+  activeThreadId?: string;
 };
 export type ReaderGroup = {
   key: string;
@@ -41,11 +44,13 @@ export function BlockReader({
   topics,
   groups,
   resumedBlockId,
+  activeThreadId,
 }: ReaderProps & {
   groups: ReaderGroup[];
 }) {
   const headingBase = useId();
   const root = useRef<HTMLDivElement>(null);
+  const highlights = useRef<ReturnType<typeof registerCommentRanges>>(undefined);
   const opener = useRef<HTMLElement | null>(null);
   const [target, setTarget] = useState<Target | null>(null);
   const [composing, setComposing] = useState(false);
@@ -69,18 +74,55 @@ export function BlockReader({
     () => new Map(groups.flatMap((group) => groupBlocks(group).map((block) => [block.id, group.path] as const))),
     [groups],
   );
-  const blockThreads = new Map<string, RevisionView["threads"]>();
-  for (const thread of threads) {
-    if (thread.placement.status !== "placed") continue;
-    const location = thread.placement.location;
-    if (!("blockId" in location) || !targets.has(location.blockId)) continue;
-    const path = targets.get(location.blockId);
-    if (path === undefined ? location.kind !== "writeup-span" : location.kind !== "doc-span" || location.path !== path)
-      continue;
-    const group = blockThreads.get(location.blockId) ?? [];
-    group.push(thread);
-    blockThreads.set(location.blockId, group);
-  }
+  const blockThreads = useMemo(() => {
+    const byBlock = new Map<string, RevisionView["threads"]>();
+    for (const thread of threads) {
+      if (thread.placement.status !== "placed") continue;
+      const location = thread.placement.location;
+      if (!("blockId" in location) || !targets.has(location.blockId)) continue;
+      const path = targets.get(location.blockId);
+      if (
+        path === undefined ? location.kind !== "writeup-span" : location.kind !== "doc-span" || location.path !== path
+      )
+        continue;
+      const group = byBlock.get(location.blockId) ?? [];
+      group.push(thread);
+      byBlock.set(location.blockId, group);
+    }
+    return byBlock;
+  }, [threads, targets]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: A revision/review change retires ranges even if the cached blocks and threads are shared.
+  useLayoutEffect(() => {
+    if (!root.current || !supportsCommentHighlights()) return;
+    const blocks: Map<string, Range>[] = [];
+    for (const block of root.current.querySelectorAll<HTMLElement>("[data-block-id]")) {
+      try {
+        const placed = blockThreads.get(block.dataset.blockId ?? "");
+        if (!placed) continue;
+        const map = mapBlockText(block);
+        if (!map) continue;
+        const ranges = new Map<string, Range>();
+        for (const thread of placed) {
+          if (thread.state === "resolved" || thread.placement.status !== "placed") continue;
+          const location = thread.placement.location;
+          if (location.kind !== "writeup-span" && location.kind !== "doc-span") continue;
+          const range = map(location.start, location.end);
+          if (range) ranges.set(thread.id, range);
+        }
+        blocks.push(ranges);
+      } catch {
+        // A failed block contributes no ranges; the rest of the reader still works.
+      }
+    }
+    const registration = registerCommentRanges(blocks);
+    highlights.current = registration;
+    return () => {
+      registration?.unregister();
+      highlights.current = undefined;
+    };
+  }, [blockThreads, revision, reviewId]);
+  // Apply the current intent to new registrations too, without remapping text.
+  useLayoutEffect(() => highlights.current?.setActiveThread(activeThreadId));
   useEffect(() => {
     const capture = () => {
       if (!root.current || composing) return;
