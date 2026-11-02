@@ -14,7 +14,10 @@ after(() => {
 });
 
 function which(program: string): string {
-  const result = spawnSync("sh", ["-c", `command -v ${program}`], { encoding: "utf8" });
+  const result = spawnSync("sh", ["-c", `command -v ${program}`], {
+    encoding: "utf8",
+    env: { PATH: process.env.PATH },
+  });
   return result.stdout.trim();
 }
 
@@ -40,7 +43,14 @@ function run(root: string, input: string, env: Record<string, string> = {}) {
   return spawnSync("bash", [hook], {
     input,
     encoding: "utf8",
-    env: { ...process.env, CLAUDE_PROJECT_DIR: root, CLAUDE_CODE_SUBAGENT_MODEL: "", ...env },
+    // A startup file named by the caller's BASH_ENV or ENV must never run in the test.
+    env: {
+      ...(process.env.PATH !== undefined ? { PATH: process.env.PATH } : {}),
+      ...(process.env.HOME !== undefined ? { HOME: process.env.HOME } : {}),
+      CLAUDE_PROJECT_DIR: root,
+      CLAUDE_CODE_SUBAGENT_MODEL: "",
+      ...env,
+    },
   });
 }
 
@@ -56,6 +66,27 @@ test("a pinned agent with no model exits 2", () => {
 
 test("a pinned agent with the right model exits 0", () => {
   assert.equal(run(makeProject(), agentCall("emend-reviewer", "sonnet")).status, 0);
+});
+
+test("caller startup files never run in the test", () => {
+  const root = makeProject();
+  const startup = path.join(root, "startup.sh");
+  const marker = `${startup}.marker`;
+  writeFileSync(startup, `: > '${marker.replaceAll("'", "'\\''")}'\n`);
+  const previousBashEnv = process.env.BASH_ENV;
+  const previousEnv = process.env.ENV;
+  try {
+    process.env.BASH_ENV = startup;
+    process.env.ENV = startup;
+    const result = run(root, agentCall("emend-reviewer", "sonnet"));
+    assert.equal(result.status, 0);
+    assert.equal(existsSync(marker), false);
+  } finally {
+    if (previousBashEnv === undefined) delete process.env.BASH_ENV;
+    else process.env.BASH_ENV = previousBashEnv;
+    if (previousEnv === undefined) delete process.env.ENV;
+    else process.env.ENV = previousEnv;
+  }
 });
 
 test("an agent whose file name differs from its name is still enforced", () => {
