@@ -4,7 +4,7 @@ import type { Io } from "../main.ts";
 import { ApiError } from "../server/http/errors.ts";
 import { StateDirModeError, StateFolderWriteError, stateFolderWritable } from "../state/files.ts";
 import { VERSION } from "../version.ts";
-import { escapeReference } from "./escape.ts";
+import { escapeReference, quoteShellArgument } from "./escape.ts";
 import { discover } from "./server-client.ts";
 import type { Target } from "./target.ts";
 
@@ -56,7 +56,7 @@ export function errorLine(error: unknown, command?: string): string {
     return `emend cannot write its state folder ${escapeReference(error.dir)}.${hint}\n`;
   if (error instanceof StateDirModeError) {
     const dir = escapeReference(error.dir);
-    const quoted = `'${dir.replaceAll("'", "'\\''")}'`;
+    const quoted = quoteShellArgument(error.dir);
     return `State directory ${dir} has group or other permissions; fix it with chmod 700 ${quoted}\n`;
   }
   if (error instanceof NewerDatabaseError) return `${error.message}\n`;

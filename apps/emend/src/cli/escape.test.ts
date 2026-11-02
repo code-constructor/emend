@@ -1,6 +1,48 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { FilePath } from "@emend/contract";
 import { expect, test } from "vitest";
-import { escapeJson, escapeReference } from "./escape.ts";
+import { escapeJson, escapeReference, quoteShellArgument } from "./escape.ts";
+
+const shellCases = [
+  ["plain path", "/synthetic/docs with spaces", "'/synthetic/docs with spaces'"],
+  ["apostrophe", "/synthetic/reviewer's", "'/synthetic/reviewer'\\''s'"],
+  ["backslash", "/synthetic/a\\b", "'/synthetic/a\\b'"],
+  ["literal escape", "/synthetic/a\\u{a}b", "'/synthetic/a\\u{a}b'"],
+  ["newline", "/synthetic/a\nb", "$'/synthetic/a\\x0ab'"],
+  ["ESC", "/synthetic/a\u001b[31m", "$'/synthetic/a\\x1b[31m'"],
+  ["U+0085", "/synthetic/a\u0085b", "$'/synthetic/a\\xc2\\x85b'"],
+  ["U+202E", "/synthetic/a\u202eb", "$'/synthetic/a\\xe2\\x80\\xaeb'"],
+  ["U+FEFF", "/synthetic/a\ufeffb", "$'/synthetic/a\\xef\\xbb\\xbfb'"],
+  ["mixed escapes", "/synthetic/a\\u{a}'\n🌱", "$'/synthetic/a\\\\u{a}\\'\\x0a🌱'"],
+] as const;
+
+test.each(shellCases)("shell argument quoting preserves %s on one terminal line", (_name, value, quoted) => {
+  expect(quoteShellArgument(value)).toBe(quoted);
+  expect(escapeReference(quoted)).toBe(quoted);
+});
+
+for (const [shell, flags] of [
+  ["bash", ["--norc", "--noprofile"]],
+  ["zsh", ["-f"]],
+] as const) {
+  for (const locale of ["C", process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8"]) {
+    for (const [name, value] of shellCases) {
+      test(`${shell} decodes the quoted ${name} under LC_ALL=${locale}`, async ({ skip }) => {
+        try {
+          const result = await promisify(execFile)(shell, [...flags, "-c", `printf %s ${quoteShellArgument(value)}`], {
+            env: { PATH: process.env.PATH, LC_ALL: locale },
+          });
+          expect(result.stdout).toBe(value);
+          expect(result.stderr).toBe("");
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") skip(`${shell} is not on PATH`);
+          else throw error;
+        }
+      });
+    }
+  }
+}
 
 test.each([
   0, 10, 127, 128, 159, 0x61c, 0x200b, 0x200c, 0x200d, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2060,

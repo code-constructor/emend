@@ -22,7 +22,11 @@ vi.mock("node:fs", async (importOriginal) => {
 
 test("a state mode error retains its original folder for safe CLI formatting", () => {
   const dir = "/synthetic/state\n\u001b[31m";
-  expect(new StateDirModeError(dir).dir).toBe(dir);
+  const error = new StateDirModeError(dir);
+  expect(error.dir).toBe(dir);
+  expect(error.message).toBe(
+    "State directory /synthetic/state\\u{a}\\u{1b}[31m has group or other permissions; fix it with chmod 700 $'/synthetic/state\\x0a\\x1b[31m'",
+  );
 });
 
 test("secret writes create private parents, replace files and tighten existing permissions", async () => {

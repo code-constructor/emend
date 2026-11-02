@@ -28,7 +28,7 @@ test.each([
 ])("%s mode errors escape the folder everywhere on one line", (command) => {
   const error = new StateDirModeError("/synthetic/state\n\u001b[31m\u202e");
   expect(errorLine(error, command)).toBe(
-    "State directory /synthetic/state\\u{a}\\u{1b}[31m\\u{202e} has group or other permissions; fix it with chmod 700 '/synthetic/state\\u{a}\\u{1b}[31m\\u{202e}'\n",
+    "State directory /synthetic/state\\u{a}\\u{1b}[31m\\u{202e} has group or other permissions; fix it with chmod 700 $'/synthetic/state\\x0a\\x1b[31m\\xe2\\x80\\xae'\n",
   );
 });
 

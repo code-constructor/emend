@@ -14,6 +14,18 @@ export function escapeReference(value: string): string {
   return escapeControls(value, (code) => `\\u{${code.toString(16)}}`);
 }
 
+/** One pasteable shell argument; ANSI-C quoting preserves names with terminal controls. */
+export function quoteShellArgument(value: string): string {
+  if (escapeReference(value) === value) return `'${value.replaceAll("'", "'\\''")}'`;
+  const encoder = new TextEncoder();
+  const quoted = escapeControls(value.replaceAll("\\", "\\\\").replaceAll("'", "\\'"), (code) =>
+    Array.from(encoder.encode(String.fromCodePoint(code)), (byte) => `\\x${byte.toString(16).padStart(2, "0")}`).join(
+      "",
+    ),
+  );
+  return `$'${quoted}'`;
+}
+
 /** Escape serialized JSON for a terminal without changing what JSON.parse returns. */
 export function escapeJson(json: string): string {
   const shortEscapes: Record<string, string> = { b: "0008", f: "000c", n: "000a", r: "000d", t: "0009" };
