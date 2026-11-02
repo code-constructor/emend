@@ -64,7 +64,7 @@ test("a sparse 2 GiB untracked file is oversized without hashing or uploading it
         writeup: { overview: "", tldr: "", decisions: null, topics: {} },
       },
       { manifest: "synthetic" },
-      f.root,
+      f.state,
       "instance",
       f.root,
       () => {},
@@ -99,7 +99,7 @@ test("a later doc reserves bytes before 255 MiB of real collected diff sides", a
         writeup: { overview: "", tldr: "", decisions: null, topics: {} },
       },
       { manifest: "synthetic" },
-      f.root,
+      f.state,
       "instance",
       f.root,
       () => {},
@@ -121,13 +121,15 @@ test("a later doc reserves bytes before 255 MiB of real collected diff sides", a
   }
 }, 15000);
 async function fixture(format = "sha1", content = "base\n") {
-  const root = await mkdtemp(join(tmpdir(), "emend-worktree-listing-"));
+  const dir = await mkdtemp(join(tmpdir(), "emend-worktree-listing-"));
+  const root = join(dir, "repo");
   const run = (...args: string[]) =>
     exec("git", ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false", ...args], {
       cwd: root,
       env: { PATH: process.env.PATH, HOME: root, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
     });
   try {
+    await mkdir(root);
     await run("init", `--object-format=${format}`, "-b", "main");
     await run("config", "user.name", "Synthetic");
     await run("config", "user.email", "synthetic@example.test");
@@ -135,9 +137,9 @@ async function fixture(format = "sha1", content = "base\n") {
     await run("add", ".");
     await run("commit", "-m", "synthetic base");
     const base = (await run("rev-parse", "HEAD")).stdout.trim();
-    return { root, run, base, cleanup: () => rm(root, { recursive: true, force: true }) };
+    return { root, state: join(dir, "state"), run, base, cleanup: () => rm(dir, { recursive: true, force: true }) };
   } catch (error) {
-    await rm(root, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true });
     throw error;
   }
 }
@@ -424,7 +426,7 @@ test.each([".git", "visible"])("a committed leading symlink to %s makes former d
         writeup: { overview: "", tldr: "", decisions: null, topics: {} },
       },
       { manifest: "synthetic" },
-      f.root,
+      f.state,
       "instance",
       f.root,
       () => {},
@@ -461,7 +463,7 @@ test("linked worktree doc sources cannot read either Git directory, even through
             writeup: { overview: "", tldr: "", decisions: null, topics: {} },
           },
           { manifest: "synthetic", key: "docs" },
-          linked,
+          f.state,
           "instance",
           linked,
           () => {},

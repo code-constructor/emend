@@ -61,19 +61,21 @@ test("doc sources resolve only inside the worktree or configured real doc roots"
 });
 test("HTML and each asset and their cumulative bytes have pre-read limits", async () => {
   const dir = await mkdtemp(join(tmpdir(), "emend-limits-"));
+  const root = join(dir, "repo");
   try {
-    await mkdir(join(dir, ".git"));
+    await mkdir(join(root, ".git"), { recursive: true });
     const input = { ...manifest(), files: [{ path: "plan.html", role: "doc" as const }] };
-    const collect = () => resolvePublish(input, { manifest: "synthetic", key: "plan" }, dir, "instance", dir, () => {});
-    await writeFile(join(dir, "plan.html"), '<img src="a.png"><img src="b.png"><img src="c.png">');
+    const collect = () =>
+      resolvePublish(input, { manifest: "synthetic", key: "plan" }, join(dir, "state"), "instance", root, () => {});
+    await writeFile(join(root, "plan.html"), '<img src="a.png"><img src="b.png"><img src="c.png">');
     for (const name of ["a.png", "b.png", "c.png"]) {
-      await writeFile(join(dir, name), "");
-      await truncate(join(dir, name), LIMITS.assetBytes);
+      await writeFile(join(root, name), "");
+      await truncate(join(root, name), LIMITS.assetBytes);
     }
     await expect(collect()).rejects.toThrow("HTML doc and assets exceed");
-    await truncate(join(dir, "a.png"), LIMITS.assetBytes + 1);
+    await truncate(join(root, "a.png"), LIMITS.assetBytes + 1);
     await expect(collect()).rejects.toThrow("asset exceeds");
-    await truncate(join(dir, "plan.html"), LIMITS.htmlDocBytes + 1);
+    await truncate(join(root, "plan.html"), LIMITS.htmlDocBytes + 1);
     await expect(collect()).rejects.toThrow("size limit");
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -82,11 +84,12 @@ test("HTML and each asset and their cumulative bytes have pre-read limits", asyn
 
 test("HTML docs sharing an asset publish it once under its first parent", async () => {
   const dir = await mkdtemp(join(tmpdir(), "emend-shared-assets-"));
+  const root = join(dir, "repo");
   try {
-    await mkdir(join(dir, ".git"));
+    await mkdir(join(root, ".git"), { recursive: true });
     for (const path of ["one.html", "two.html"])
-      await writeFile(join(dir, path), '<link href="style.css" rel="stylesheet">');
-    await writeFile(join(dir, "style.css"), "body { color: black }");
+      await writeFile(join(root, path), '<link href="style.css" rel="stylesheet">');
+    await writeFile(join(root, "style.css"), "body { color: black }");
     const result = await resolvePublish(
       {
         ...manifest(),
@@ -96,9 +99,9 @@ test("HTML docs sharing an asset publish it once under its first parent", async 
         ],
       },
       { manifest: "synthetic", key: "plan" },
-      dir,
+      join(dir, "state"),
       "instance",
-      dir,
+      root,
       () => {},
     );
     expect(result.request.files.filter((f) => f.role === "asset")).toMatchObject([
@@ -117,11 +120,12 @@ test("HTML docs sharing an asset publish it once under its first parent", async 
 test.each(["data", "first.html"])(
   "HTML doc and assets share the checked first resolution when an alias swaps from %s",
   async (name) => {
-    const root = await mkdtemp(join(tmpdir(), "emend-doc-asset-swap-"));
+    const dir = await mkdtemp(join(tmpdir(), "emend-doc-asset-swap-"));
+    const root = join(dir, "repo");
     const realpath = fs.realpath;
     const probe = vi.spyOn(fs, "realpath");
     try {
-      await mkdir(join(root, ".git"));
+      await mkdir(join(root, ".git"), { recursive: true });
       await mkdir(join(root, ".private"));
       await writeFile(join(root, ".private", name), '<script src="first.js"></script>');
       await writeFile(join(root, ".private", "first.js"), "Synthetic first doc asset");
@@ -143,7 +147,7 @@ test.each(["data", "first.html"])(
       const publishing = resolvePublish(
         { ...manifest(), files: [{ path: "notes.html", role: "doc" }] },
         { manifest: "synthetic", key: "docs" },
-        root,
+        join(dir, "state"),
         "instance",
         root,
         () => {},
@@ -162,7 +166,7 @@ test.each(["data", "first.html"])(
       expect(resolutions).toBe(1);
     } finally {
       probe.mockRestore();
-      await rm(root, { recursive: true, force: true });
+      await rm(dir, { recursive: true, force: true });
     }
   },
 );
@@ -170,32 +174,41 @@ test.each(["data", "first.html"])(
 test.each([".git/config", ".GIT./config", ".g\u206ait/config", "link/config", "leaf.md"])(
   "doc source %j cannot expose Git metadata",
   async (source) => {
-    const root = await mkdtemp(join(tmpdir(), "emend-doc-git-"));
+    const dir = await mkdtemp(join(tmpdir(), "emend-doc-git-"));
+    const root = join(dir, "repo");
     try {
-      await mkdir(join(root, ".git"));
+      await mkdir(join(root, ".git"), { recursive: true });
       await writeFile(join(root, ".git/config"), "synthetic metadata");
       await symlink(".git", join(root, "link"));
       await symlink(".git/config", join(root, "leaf.md"));
       await expect(
-        resolvePublish(manifest(source), { manifest: "synthetic", key: "docs" }, root, "instance", root, () => {}),
+        resolvePublish(
+          manifest(source),
+          { manifest: "synthetic", key: "docs" },
+          join(dir, "state"),
+          "instance",
+          root,
+          () => {},
+        ),
       ).rejects.toThrow("refusing to read inside the git folder:");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await rm(dir, { recursive: true, force: true });
     }
   },
 );
 
 test("doc upload rereads recheck aliases for Git metadata", async () => {
-  const root = await mkdtemp(join(tmpdir(), "emend-doc-reread-"));
+  const dir = await mkdtemp(join(tmpdir(), "emend-doc-reread-"));
+  const root = join(dir, "repo");
   try {
-    await mkdir(join(root, ".git"));
+    await mkdir(join(root, ".git"), { recursive: true });
     await writeFile(join(root, ".git/config"), "synthetic metadata");
     await writeFile(join(root, "safe.md"), "synthetic doc");
     await symlink("safe.md", join(root, "alias.md"));
     const resolved = await resolvePublish(
       manifest("alias.md"),
       { manifest: "synthetic", key: "docs" },
-      root,
+      join(dir, "state"),
       "instance",
       root,
       () => {},
@@ -204,7 +217,7 @@ test("doc upload rereads recheck aliases for Git metadata", async () => {
     await symlink(".git/config", join(root, "alias.md"));
     await expect([...resolved.blobs.values()][0]?.read()).rejects.toThrow("refusing to read inside the git folder:");
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true });
   }
 });
 
@@ -247,9 +260,10 @@ test.each(["nested worktree repo", "docRoot repo"])(
 );
 
 test("HTML asset reads and upload rereads refuse a leaf alias into the Git folder", async () => {
-  const root = await mkdtemp(join(tmpdir(), "emend-asset-git-"));
+  const dir = await mkdtemp(join(tmpdir(), "emend-asset-git-"));
+  const root = join(dir, "repo");
   try {
-    await mkdir(join(root, ".git"));
+    await mkdir(join(root, ".git"), { recursive: true });
     await writeFile(join(root, ".git/config"), "synthetic metadata");
     await writeFile(join(root, "safe.png"), "synthetic image");
     await symlink("safe.png", join(root, "asset.png"));
@@ -258,7 +272,7 @@ test("HTML asset reads and upload rereads refuse a leaf alias into the Git folde
       resolvePublish(
         { ...manifest(), files: [{ path: "plan.html", role: "doc" }] },
         { manifest: "synthetic", key: "docs" },
-        root,
+        join(dir, "state"),
         "instance",
         root,
         () => {},
@@ -270,6 +284,6 @@ test("HTML asset reads and upload rereads refuse a leaf alias into the Git folde
     await expect(result.blobs.get(hash ?? "")?.read()).rejects.toThrow("refusing to read inside the git folder:");
     await expect(collect()).rejects.toThrow("refusing to read inside the git folder:");
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true });
   }
 });

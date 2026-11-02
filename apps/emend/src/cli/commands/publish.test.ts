@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { Writable } from "node:stream";
 import { promisify } from "node:util";
 import { LIMITS, type PublishManifest, PublishRequest } from "@emend/contract";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, expect, onTestFinished, test, vi } from "vitest";
 import { run } from "../../main.ts";
 import { commandFixture, provenTestServer } from "../test-support.ts";
 import { manifestJsonError, publishCommand, publishTimeoutMs } from "./publish.ts";
@@ -88,10 +88,9 @@ test("publish deadlines include the slot, one render pass and three placement at
 });
 test("publish stdout is exactly one JSON line and unchanged docs upload nothing twice", async () => {
   const dir = await realpath(await mkdtemp(join(tmpdir(), "emend-command-")));
+  const state = await mkdtemp(join(tmpdir(), "emend-command-state-"));
   try {
-    const state = join(dir, "state");
     const docs = join(dir, "docs");
-    await mkdir(state, { mode: 0o700 });
     await mkdir(docs);
     await promisify(execFile)("git", ["init", dir]);
     await writeFile(join(state, "agent.token"), `em_${"a".repeat(43)}`);
@@ -150,6 +149,7 @@ test("publish stdout is exactly one JSON line and unchanged docs upload nothing 
     }
     expect(puts).toBe(1);
   } finally {
+    await rm(state, { recursive: true, force: true });
     await rm(dir, { recursive: true, force: true });
   }
 });
@@ -202,7 +202,8 @@ test.each(["missing", "non-directory parent", "directory", "empty", "truncated",
   "a %s manifest fails with one safe diagnostic and creates no review",
   async (kind) => {
     const f = await commandFixture();
-    const root = join(f.dir, "repo");
+    const root = await mkdtemp(join(tmpdir(), "emend-manifest-repo-"));
+    onTestFinished(() => rm(root, { recursive: true, force: true }));
     await promisify(execFile)("git", ["-c", "init.templateDir=", "init", root]);
     vi.spyOn(process, "cwd").mockReturnValue(root);
     const name = kind === "non-directory parent" ? "plain/review.json" : "review.json";
@@ -244,7 +245,8 @@ test.each(["missing", "non-directory parent", "directory", "empty", "truncated",
 
 test("a missing manifest escapes the supplied path on one line", async () => {
   const f = await commandFixture();
-  const root = join(f.dir, "repo");
+  const root = await mkdtemp(join(tmpdir(), "emend-manifest-repo-"));
+  onTestFinished(() => rm(root, { recursive: true, force: true }));
   await promisify(execFile)("git", ["-c", "init.templateDir=", "init", root]);
   vi.spyOn(process, "cwd").mockReturnValue(root);
   expect(await run(["publish", "--manifest", "missing\u2028.json", "--key", "synthetic"], f.io)).toBe(1);

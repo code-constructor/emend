@@ -12,7 +12,7 @@ interface Config {
   openBrowser: boolean;
 }
 
-const rootRules = {
+export const rootRules = {
   filesystem: { config: "docRoots cannot be the filesystem root", publish: "is the filesystem root" },
   home: { config: "docRoots cannot be the home folder or hold it", publish: "is the home folder or holds it" },
   state: {

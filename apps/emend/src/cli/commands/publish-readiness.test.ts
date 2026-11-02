@@ -26,8 +26,8 @@ const manifest = () => ({
 
 async function fixture(inGit = true) {
   const f = await commandFixture();
-  const root = join(f.dir, "repo");
-  await mkdir(root);
+  const root = await mkdtemp(join(tmpdir(), "emend-readiness-repo-"));
+  onTestFinished(() => rm(root, { recursive: true, force: true }));
   if (inGit) await promisify(execFile)("git", ["-c", "init.templateDir=", "init", root]);
   // Ignore unrelated repositories above the temporary folder.
   else vi.spyOn(roots, "worktreeRoot").mockResolvedValue(null);

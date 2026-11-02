@@ -33,8 +33,10 @@ vi.mock("../publish/collect.ts", () => ({ collectChanges: async () => [] }));
 
 test("an unchanged listed diff or invalid source starts no server, even without instance state", async () => {
   const dir = await mkdtemp(join(tmpdir(), "emend-startup-"));
-  const manifest = join(dir, "manifest.json");
-  const io = { stdout: vi.fn(), stderr: vi.fn(), env: { EMEND_HOME: dir } };
+  const root = join(dir, "repo");
+  const state = join(dir, "state");
+  const manifest = join(root, "manifest.json");
+  const io = { stdout: vi.fn(), stderr: vi.fn(), env: { EMEND_HOME: state } };
   const common = {
     version: 1,
     title: "Synthetic",
@@ -42,7 +44,7 @@ test("an unchanged listed diff or invalid source starts no server, even without 
     writeup: { overview: "", tldr: "", decisions: null, topics: {} },
   };
   try {
-    await mkdir(join(dir, ".git"));
+    await mkdir(join(root, ".git"), { recursive: true });
     vi.mocked(discover).mockClear();
     await writeFile(
       manifest,
@@ -53,13 +55,13 @@ test("an unchanged listed diff or invalid source starts no server, even without 
         files: [{ path: "unchanged.ts", role: "diff" }],
       }),
     );
-    await expect(publishCommand(dir, ["--manifest", manifest], io, dir)).rejects.toThrow("not changed in");
+    await expect(publishCommand(state, ["--manifest", manifest], io, root)).rejects.toThrow("not changed in");
     await writeFile(manifest, JSON.stringify({ ...common, files: [{ path: "missing.md", role: "doc" }] }));
-    await expect(publishCommand(dir, ["--manifest", manifest, "--key", "plan"], io, dir)).rejects.toThrow();
+    await expect(publishCommand(state, ["--manifest", manifest, "--key", "plan"], io, root)).rejects.toThrow();
     expect(discover).not.toHaveBeenCalled();
-    await writeFile(join(dir, "plan.md"), "# Valid");
+    await writeFile(join(root, "plan.md"), "# Valid");
     await writeFile(manifest, JSON.stringify({ ...common, files: [{ path: "plan.md", role: "doc" }] }));
-    await expect(publishCommand(dir, ["--manifest", manifest, "--key", "plan"], io, dir)).rejects.toThrow(
+    await expect(publishCommand(state, ["--manifest", manifest, "--key", "plan"], io, root)).rejects.toThrow(
       "server discovery reached",
     );
     expect(discover).toHaveBeenCalledOnce();
@@ -70,21 +72,23 @@ test("an unchanged listed diff or invalid source starts no server, even without 
 
 test.each([".git/config", "alias/config"])("manifest read %s cannot expose Git metadata", async (path) => {
   const dir = await mkdtemp(join(tmpdir(), "emend-manifest-git-"));
+  const root = join(dir, "repo");
+  const state = join(dir, "state");
   try {
-    await mkdir(join(dir, ".git"));
-    await writeFile(join(dir, ".git/config"), "synthetic metadata");
-    await symlink(".git", join(dir, "alias"));
+    await mkdir(join(root, ".git"), { recursive: true });
+    await writeFile(join(root, ".git/config"), "synthetic metadata");
+    await symlink(".git", join(root, "alias"));
     vi.mocked(discover).mockClear();
     await expect(
       publishCommand(
-        dir,
-        ["--manifest", join(dir, path), "--key", "docs"],
+        state,
+        ["--manifest", join(root, path), "--key", "docs"],
         {
           stdout: vi.fn(),
           stderr: vi.fn(),
-          env: { EMEND_HOME: dir },
+          env: { EMEND_HOME: state },
         },
-        dir,
+        root,
       ),
     ).rejects.toThrow("refusing to read inside the git folder:");
     expect(discover).not.toHaveBeenCalled();

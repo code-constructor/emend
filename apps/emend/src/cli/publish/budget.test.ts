@@ -42,8 +42,9 @@ vi.mock("./sides.ts", () => ({
 
 test("topic importance allocates unique bytes before Other changes without retaining content", async () => {
   const dir = await mkdtemp(join(tmpdir(), "emend-budget-"));
+  const root = join(dir, "repo");
   try {
-    await mkdir(join(dir, ".git"));
+    await mkdir(join(root, ".git"), { recursive: true });
     const result = await resolvePublish(
       {
         version: 1,
@@ -62,9 +63,9 @@ test("topic importance allocates unique bytes before Other changes without retai
         writeup: { overview: "", tldr: "", decisions: null, topics: {} },
       },
       { manifest: "synthetic" },
-      dir,
+      join(dir, "state"),
       "instance",
-      dir,
+      root,
       () => {},
     );
     expect(result.request.files.map((f) => [f.path, f.flag])).toEqual([
@@ -84,9 +85,10 @@ test("topic importance allocates unique bytes before Other changes without retai
 });
 test("docs alone over the revision budget have the fixed error", async () => {
   const dir = await mkdtemp(join(tmpdir(), "emend-doc-budget-"));
+  const root = join(dir, "repo");
   try {
-    await mkdir(join(dir, ".git"));
-    await writeFile(join(dir, "plan.md"), "elevenbytes");
+    await mkdir(join(root, ".git"), { recursive: true });
+    await writeFile(join(root, "plan.md"), "elevenbytes");
     await expect(
       resolvePublish(
         {
@@ -97,9 +99,9 @@ test("docs alone over the revision budget have the fixed error", async () => {
           writeup: { overview: "", tldr: "", decisions: null, topics: {} },
         },
         { manifest: "synthetic", key: "plan" },
-        dir,
+        join(dir, "state"),
         "instance",
-        dir,
+        root,
         () => {},
       ),
     ).rejects.toThrow("the docs pass the revision size limit");

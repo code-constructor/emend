@@ -56,7 +56,7 @@ export function manifestJsonError(error: SyntaxError, text: string): string {
 
 export async function publishCommand(stateDir: string, args: string[], io: Io, cwd = process.cwd()): Promise<void> {
   const options = parsePublishArgs(args);
-  const context = await publishContext(cwd);
+  const context = await publishContext(cwd, stateDir);
   const manifestPath = resolve(cwd, options.manifest);
   const unsafeManifest = new CliError(
     `the manifest ${escapeReference(manifestPath)} can be changed by other users; write it in a private folder`,

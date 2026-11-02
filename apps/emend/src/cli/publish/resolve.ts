@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
+import { homedir } from "node:os";
 import { basename, dirname, posix, resolve } from "node:path";
 import { LIMITS, OTHER_TOPIC, type PublishFile, type PublishManifest, PublishRequest } from "@emend/contract";
 import { UnchangedFilesError, withOtherChanges } from "@emend/core";
-import { readDocRoots } from "../config.ts";
+import { DocRootError, readDocRoots, rootRules, validateDocRoot } from "../config.ts";
 import { escapeReference } from "../escape.ts";
 import { createGitSession, GitFailed } from "../git.ts";
 import { CliError } from "../http.ts";
@@ -18,10 +19,19 @@ import type { BlobSource } from "./upload.ts";
 
 export type PublishOptions = { manifest: string; review?: string; key?: string };
 const sha256 = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
-export async function publishContext(cwd: string) {
+export async function publishContext(cwd: string, stateDir: string) {
   const git = createGitSession();
   const worktree = await worktreeRoot(cwd);
   if (worktree) {
+    try {
+      await validateDocRoot(worktree, homedir(), stateDir);
+    } catch (error) {
+      if (error instanceof DocRootError)
+        throw new CliError(
+          `the repository at ${escapeReference(worktree)} ${rootRules[error.reason].publish}, so emend does not publish from it`,
+        );
+      throw error;
+    }
     const configured = await realpath(
       (await git(cwd, ["rev-parse", "--show-toplevel"])).toString().replace(/\r?\n$/, ""),
     );
@@ -40,7 +50,7 @@ export async function resolvePublish(
   warn: (line: string) => void,
   context?: Awaited<ReturnType<typeof publishContext>>,
 ) {
-  const { git, worktree, root, gitDirs } = context ?? (await publishContext(cwd));
+  const { git, worktree, root, gitDirs } = context ?? (await publishContext(cwd, stateDir));
   const code = manifest.base !== undefined;
   if (code && !worktree) throw new CliError("not a git repository");
   const branchName = code ? (await git(root, ["rev-parse", "--abbrev-ref", "HEAD"])).toString().trim() : "HEAD";

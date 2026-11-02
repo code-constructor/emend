@@ -28,7 +28,9 @@ The CLI runs inside repos under review, so treat those repos as hostile.
   `--no-ext-diff --no-textconv`. git 2.44 is the floor.
 - The worktree root is the nearest ancestor of the working directory that holds `.git`, found on
   disk. Repo config never moves it: when `rev-parse --show-toplevel` disagrees (`core.worktree`),
-  the CLI refuses the repo.
+  the CLI refuses the repo. The root follows the `docRoots` rules, checked before any git call or
+  manifest read: publish refuses a root that is the filesystem root, the home folder or holds it,
+  or holds or sits inside the state folder.
 - Filter drivers (`filter.<name>.clean`, `.process`) run whenever git hashes a working-tree file,
   and `.git/info/attributes` picks them past every fence: git re-hashes a "racy" index entry
   through the filter in any index-to-worktree comparison. So git never touches the worktree.
