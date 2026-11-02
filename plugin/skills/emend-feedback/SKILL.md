@@ -170,8 +170,7 @@ An empty instruction or one that only limits scope leaves the earlier intent sta
 
 A doc's `source` must be inside the repository's worktree or inside a folder the user listed in
 `docRoots` in emend's own configuration.
-When publish prints `source is outside the allowed doc roots`, stop and ask the user to add that
-folder to `docRoots` or to move the doc into the repository. Never edit emend's configuration yourself.
+When publish prints `source is outside the allowed doc roots`, stop and ask the user to run `emend config add docRoots <folder>` for that folder, or to move the doc into the repository. Never run `emend config` or edit emend's configuration yourself.
 
 After changes, check the affected behavior and update the manifest's files and writeup. For
 code changes, use `head: "worktree"` unless the changes already belong to the chosen commit.

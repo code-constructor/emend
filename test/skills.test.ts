@@ -87,6 +87,18 @@ const gitFiles = (...args: string[]) =>
 const fixedWaitRedirect =
   /\d*>(?:>|\|)?[ \t]*(?:"(?:[^"\r\n]*\/)?wait\.json"|'(?:[^'\r\n]*\/)?wait\.json'|(?:[^\s"'|;]*\/)?wait\.json(?=$|[\s;)]))/m;
 
+test.each(skillFiles)("%s asks the user to configure doc roots and forbids doing it itself", (path) => {
+  const text = read(path);
+  expect(text).toContain(
+    "When publish prints `source is outside the allowed doc roots`, stop and ask the user to run `emend config add docRoots <folder>` for that folder, or to move the doc into the repository. Never run `emend config` or edit emend's configuration yourself.",
+  );
+  if (path.includes("emend-review/")) {
+    expect(text).toContain(
+      "If one does not, ask the user to run `emend config add docRoots <folder>`; never run `emend config` or edit emend's configuration yourself.",
+    );
+  }
+});
+
 test("no skill file redirects hand-offs into a fixed wait.json", () => {
   const skills = join(repo, "plugin", "skills");
   for (const path of readdirSync(skills, { recursive: true, encoding: "utf8" })) {

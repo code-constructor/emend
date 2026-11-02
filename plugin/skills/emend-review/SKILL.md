@@ -73,8 +73,7 @@ synthetic values with the review's paths, commit hashes and text. Docs use `sour
 their local filename differs from the published path.
 A doc's `source` must be inside the repository's worktree or inside a folder the user listed in
 `docRoots` in emend's own configuration.
-When publish prints `source is outside the allowed doc roots`, stop and ask the user to add that
-folder to `docRoots` or to move the doc into the repository. Never edit emend's configuration yourself.
+When publish prints `source is outside the allowed doc roots`, stop and ask the user to run `emend config add docRoots <folder>` for that folder, or to move the doc into the repository. Never run `emend config` or edit emend's configuration yourself.
 Create one private temporary folder per review, outside the worktree. In a POSIX shell:
 
 ```sh
@@ -123,7 +122,7 @@ a revision to that review.
 
 Relative `source` paths resolve from the repository root or, outside a git repository, from the folder publish runs in.
 Outside a git repository, every doc source must sit in a folder listed in `docRoots`.
-If one does not, ask the user to add that folder; never edit emend's configuration yourself.
+If one does not, ask the user to run `emend config add docRoots <folder>`; never run `emend config` or edit emend's configuration yourself.
 
 For an invalid manifest, the CLI names the failing fields.
 If it says the manifest is not found, check the path. If it says the manifest is not valid JSON,
