@@ -1,10 +1,11 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
-import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { expect, test, vi } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import { run } from "../../main.ts";
 import * as roots from "../publish/root.ts";
 import { commandFixture } from "../test-support.ts";
@@ -205,23 +206,23 @@ test.each([
     name: "a missing doc names its source",
     allowed: true,
     present: false,
-    error: "emend: doc not found: ../docs/draft.md\n",
+    error: "missing",
   },
 ])("docs-only outside git: $name", async ({ allowed, present, error }) => {
   const f = await fixture(false);
-  const docs = join(f.dir, "docs");
-  await mkdir(docs);
+  const docs = await realpath(await mkdtemp(join(tmpdir(), "emend-readiness-docs-")));
+  onTestFinished(() => rm(docs, { recursive: true, force: true }));
   if (present) await writeFile(join(docs, "draft.md"), "# Synthetic plan\n");
   if (allowed) await writeFile(join(f.dir, "config.json"), JSON.stringify({ docRoots: [docs] }));
   await rm(join(f.dir, "server.json"));
   await writeFile(
     f.path,
-    JSON.stringify({ ...manifest(), files: [{ path: "plan.md", role: "doc", source: "../docs/draft.md" }] }),
+    JSON.stringify({ ...manifest(), files: [{ path: "plan.md", role: "doc", source: join(docs, "draft.md") }] }),
   );
   expect(await f.publish()).toBe(error ? 1 : 0);
   if (error) {
     expect(f.stdout).toEqual([]);
-    expect(f.stderr).toEqual([error]);
+    expect(f.stderr).toEqual([error === "missing" ? `emend: doc not found: ${join(docs, "draft.md")}\n` : error]);
   } else {
     expect(f.stdout).toHaveLength(1);
     expect(f.stdout[0]?.split("\n")).toHaveLength(2);

@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
 import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import * as os from "node:os";
 import { tmpdir } from "node:os";
 import { join, parse } from "node:path";
 import { LIMITS } from "@emend/contract";
@@ -8,8 +9,10 @@ import { type Io, run } from "../../main.ts";
 import * as stateFiles from "../../state/files.ts";
 import { readConfig } from "../config.ts";
 import { escapeReference } from "../escape.ts";
+import { configCommand } from "./config.ts";
 
 vi.mock("node:fs/promises", async (original) => ({ ...(await original<typeof import("node:fs/promises")>()) }));
+vi.mock("node:os", async (original) => ({ ...(await original<typeof import("node:os")>()) }));
 
 async function fixture() {
   const root = await realpath(await mkdtemp(join(tmpdir(), "emend-config-command-")));
@@ -19,6 +22,7 @@ async function fixture() {
   const docs = join(root, "docs");
   await mkdir(docs);
   await mkdir(home);
+  vi.spyOn(os, "userInfo").mockReturnValue({ homedir: home, username: "synthetic", uid: 1000, gid: 1000, shell: null });
   vi.stubEnv("HOME", home);
   vi.stubEnv("USERPROFILE", home);
   vi.spyOn(process, "cwd").mockReturnValue(root);
@@ -425,8 +429,52 @@ test("a public state folder with terminal controls produces one safe diagnostic 
   expect(await f.run(["set", "openBrowser", "true"], state)).toEqual({
     code: 1,
     stdout: [],
-    stderr: [`State directory ${escaped} has group or other permissions; fix it with chmod 700 '${escaped}'\n`],
+    stderr: [
+      `State directory ${escaped} has group or other permissions; fix it with chmod 700 $'${f.root}/state\\x0a\\x1b[31m'\n`,
+    ],
   });
   expect(await readdir(state)).toEqual([]);
   expect((await stat(state)).mode & 0o777).toBe(0o755);
+});
+
+test.each(["state", "ancestor"])("config add refuses a dangling %s symlink into its doc root", async (kind) => {
+  const f = await fixture();
+  const link = join(f.root, "dangling");
+  await symlink("docs/emend-state", link, "dir");
+  const state = kind === "state" ? link : join(link, "share", "state");
+  const io: Io = { env: { EMEND_HOME: state, HOME: f.home }, stdout: vi.fn(), stderr: vi.fn() };
+  // The command receives explicit temporary state, without the test-only defaultStateDir symlink guard.
+  await expect(configCommand(state, ["add", "docRoots", f.docs], io)).rejects.toThrow(
+    /^docRoots cannot hold or sit inside emend's state folder$/,
+  );
+  expect(io.stdout).not.toHaveBeenCalled();
+  await expect(stat(join(f.docs, "emend-state"))).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+test("config add refuses a doc root containing the target of a dangling HOME symlink", async () => {
+  const f = await fixture();
+  const home = join(f.root, "dangling-home");
+  await symlink("docs/home", home, "dir");
+  vi.stubEnv("HOME", home);
+  expect(await f.run(["add", "docRoots", f.docs])).toEqual(failure("docRoots cannot be the home folder or hold it"));
+  await expect(stat(f.stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+test("config add refuses a relative dangling state link against its real parent before writing", async () => {
+  const f = await fixture();
+  const parent = join(f.root, "p");
+  const docs = join(parent, "real", "docs");
+  await mkdir(join(parent, "real", "deep"), { recursive: true });
+  await mkdir(docs);
+  await symlink("real/deep", join(parent, "sub"), "dir");
+  await symlink("../docs/emend-state", join(parent, "real", "deep", "state"), "dir");
+  const state = join(parent, "sub", "state");
+  const io: Io = { env: { EMEND_HOME: state, HOME: f.home }, stdout: vi.fn(), stderr: vi.fn() };
+  const write = vi.spyOn(stateFiles, "writeSecretFile");
+  await expect(configCommand(state, ["add", "docRoots", docs], io)).rejects.toThrow(
+    /^docRoots cannot hold or sit inside emend's state folder$/,
+  );
+  expect(write).not.toHaveBeenCalled();
+  expect(io.stdout).not.toHaveBeenCalled();
+  expect(await readdir(docs)).toEqual([]);
 });

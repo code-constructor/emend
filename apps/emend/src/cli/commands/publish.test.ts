@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, rm, stat, truncate, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, stat, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Writable } from "node:stream";
@@ -87,23 +87,27 @@ test("publish deadlines include the slot, one render pass and three placement at
   ).toBe(165000);
 });
 test("publish stdout is exactly one JSON line and unchanged docs upload nothing twice", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "emend-command-"));
+  const dir = await realpath(await mkdtemp(join(tmpdir(), "emend-command-")));
   try {
+    const state = join(dir, "state");
+    const docs = join(dir, "docs");
+    await mkdir(state, { mode: 0o700 });
+    await mkdir(docs);
     await promisify(execFile)("git", ["init", dir]);
-    await writeFile(join(dir, "agent.token"), `em_${"a".repeat(43)}`);
-    await writeFile(join(dir, "instance.json"), JSON.stringify({ id: randomUUID() }));
-    await writeFile(join(dir, "config.json"), JSON.stringify({ docRoots: [dir] }));
+    await writeFile(join(state, "agent.token"), `em_${"a".repeat(43)}`);
+    await writeFile(join(state, "instance.json"), JSON.stringify({ id: randomUUID() }));
+    await writeFile(join(state, "config.json"), JSON.stringify({ docRoots: [docs] }));
     const input: PublishManifest = {
       version: 1,
       title: "Synthetic",
       topics: [],
-      files: [{ path: "plan.md", role: "doc" }],
+      files: [{ path: "plan.md", role: "doc", source: "docs/plan.md" }],
       writeup: { overview: "hi", tldr: "short", decisions: null, topics: {} },
     };
     const path = join(dir, "manifest.json");
     await writeFile(path, JSON.stringify(input));
-    await writeFile(join(dir, "plan.md"), "# Plan");
-    const proof = provenTestServer(dir);
+    await writeFile(join(docs, "plan.md"), "# Plan");
+    const proof = provenTestServer(state);
     const blobs = new Set<string>();
     const reviewId = randomUUID();
     let revision = 0;
@@ -131,9 +135,9 @@ test("publish stdout is exactly one JSON line and unchanged docs upload nothing 
       const stdout: string[] = [];
       const stderr: string[] = [];
       await publishCommand(
-        dir,
+        state,
         ["--manifest", path, "--key", "plan"],
-        { stdout: (s) => stdout.push(s), stderr: (s) => stderr.push(s), env: { EMEND_HOME: dir } },
+        { stdout: (s) => stdout.push(s), stderr: (s) => stderr.push(s), env: { EMEND_HOME: state } },
         dir,
       );
       expect(stdout).toHaveLength(1);

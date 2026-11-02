@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PublishResponse } from "@emend/contract";
@@ -13,7 +13,7 @@ import * as roots from "./publish/root.ts";
 
 export async function directFixture() {
   vi.spyOn(roots, "worktreeRoot").mockResolvedValue(null);
-  const dir = await mkdtemp(join(tmpdir(), "emend-direct-"));
+  const dir = await realpath(await mkdtemp(join(tmpdir(), "emend-direct-")));
   const stateDir = join(dir, "state");
   const source = join(dir, "source");
   await mkdir(source);

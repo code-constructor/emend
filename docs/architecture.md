@@ -33,6 +33,7 @@ call reads them again, so no server or restart is needed. Outside a terminal it 
 pairing code. This keeps links out of agent output; it does not stop a
 process that can open a terminal, read the state folder, or, with `openBrowser` on, choose the
 opener.
+Publish re-checks each stored doc root and refuses one that is not a real path or that `emend config add` would refuse.
 `emend serve` runs without opening a browser; `emend service install` installs a systemd
 user unit or a launchd agent. The server binds `127.0.0.1:3636` unless `--host` or `--tailscale`
 explicitly widens access. There is no telemetry.

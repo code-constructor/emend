@@ -3,7 +3,7 @@ import { realpath, stat } from "node:fs/promises";
 import { basename, dirname, posix, resolve } from "node:path";
 import { LIMITS, OTHER_TOPIC, type PublishFile, type PublishManifest, PublishRequest } from "@emend/contract";
 import { UnchangedFilesError, withOtherChanges } from "@emend/core";
-import { readConfig } from "../config.ts";
+import { readDocRoots } from "../config.ts";
 import { escapeReference } from "../escape.ts";
 import { createGitSession, GitFailed } from "../git.ts";
 import { CliError } from "../http.ts";
@@ -98,8 +98,7 @@ export async function resolvePublish(
   const files: PublishFile[] = [];
   let assetCount = 0;
   const assetPaths = new Set<string>();
-  const { docRoots } = await readConfig(stateDir);
-  const roots = [...(worktree ? [worktree] : []), ...(await Promise.all(docRoots.map((root) => realpath(root))))];
+  const roots = [...(worktree ? [worktree] : []), ...(await readDocRoots(stateDir))];
   for (const file of grouped.files) {
     if (file.role === "diff") {
       const change = changes.find((c) => c.path === file.path);

@@ -27,7 +27,7 @@ const manifest = (source?: string): PublishManifest => ({
   writeup: { overview: "", tldr: "", decisions: null, topics: {} },
 });
 test("doc sources resolve only inside the worktree or configured real doc roots", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "emend-docs-"));
+  const dir = await fs.realpath(await mkdtemp(join(tmpdir(), "emend-docs-")));
   try {
     const root = join(dir, "repo");
     const state = join(dir, "state");
@@ -211,7 +211,7 @@ test("doc upload rereads recheck aliases for Git metadata", async () => {
 test.each(["nested worktree repo", "docRoot repo"])(
   "doc aliases cannot publish metadata from a %s, including upload rereads",
   async (location) => {
-    const dir = await mkdtemp(join(tmpdir(), "emend-doc-nested-git-"));
+    const dir = await fs.realpath(await mkdtemp(join(tmpdir(), "emend-doc-nested-git-")));
     try {
       const root = join(dir, "repo");
       const state = join(dir, "state");

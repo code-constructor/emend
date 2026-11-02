@@ -46,7 +46,8 @@ export async function configCommand(stateDir: string, args: string[], io: Io): P
       config.docRoots.push(actual);
       message = `emend: added ${escapeReference(actual)} to docRoots`;
     } else {
-      let index = config.docRoots.indexOf(path);
+      let index = config.docRoots.indexOf(value as string);
+      if (index === -1) index = config.docRoots.indexOf(path);
       if (index === -1) {
         const actual = await realpath(path).catch((error: NodeJS.ErrnoException) => {
           if (error.code === "ENOENT" || error.code === "ENOTDIR") return undefined;
