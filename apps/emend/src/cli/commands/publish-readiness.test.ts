@@ -123,12 +123,13 @@ test("invalid manifest bounds a long record key after escaping it", async () => 
   expect(f.stderr.join("").split("\n")).toHaveLength(2);
 });
 
-test("a manifest that is not JSON keeps the plain diagnostic", async () => {
+test("a manifest that is not JSON says so without its text", async () => {
   const f = await fixture();
   await writeFile(f.path, '{"received private value":');
   expect(await f.publish()).toBe(1);
   expect(f.stdout).toEqual([]);
-  expect(f.stderr).toEqual(["emend: invalid publish manifest\n"]);
+  expect(f.stderr).toEqual(["emend: the manifest is not valid JSON\n"]);
+  expect(f.stderr.join("")).not.toContain("received private value");
 });
 
 test.each(["missing", "directory", "directory without extension", "non-folder", "alias", "escaped"])(

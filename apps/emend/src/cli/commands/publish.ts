@@ -7,7 +7,7 @@ import { escapeReference } from "../escape.ts";
 import { apiRequest, CliError, printJson, publishAnswerIncomplete } from "../http.ts";
 import { movedError, refuseUncopiedReview } from "../moved.ts";
 import { manifestError } from "../publish/manifest-error.ts";
-import { GitFolderRead, inside, readRegular } from "../publish/read.ts";
+import { GitFolderRead, inside, NotRegularFile, OversizedFile, readRegular } from "../publish/read.ts";
 import { type PublishOptions, publishContext, resolvePublish } from "../publish/resolve.ts";
 import { upload } from "../publish/upload.ts";
 import { readAttachmentPair, resolveTarget } from "../target.ts";
@@ -40,6 +40,20 @@ export const publishTimeoutMs = (files: { role: string; path: string }[]) =>
   15000 +
   10000 * (1 + files.filter((file) => file.role === "doc" && /\.(md|markdown)$/i.test(file.path)).length) +
   3 * 30000;
+
+export function manifestJsonError(error: SyntaxError, text: string): string {
+  const message = "the manifest is not valid JSON";
+  // Only engine location suffixes are safe; quoted input can occur elsewhere in the message.
+  const location = /\(line (\d+) column (\d+)\)$/.exec(error.message);
+  if (location) return `${message} (line ${location[1]}, column ${location[2]})`;
+  const position = /\bposition (\d+)$/.exec(error.message);
+  if (!position) return message;
+  const offset = Number(position[1]);
+  if (!Number.isSafeInteger(offset) || offset > text.length) return message;
+  const lines = text.slice(0, offset).split(/\r\n|\r|\n/);
+  return `${message} (line ${lines.length}, column ${(lines.at(-1)?.length ?? 0) + 1})`;
+}
+
 export async function publishCommand(stateDir: string, args: string[], io: Io, cwd = process.cwd()): Promise<void> {
   const options = parsePublishArgs(args);
   const context = await publishContext(cwd);
@@ -47,33 +61,42 @@ export async function publishCommand(stateDir: string, args: string[], io: Io, c
   const unsafeManifest = new CliError(
     `the manifest ${escapeReference(manifestPath)} can be changed by other users; write it in a private folder`,
   );
-  let input: unknown;
+  let manifestText: string;
   try {
-    input = JSON.parse(
-      (
-        await readRegular(
-          manifestPath,
-          LIMITS.publishJsonBytes,
-          inside(context.root, manifestPath) ? [context.root] : undefined,
-          undefined,
-          context.gitDirs,
-          async (info, actual) => {
-            if (!process.getuid || (context.worktree && inside(context.worktree, actual))) return;
-            const uid = process.getuid();
-            if (info.uid !== uid || (info.mode & 0o002) !== 0) throw unsafeManifest;
-            if ((info.mode & 0o020) !== 0) {
-              const folder = await lstat(dirname(actual)).catch(() => {
-                throw unsafeManifest;
-              });
-              if (!folder.isDirectory() || folder.uid !== uid || (folder.mode & 0o077) !== 0) throw unsafeManifest;
-            }
-          },
-        )
-      ).toString(),
-    );
+    manifestText = (
+      await readRegular(
+        manifestPath,
+        LIMITS.publishJsonBytes,
+        inside(context.root, manifestPath) ? [context.root] : undefined,
+        undefined,
+        context.gitDirs,
+        async (info, actual) => {
+          if (!process.getuid || (context.worktree && inside(context.worktree, actual))) return;
+          const uid = process.getuid();
+          if (info.uid !== uid || (info.mode & 0o002) !== 0) throw unsafeManifest;
+          if ((info.mode & 0o020) !== 0) {
+            const folder = await lstat(dirname(actual)).catch(() => {
+              throw unsafeManifest;
+            });
+            if (!folder.isDirectory() || folder.uid !== uid || (folder.mode & 0o077) !== 0) throw unsafeManifest;
+          }
+        },
+      )
+    ).toString();
   } catch (error) {
     if (error instanceof GitFolderRead || error === unsafeManifest) throw error;
+    if (error instanceof NotRegularFile || ["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? ""))
+      throw new CliError(`manifest not found: ${escapeReference(options.manifest)}`);
+    if (error instanceof OversizedFile) throw new CliError("manifest exceeds its size limit");
     throw new CliError("invalid publish manifest");
+  }
+  let input: unknown;
+  try {
+    input = JSON.parse(manifestText);
+  } catch (error) {
+    throw new CliError(
+      error instanceof SyntaxError ? manifestJsonError(error, manifestText) : "invalid publish manifest",
+    );
   }
   const parsed = PublishManifest.safeParse(input, { reportInput: true });
   if (!parsed.success) throw new CliError(manifestError(parsed.error.issues));

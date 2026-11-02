@@ -1,17 +1,40 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Writable } from "node:stream";
 import { promisify } from "node:util";
-import { type PublishManifest, PublishRequest } from "@emend/contract";
+import { LIMITS, type PublishManifest, PublishRequest } from "@emend/contract";
 import { afterEach, expect, test, vi } from "vitest";
 import { run } from "../../main.ts";
 import { commandFixture, provenTestServer } from "../test-support.ts";
-import { publishCommand, publishTimeoutMs } from "./publish.ts";
+import { manifestJsonError, publishCommand, publishTimeoutMs } from "./publish.ts";
 
 afterEach(() => vi.unstubAllGlobals());
+
+test.each([
+  ["Unexpected token ] in JSON at position 9", " (line 2, column 8)"],
+  ["Expected property name at position 9 (line 2 column 8)", " (line 2, column 8)"],
+  ["Unexpected end of JSON input", ""],
+  ["Unexpected token ] in JSON at position 99", ""],
+  ['Unexpected token, "position 9 (line 2 column 8)" is not valid JSON', ""],
+])("manifest JSON diagnostics use only an engine location: %s", (engineMessage, suffix) => {
+  expect(manifestJsonError(new SyntaxError(engineMessage), '{\n  "x": ]\n}')).toBe(
+    `the manifest is not valid JSON${suffix}`,
+  );
+});
+
+test.each([
+  { endings: "CR-only", text: '{\r "x":1,\r}', position: 10, line: 3, column: 1 },
+  { endings: "CRLF", text: '{\r\n "x":1,\r\n}', position: 12, line: 3, column: 1 },
+  { endings: "mixed", text: '{\r\n "x":1,\r "y":2,\n  }', position: 21, line: 4, column: 3 },
+])("manifest JSON positions count $endings line endings", ({ text, position, line, column }) => {
+  expect(manifestJsonError(new SyntaxError(`Unexpected token } in JSON at position ${position}`), text)).toBe(
+    `the manifest is not valid JSON (line ${line}, column ${column})`,
+  );
+});
+
 test("publish with closed stdout exits 1 with one diagnostic", async () => {
   const f = await commandFixture();
   const manifest = join(f.dir, "manifest.json");
@@ -152,7 +175,7 @@ test("docs-only without a key, malformed manifests and unknown reviews fail with
     for (const [args, expected] of [
       [["--manifest", path], "emend: pass --review or --key\n"],
       [["--manifest", path, "--review", randomUUID()], "emend: unknown_review\n"],
-      [["--manifest", join(dir, "missing")], "emend: invalid publish manifest\n"],
+      [["--manifest", join(dir, "missing")], `emend: manifest not found: ${join(dir, "missing")}\n`],
     ] as const) {
       const stdout: string[] = [];
       const stderr: string[] = [];
@@ -169,6 +192,62 @@ test("docs-only without a key, malformed manifests and unknown reviews fail with
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test.each(["missing", "non-directory parent", "directory", "empty", "truncated", "secret-looking", "oversized"])(
+  "a %s manifest fails with one safe diagnostic and creates no review",
+  async (kind) => {
+    const f = await commandFixture();
+    const root = join(f.dir, "repo");
+    await promisify(execFile)("git", ["-c", "init.templateDir=", "init", root]);
+    vi.spyOn(process, "cwd").mockReturnValue(root);
+    const name = kind === "non-directory parent" ? "plain/review.json" : "review.json";
+    const path = join(f.dir, name);
+    const secret = `emp_${"a".repeat(43)}`;
+    let expected: string;
+    if (kind === "missing" || kind === "non-directory parent" || kind === "directory") {
+      if (kind === "non-directory parent") await writeFile(join(f.dir, "plain"), "Synthetic file");
+      if (kind === "directory") await mkdir(path);
+      expected = `emend: manifest not found: ${path}\n`;
+    } else if (kind === "oversized") {
+      await writeFile(path, "");
+      await truncate(path, LIMITS.publishJsonBytes + 1);
+      expected = "emend: manifest exceeds its size limit\n";
+    } else {
+      const content =
+        kind === "empty"
+          ? ""
+          : kind === "truncated"
+            ? '{\n  "version": 1,\n  "title": "Synthetic"'
+            : `{"title":"${secret}" broken}`;
+      await writeFile(path, content);
+      expected =
+        kind === "empty"
+          ? "emend: the manifest is not valid JSON\n"
+          : kind === "truncated"
+            ? "emend: the manifest is not valid JSON (line 3, column 23)\n"
+            : "emend: the manifest is not valid JSON (line 1, column 60)\n";
+    }
+    expect(await run(["publish", "--manifest", path, "--key", "synthetic"], f.io)).toBe(1);
+    expect(f.stdout).toEqual([]);
+    expect(f.stderr).toEqual([expected]);
+    expect(f.stderr.join("")).not.toContain(secret);
+    expect(f.stderr.join("").split("\n")).toHaveLength(2);
+    expect(f.fetcher).not.toHaveBeenCalled();
+    await expect(stat(join(f.dir, "emend.db"))).rejects.toMatchObject({ code: "ENOENT" });
+  },
+);
+
+test("a missing manifest escapes the supplied path on one line", async () => {
+  const f = await commandFixture();
+  const root = join(f.dir, "repo");
+  await promisify(execFile)("git", ["-c", "init.templateDir=", "init", root]);
+  vi.spyOn(process, "cwd").mockReturnValue(root);
+  expect(await run(["publish", "--manifest", "missing\u2028.json", "--key", "synthetic"], f.io)).toBe(1);
+  expect(f.stdout).toEqual([]);
+  expect(f.stderr).toEqual(["emend: manifest not found: missing\\u{2028}.json\n"]);
+  expect(f.fetcher).not.toHaveBeenCalled();
+  await expect(stat(join(f.dir, "emend.db"))).rejects.toMatchObject({ code: "ENOENT" });
 });
 
 test("a 200 with an invalid publish response reports possible publication on one stderr line", async () => {
