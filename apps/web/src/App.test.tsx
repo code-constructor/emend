@@ -335,7 +335,7 @@ test.each(["100.64.0.1", "127.0.0.2", "localhost.example"])(
   async (host) => {
     (window as unknown as Window).happyDOM.setURL(`http://${host}:3636/pair`);
     mount("/pair");
-    await screen.findByRole("heading", { level: 1, name: "Pair a device" });
+    await screen.findByRole("heading", { level: 1, name: "Pair this device" });
     expect(screen.getByLabelText("Pairing code")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Pair" })).toBeTruthy();
     expect(

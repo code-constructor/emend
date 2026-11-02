@@ -3,6 +3,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, pair } from "../api/client.ts";
 import { Button } from "../components/ui/Button.tsx";
+import { PairingCodeInput } from "../components/ui/PairingCodeInput.tsx";
 import { subscribePairingSecret, takePairingSecret } from "../lib/pairing-secret.ts";
 
 export function PairPage() {
@@ -12,7 +13,11 @@ export function PairPage() {
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const codeInput = useRef<HTMLInputElement>(null);
   const redeemed = useRef(new Set<string>());
+  useEffect(() => {
+    if (error && !busy) codeInput.current?.focus();
+  }, [error, busy]);
   const redeem = useCallback(
     async (input: { secret: string } | { code: string }) => {
       setBusy(true);
@@ -47,64 +52,65 @@ export function PairPage() {
     return unsubscribe;
   }, [redeem]);
   return (
-    <main className="mx-auto flex min-h-dvh max-w-md flex-col justify-center px-6 py-12">
-      <p className="mb-8 text-lg font-semibold tracking-tight">emend</p>
-      <h1 className="text-2xl font-semibold tracking-tight">{loopback ? "Sign in" : "Pair a device"}</h1>
+    <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-5 px-6 pt-14 pb-6">
+      <p className="mb-3 font-mono text-30 font-medium leading-none font-stretch-mono text-fg-1">emend</p>
+      <h1 className="text-24 font-semibold leading-(--lh-tight) tracking-(--tracking-tight)">
+        {loopback ? "Sign in" : "Pair this device"}
+      </h1>
       {loopback ? (
         <>
           {busy ? (
-            <p role="status" className="mt-6">
-              Pairing…
-            </p>
+            <p role="status">Pairing…</p>
           ) : (
-            <p className="mt-3 text-sm leading-6 text-neutral-600 dark:text-neutral-400">
+            <p className="text-15 text-fg-2">
               Run <code>emend</code> in a terminal on the machine that runs emend. It opens this page signed in, or
               prints a one-time link you can open here.
             </p>
           )}
           {error && (
-            <p role="alert" className="mt-6 text-sm">
+            <p role="alert" className="text-13 text-danger-fg">
               {error}
             </p>
           )}
         </>
       ) : (
         <>
-          <p className="mt-3 text-sm leading-6 text-neutral-600 dark:text-neutral-400">
+          <p className="text-15 text-fg-2">
+            On a browser that is already signed in, open Devices, choose Pair a device, and type the code it shows here.
+          </p>
+          <p className="text-12 text-fg-3">
             The app on your home screen pairs once more with a code, even after Safari has paired.
           </p>
           <form
-            className="mt-6 space-y-4"
+            className="space-y-5"
             onSubmit={(event) => {
               event.preventDefault();
-              if (!busy) void redeem({ code: code.trim() });
+              if (!busy && code.replace(/-/g, "").length === 8) void redeem({ code });
             }}
           >
-            <label className="block text-sm font-medium" htmlFor="pairing-code">
-              Pairing code
-            </label>
-            <input
+            <PairingCodeInput
+              ref={codeInput}
               id="pairing-code"
+              label="Pairing code"
               value={code}
-              onChange={(event) => setCode(event.target.value)}
-              autoComplete="one-time-code"
-              autoCapitalize="characters"
-              spellCheck={false}
+              onChange={(value) => {
+                setCode(value);
+                setError("");
+              }}
+              error={error}
               required
-              maxLength={9}
               disabled={busy}
-              placeholder="XXXX-XXXX"
-              className="min-h-12 w-full rounded-md border border-neutral-300 bg-transparent px-3 font-mono text-lg focus-visible:outline-blue-600 dark:border-neutral-700"
             />
-            <Button type="submit" disabled={busy} variant="primary" size="lg" fullWidth>
+            <Button
+              type="submit"
+              disabled={busy || code.replace(/-/g, "").length !== 8}
+              variant="primary"
+              size="lg"
+              fullWidth
+            >
               Pair
             </Button>
             {busy && <p role="status">Pairing…</p>}
-            {error && (
-              <p role="alert" className="text-sm">
-                {error}
-              </p>
-            )}
           </form>
         </>
       )}

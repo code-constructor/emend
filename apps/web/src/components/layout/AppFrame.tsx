@@ -1,7 +1,8 @@
-import { Link } from "@tanstack/react-router";
+import { Link, useRouter } from "@tanstack/react-router";
 import { ChevronLeft, Ellipsis, Inbox, Link as LinkIcon, MessageSquarePlus, QrCode, Smartphone } from "lucide-react";
 import type { ReactNode } from "react";
 import { useLayout } from "../../lib/layout.ts";
+import { requestPairingFromLink } from "../../lib/pairing-intent.ts";
 import { Icon } from "../ui/Icon.tsx";
 import { IconButton } from "../ui/IconButton.tsx";
 import { Menu, type MenuItem } from "../ui/Menu.tsx";
@@ -18,6 +19,7 @@ export function AppFrame({
   onCommentReview?: () => void;
 }) {
   const layout = useLayout();
+  const router = useRouter();
   const toast = useToast();
   async function copyLink() {
     try {
@@ -49,7 +51,11 @@ export function AppFrame({
           label: "Pair a device",
           icon: QrCode,
           asChild: true,
-          children: <Link to="/devices/pair">Pair a device</Link>,
+          children: (
+            <Link to="/devices/pair" onClick={(event) => requestPairingFromLink(event, router.history.location)}>
+              Pair a device
+            </Link>
+          ),
         },
       ];
   return (
