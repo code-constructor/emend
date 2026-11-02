@@ -1,5 +1,5 @@
 import type { FileView, RevisionView, Target, ThreadView } from "@emend/contract";
-import type { DiffLineAnnotation, FileDiffMetadata, SelectedLineRange } from "@pierre/diffs";
+import type { DiffLineAnnotation, FileDiffMetadata, FileDiffOptions, SelectedLineRange } from "@pierre/diffs";
 import { FileDiff as PierreFileDiff, WorkerPoolContextProvider } from "@pierre/diffs/react";
 import DiffWorker from "@pierre/diffs/worker/worker.js?worker";
 import { useQuery } from "@tanstack/react-query";
@@ -7,17 +7,20 @@ import { type ReactElement, type ReactNode, useCallback, useEffect, useMemo, use
 import { splitLines } from "../../../../../packages/core/src/place/linemap.ts";
 import { getText } from "../../api/client.ts";
 import { plural } from "../../lib/count.ts";
-import { useLayout } from "../../lib/layout.ts";
 import { Composer } from "../threads/Composer.tsx";
 import { ThreadCard } from "../threads/ThreadCard.tsx";
 import { Button } from "../ui/Button.tsx";
+import { FileHeader } from "./FileHeader.tsx";
 import { LineComposer } from "./LineComposer.tsx";
 import { linesTarget } from "./linesTarget.ts";
 import { type DiffParser, parseOffThread } from "./parse-client.ts";
+import { type DiffCounts, type DiffStyle, diffCounts } from "./presentation.ts";
 import type { FileLocation } from "./targets.ts";
 
 export type ParsedDiff = FileDiffMetadata;
 type Annotation = DiffLineAnnotation<ReactElement>;
+type BodyState = { diff?: ParsedDiff; blocked: boolean };
+type SlotState = { names: Set<string>; rendered: boolean };
 const poolOptions = { workerFactory: () => new DiffWorker(), poolSize: 2 };
 const highlighterOptions = { preferredHighlighter: "shiki-js" as const, tokenizeMaxLineLength: 1000 };
 export function DiffWorkers({ children, workerFactory }: { children: ReactNode; workerFactory?: () => Worker }) {
@@ -41,43 +44,35 @@ export function DiffView({
   annotations: Annotation[];
   onSelect: (range: SelectedLineRange | null) => void;
   selected: SelectedLineRange | null;
-  onSlots?: (slots: Set<string>) => void;
+  onSlots?: (slots: SlotState) => void;
 }) {
-  const container = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!onSlots || !container.current) return;
-    const root = container.current;
-    let shadow: ShadowRoot | null | undefined;
-    const sync = () => {
-      const next = root.querySelector("diffs-container")?.shadowRoot;
-      if (next && next !== shadow) {
-        shadow = next;
-        observer.observe(next, { childList: true, subtree: true, attributes: true, attributeFilter: ["name"] });
-      }
-      onSlots(
-        new Set(
-          [...(shadow?.querySelectorAll('slot[name^="annotation-"]') ?? [])].map(
+  const onPostRender = useCallback<NonNullable<FileDiffOptions<ReactElement, undefined>["onPostRender"]>>(
+    (node, _instance, phase) => {
+      // The initial mount callback can precede async rendering. Once code exists,
+      // Pierre has committed its annotation slots in the same render as the lines.
+      const rendered = phase !== "unmount" && !!node.shadowRoot?.querySelector("[data-line]");
+      onSlots?.({
+        rendered,
+        names: new Set(
+          [...(rendered ? (node.shadowRoot?.querySelectorAll('slot[name^="annotation-"]') ?? []) : [])].map(
             (slot) => slot.getAttribute("name") ?? "",
           ),
         ),
-      );
-    };
-    const observer = new MutationObserver(sync);
-    observer.observe(root, { childList: true, subtree: true });
-    sync();
-    return () => {
-      observer.disconnect();
-      onSlots(new Set());
-    };
-  }, [onSlots]);
+      });
+    },
+    [onSlots],
+  );
   return (
-    <div ref={container}>
+    <div className="em-diff-code">
       <PierreFileDiff<ReactElement>
+        className="em-diff-host"
+        style={{ colorScheme: "inherit" }}
         fileDiff={fileDiff}
         options={{
           preferredHighlighter: "shiki-js",
           tokenizeMaxLength: 1000,
           diffStyle,
+          themeType: "system",
           lineDiffType: "word",
           overflow: "wrap",
           disableFileHeader: true,
@@ -85,6 +80,7 @@ export function DiffView({
           // Placed comments must also be visible in otherwise collapsed context.
           expandUnchanged: annotations.length > 0,
           onLineSelectionEnd: onSelect,
+          onPostRender,
         }}
         selectedLines={selected}
         lineAnnotations={annotations}
@@ -121,17 +117,37 @@ export type DiffContext = {
   onActive: (target: Target | null) => void;
   parser?: DiffParser;
   fileForTarget: (target: FileLocation) => FileView | undefined;
+  diffStyle: DiffStyle;
+  counts: Map<string, DiffCounts>;
+  onParsed: (id: string, counts: DiffCounts) => void;
+  collapsedFiles: Set<string>;
+  toggleFile: (id: string) => void;
+  revealedFile?: string;
+  onContentRendered: () => void;
 };
-export function FileDiff({ file, ...context }: DiffContext & { file: FileView }) {
+export function FileDiff({
+  file,
+  topicCollapsed,
+  ...context
+}: DiffContext & { file: FileView; topicCollapsed: boolean }) {
   const ref = useRef<HTMLElement>(null);
   const [near, setNear] = useState(false);
   const [height, setHeight] = useState(200);
   const [expanded, setExpanded] = useState(false);
-  const [slots, setSlots] = useState(new Set<string>());
+  const [slotState, setSlots] = useState<SlotState>({ names: new Set(), rendered: false });
+  const slots = slotState.names;
+  const [bodyState, setBodyState] = useState<BodyState>({ blocked: false });
+  const onBodyState = useCallback((next: BodyState) => {
+    setBodyState((previous) => (previous.diff === next.diff && previous.blocked === next.blocked ? previous : next));
+  }, []);
   const onSlots = useCallback(
-    (next: Set<string>) =>
+    (next: SlotState) =>
       setSlots((previous) =>
-        previous.size === next.size && [...previous].every((name) => next.has(name)) ? previous : next,
+        previous.rendered === next.rendered &&
+        previous.names.size === next.names.size &&
+        [...previous.names].every((name) => next.names.has(name))
+          ? previous
+          : next,
       ),
     [],
   );
@@ -164,21 +180,39 @@ export function FileDiff({ file, ...context }: DiffContext & { file: FileView })
   const close = () => context.onActive(null);
   const active = context.active;
   const selected = active?.kind === "lines" && context.fileForTarget(active)?.id === file.id ? active : null;
-  const mounted = near || !!selected;
+  const mounted = near || !!selected || context.revealedFile === file.id;
   const lockfile = lockfiles.has(file.path.split("/").at(-1) ?? "");
+  const collapsed = context.collapsedFiles.has(file.id);
+  const { onContentRendered } = context;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Navigation retries after the fallback or annotation DOM commits.
+  useEffect(() => onContentRendered(), [onContentRendered, slotState, bodyState, mounted, expanded]);
+  const slotPending = (side: "old" | "new", end: number) => {
+    if (file.flag || (lockfile && !expanded) || bodyState.blocked || slotState.rendered) return false;
+    const diff = bodyState.diff;
+    // The parser uses complete file contents; expandUnchanged exposes their context.
+    // Identical files (no hunks) and out-of-range lines have permanent fallbacks.
+    return (
+      !diff ||
+      (diff.hunks.length > 0 && end > 0 && end <= (side === "old" ? diff.deletionLines : diff.additionLines).length)
+    );
+  };
   return (
     <section
       ref={ref}
       data-diff-section
       aria-label={`File ${file.path}`}
-      className="my-4 rounded-lg border border-neutral-200 dark:border-neutral-800"
-      style={{ minHeight: mounted || file.flag ? undefined : height }}
+      className="em-diff-file"
+      style={{ minHeight: collapsed || topicCollapsed || mounted || file.flag ? undefined : height }}
     >
-      <header data-file-header className="space-y-2 p-3">
-        <h4 className="break-words font-mono text-sm">{file.path}</h4>
-        {file.oldPath && <p className="break-words text-sm">Renamed from {file.oldPath}</p>}
-        <p className="text-xs text-neutral-500 dark:text-neutral-400">{file.status}</p>
-        <Button onClick={() => context.onActive({ kind: "file", path: file.path })}>Comment on file</Button>
+      <FileHeader
+        file={file}
+        collapsed={collapsed}
+        counts={context.counts.get(file.id)}
+        threads={fileThreads.length + lineThreads.length}
+        onToggle={() => context.toggleFile(file.id)}
+        onComment={() => context.onActive({ kind: "file", path: file.path })}
+      />
+      <div className="em-diff-discussion">
         {active?.kind === "file" && context.fileForTarget(active)?.id === file.id && (
           <Composer
             surface="diff"
@@ -198,10 +232,12 @@ export function FileDiff({ file, ...context }: DiffContext & { file: FileView })
             ({ location }) =>
               !slots.has(`annotation-${location.side === "old" ? "deletions" : "additions"}-${location.end}`),
           )
-          .map(({ thread }) => (
-            <ThreadCard key={thread.id} surface="diff" {...context} thread={thread} />
+          .map(({ thread, location }) => (
+            <div key={thread.id} data-slot-pending={slotPending(location.side, location.end) || undefined}>
+              <ThreadCard surface="diff" {...context} thread={thread} />
+            </div>
           ))}
-      </header>
+      </div>
       {selected && (
         <LineComposer
           reviewId={context.reviewId}
@@ -212,30 +248,39 @@ export function FileDiff({ file, ...context }: DiffContext & { file: FileView })
           onCancel={close}
         />
       )}
-      {file.flag ? (
-        <p className="p-3">{file.flag === "binary" ? "Not shown: binary file" : "Not shown: larger than 1 MiB"}</p>
-      ) : lockfile && !expanded ? (
-        <Summary text="Collapsed: lockfile" onExpand={() => setExpanded(true)} />
-      ) : mounted ? (
-        <FileBody
-          {...context}
-          file={file}
-          expanded={expanded}
-          slots={slots}
-          onSlots={onSlots}
-          onExpand={() => setExpanded(true)}
-        />
-      ) : (
-        <p className="p-3 text-sm text-neutral-500">Loads near viewport</p>
+      {!collapsed && !topicCollapsed && (
+        <div className="em-diff-body">
+          {file.flag ? (
+            <p className="em-diff-summary">
+              {file.flag === "binary" ? "Not shown: binary file" : "Not shown: larger than 1 MiB"}
+            </p>
+          ) : lockfile && !expanded ? (
+            <Summary text="Collapsed: lockfile" onExpand={() => setExpanded(true)} />
+          ) : mounted ? (
+            <FileBody
+              {...context}
+              file={file}
+              expanded={expanded}
+              slots={slots}
+              onSlots={onSlots}
+              onBodyState={onBodyState}
+              onExpand={() => setExpanded(true)}
+            />
+          ) : (
+            <p className="em-diff-summary">Loads near viewport</p>
+          )}
+        </div>
       )}
     </section>
   );
 }
 function Summary({ text, onExpand }: { text: string; onExpand: () => void }) {
   return (
-    <div className="space-y-2 p-3">
+    <div className="em-diff-summary">
       <p>{text}</p>
-      <Button onClick={onExpand}>Show diff</Button>
+      <Button size="sm" variant="ghost" onClick={onExpand}>
+        Show diff
+      </Button>
     </div>
   );
 }
@@ -245,12 +290,14 @@ function FileBody({
   onExpand,
   slots,
   onSlots,
+  onBodyState,
   ...context
 }: DiffContext & {
   file: FileView;
   expanded: boolean;
   slots: Set<string>;
-  onSlots: (slots: Set<string>) => void;
+  onSlots: (slots: SlotState) => void;
+  onBodyState: (state: BodyState) => void;
   onExpand: () => void;
 }) {
   const sideQuery = (side: "old" | "new", exists: boolean) => ({
@@ -280,7 +327,13 @@ function FileBody({
         signal,
       ),
   });
-  const layout = useLayout();
+  const { onParsed } = context;
+  useEffect(() => {
+    onBodyState({ diff: parsed.data, blocked: collapsed });
+  }, [onBodyState, parsed.data, collapsed]);
+  useEffect(() => {
+    if (parsed.data) onParsed(file.id, diffCounts(parsed.data));
+  }, [file.id, parsed.data, onParsed]);
   const [error, setError] = useState("");
   const active = context.active;
   const selected = active?.kind === "lines" && context.fileForTarget(active)?.id === file.id ? active : null;
@@ -365,7 +418,7 @@ function FileBody({
         <DiffWorkers>
           <DiffView
             fileDiff={parsed.data}
-            diffStyle={layout === "phone" ? "unified" : "split"}
+            diffStyle={context.diffStyle}
             annotations={annotations}
             onSlots={onSlots}
             onSelect={onSelect}

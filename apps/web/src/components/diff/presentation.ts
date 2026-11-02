@@ -1,0 +1,52 @@
+import { useState } from "react";
+import type { ParsedDiff } from "./FileDiff.tsx";
+
+export type DiffStyle = "split" | "unified";
+export type DiffCounts = { additions: number; deletions: number };
+
+export function diffCounts(diff: ParsedDiff): DiffCounts {
+  return diff.hunks.reduce(
+    (total, hunk) => ({
+      additions: total.additions + hunk.additionLines,
+      deletions: total.deletions + hunk.deletionLines,
+    }),
+    { additions: 0, deletions: 0 },
+  );
+}
+
+export function useDiffStyle() {
+  const key = "emend.diff.layout";
+  const [style, setStyle] = useState<DiffStyle>(() => {
+    try {
+      return localStorage.getItem(key) === "unified" ? "unified" : "split";
+    } catch {
+      return "split";
+    }
+  });
+  return [
+    style,
+    (next: DiffStyle) => {
+      setStyle(next);
+      try {
+        localStorage.setItem(key, next);
+      } catch {
+        /* Storage may be disabled. */
+      }
+    },
+  ] as const;
+}
+
+export function scrollDiffTarget(target: HTMLElement) {
+  const pane = target.closest<HTMLElement>("[data-diff-scroll]");
+  if (!pane) return;
+  const toolbar = pane.querySelector("[data-diff-toolbar]");
+  const topic = target.closest("[data-topic]")?.querySelector("[data-topic-header]");
+  // A header, its contents, and its section are destinations unobstructed by that header.
+  const topicHeight =
+    topic && !target.contains(topic) && !topic.contains(target) ? topic.getBoundingClientRect().height : 0;
+  const stack = (toolbar?.getBoundingClientRect().height ?? 0) + topicHeight;
+  const destination =
+    pane.scrollTop + target.getBoundingClientRect().top - pane.getBoundingClientRect().top - pane.clientTop - stack - 8;
+  const top = Math.max(0, Math.min(destination, Math.max(0, pane.scrollHeight - pane.clientHeight)));
+  pane.scrollTo({ top, behavior: "instant" });
+}

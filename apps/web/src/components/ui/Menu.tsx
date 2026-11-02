@@ -19,6 +19,7 @@ export type MenuItem =
     }
   | {
       label: string;
+      title?: string;
       icon?: IconComponent;
       hint?: string;
       kbd?: string;
@@ -108,6 +109,7 @@ export function Menu({ label, trigger, align = "right", size = "md", items, defa
                 asChild={item.asChild}
                 disabled={item.disabled}
                 onSelect={item.onSelect}
+                title={item.title}
                 className={cn(
                   "flex h-8 w-full items-center gap-2.5 rounded-[6px] border-0 bg-transparent px-2.5 text-left font-sans text-13 font-medium leading-(--lh-snug) font-[450] text-fg-1 no-underline hover:text-fg-1 data-highlighted:bg-hover data-disabled:pointer-events-none data-disabled:opacity-45 [@media(pointer:coarse)]:h-11 [&>svg]:text-fg-3",
                   focusRing,

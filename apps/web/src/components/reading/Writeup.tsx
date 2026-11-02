@@ -1,10 +1,12 @@
 import type { RenderedWriteup, RevisionView } from "@emend/contract";
+import { useRef } from "react";
 import { rankedTopics } from "../../lib/topics.ts";
 import type { ReviewSearch } from "../../router.tsx";
 import { TopicRank } from "../status/TopicRank.tsx";
 import { BlockReader, type ReaderGroup, type ReaderProps } from "./BlockReader.tsx";
 import { TopicMeta } from "./TopicMeta.tsx";
 import { TopicsMap } from "./TopicsMap.tsx";
+import { useCurrentTopic } from "./useCurrentTopic.ts";
 
 export function Writeup({
   writeup,
@@ -12,6 +14,7 @@ export function Writeup({
   files = [],
   search = {},
   phone = false,
+  onCurrentTopic,
   ...props
 }: ReaderProps & {
   writeup: RenderedWriteup;
@@ -19,7 +22,10 @@ export function Writeup({
   files?: RevisionView["files"];
   search?: ReviewSearch;
   phone?: boolean;
+  onCurrentTopic?: (slug: string | undefined) => void;
 }) {
+  const root = useRef<HTMLDivElement>(null);
+  useCurrentTopic(root, onCurrentTopic, writeup.sections);
   const ranked = rankedTopics(topics);
   const bySlug = new Map(ranked.map((entry) => [entry.topic.slug, entry]));
   const counts = new Map<string, number>();
@@ -101,5 +107,9 @@ export function Writeup({
       ),
     });
   }
-  return <BlockReader {...props} topics={topics} groups={groups} />;
+  return (
+    <div ref={root} className="contents">
+      <BlockReader {...props} topics={topics} groups={groups} />
+    </div>
+  );
 }

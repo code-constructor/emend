@@ -1,7 +1,9 @@
-import { useId, useLayoutEffect, useRef, useSyncExternalStore } from "react";
+import type { Target } from "@emend/contract";
+import { useContext, useId, useLayoutEffect, useRef, useSyncExternalStore } from "react";
+import { DiffNavigation } from "./diff-navigation.ts";
 import { hasDraft, isDraftSaving, loadDraft, subscribeDrafts } from "./drafts.ts";
 
-type Claim = { surface: string; id?: string };
+type Claim = { surface: string; id?: string; pendingFocus?: HTMLTextAreaElement; focusCancelled?: boolean };
 type Entry = {
   members: Map<string, string>;
   cards: Set<string>;
@@ -18,9 +20,11 @@ function notify() {
   for (const listener of listeners) listener();
 }
 function subscribe(listener: () => void) {
+  if (!listeners.size) document.addEventListener("focusin", onFocusIntent);
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
+    if (!listeners.size) document.removeEventListener("focusin", onFocusIntent);
   };
 }
 const snapshot = () => version;
@@ -43,8 +47,26 @@ function cancelHandoffs() {
   }
   if (changed) notify();
 }
+/** Renew the returning editor's deferred focus and supersede the others; drafts stay intact. */
+function updatePendingFocus(intent?: string | EventTarget | null) {
+  let changed = false;
+  for (const [key, { claim }] of entries) {
+    if (!claim?.pendingFocus) continue;
+    const cancelled = key !== intent && claim.pendingFocus !== intent;
+    if (!!claim.focusCancelled === cancelled) continue;
+    // Keep the editor identity so its own later focusin can renew this request.
+    claim.focusCancelled = cancelled;
+    changed = true;
+  }
+  if (changed) notify();
+}
+function onFocusIntent(event: FocusEvent) {
+  if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement)
+    updatePendingFocus(event.target);
+}
 /** An intent may arrive before its surface mounts (navigation or a lazy pane). */
 export function claimDraft(key: string, surface: string) {
+  updatePendingFocus();
   cancelHandoffs();
   const value = entry(key);
   value.release = undefined;
@@ -107,7 +129,8 @@ export function useDraftClaim(keys: string | string[], surface: string) {
     .map((key) => entries.get(key)?.claim)
     .find((claim) => claim?.surface === surface && !claim.id);
 }
-export function useComposerOwner(key: string, surface: string) {
+export function useComposerOwner(key: string, surface: string, target: Target, threadId?: string, commentId?: string) {
+  const navigateDiff = useContext(DiffNavigation);
   const id = useId();
   const input = useRef<HTMLTextAreaElement>(null);
   const focused = useRef<Claim | undefined>(undefined);
@@ -159,6 +182,7 @@ export function useComposerOwner(key: string, surface: string) {
         [...(value?.members.values() ?? [])].filter((member) => member === surface).length <= 1
     : (value?.members.size ?? 0) <= 1;
   const claim = () => {
+    updatePendingFocus(key);
     cancelHandoffs();
     if (value?.claim?.id === id || (owns && value?.claim?.surface === surface)) return;
     const next = entry(key);
@@ -166,16 +190,36 @@ export function useComposerOwner(key: string, surface: string) {
     notify();
   };
   useLayoutEffect(() => {
-    if (!owns || !request || focused.current === request || !input.current) return;
+    // Returning focus must recognize the owning replacement even while its request is canceled.
+    if (owns && request?.pendingFocus && input.current) request.pendingFocus = input.current;
+    if (!owns || !request || request.focusCancelled || focused.current === request || !input.current) return;
+    const editor = input.current.closest<HTMLElement>(".em-composer");
+    if (
+      surface === "diff" &&
+      navigateDiff &&
+      !navigateDiff({
+        target,
+        elementId: threadId ? `diff-thread-${threadId}` : undefined,
+        commentId,
+        element: editor ?? undefined,
+      })
+    ) {
+      request.pendingFocus = input.current;
+      return;
+    }
+    if (surface === "diff" && input.current.closest("[hidden]")) return;
+    request.pendingFocus = undefined;
     // A fulfilled surface intent belongs to this instance and ends when it unmounts.
     if (!request.id) {
       request.id = id;
       notify();
     }
     focused.current = request;
-    const anchor = input.current.closest<HTMLElement>("[data-thread-card], [data-diff-section]");
-    if (anchor) anchor.scrollIntoView?.({ block: "center" });
-    else input.current.closest<HTMLElement>(".em-composer")?.scrollIntoView?.({ block: "nearest" });
+    if (surface !== "diff" || !navigateDiff) {
+      const anchor = input.current.closest<HTMLElement>("[data-thread-card], [data-diff-section]");
+      if (anchor) anchor.scrollIntoView?.({ block: "center" });
+      else editor?.scrollIntoView?.({ block: "nearest" });
+    }
     input.current.focus({ preventScroll: true });
   });
   return { owns, claim, input };

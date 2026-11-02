@@ -1,12 +1,12 @@
-import type { FileView, RevisionView } from "@emend/contract";
+import type { FileView, RevisionView, Target, ThreadView } from "@emend/contract";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from "@tanstack/react-router";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { draftKey } from "../../lib/drafts.ts";
 import { Panes } from "../layout/Panes.tsx";
-import { DiffPane } from "./DiffPane.tsx";
+import { DiffPane, type DiffPaneProps } from "./DiffPane.tsx";
 import { parsePair } from "./parse.worker.ts";
 import type { DiffParser } from "./parse-client.ts";
 
@@ -80,7 +80,7 @@ function near(path: string, value = true) {
   expect(observer).toBeDefined();
   act(() => observer?.callback([{ isIntersecting: value, target: section }]));
 }
-async function mount(view: RevisionView) {
+async function mount(view: RevisionView, props: Partial<DiffPaneProps> = {}) {
   const root = createRootRoute({
     component: () => (
       <QueryClientProvider client={client}>
@@ -91,7 +91,7 @@ async function mount(view: RevisionView) {
           phoneTabs={null}
           tab="diff"
           hasDiff
-          diff={<DiffPane reviewId={reviewId} revision={view} parser={parser} />}
+          diff={<DiffPane reviewId={reviewId} revision={view} parser={parser} {...props} />}
         />
       </QueryClientProvider>
     ),
@@ -175,14 +175,9 @@ test("topics sort ascending stably, Other last, files by order, empty headers an
     "unknown.ts",
     "null.ts",
   ]);
-  for (const text of [
-    "One-way door",
-    "Two-way door",
-    "Blast radius: local",
-    "A synthetic note",
-    "<img src=x onerror=alert(1)>",
-  ])
+  for (const text of ["One-way door", "Two-way door", "<img src=x onerror=alert(1)>"])
     expect(screen.getByText(text)).toBeTruthy();
+  expect(screen.getByText("local").parentElement?.textContent).toBe("Blast radius local · A synthetic note");
   expect(document.querySelector("img")).toBeNull();
   expect(fetchMock).not.toHaveBeenCalled();
 });
@@ -198,7 +193,7 @@ test("flagged files never fetch and renamed paths and status stay visible", asyn
   near("big");
   expect(screen.getByText("Not shown: binary file")).toBeTruthy();
   expect(screen.getByText("Not shown: larger than 1 MiB")).toBeTruthy();
-  expect(screen.getByText("Renamed from old.ts")).toBeTruthy();
+  expect(screen.getByTitle("Renamed from old.ts").textContent).toBe("Renamed from old.ts");
   expect(screen.getByText("renamed")).toBeTruthy();
   expect(fetchMock).not.toHaveBeenCalled();
   expect(parser).not.toHaveBeenCalled();
@@ -318,6 +313,8 @@ test.each([
   await mount(revision([file()]));
   near("source.ts");
   expect((await screen.findByTestId("rendered-diff")).getAttribute("data-style")).toBe(style);
+  expect(screen.queryByRole("radiogroup", { name: "Diff layout" }) !== null).toBe(tablet);
+  expect(document.querySelector("[data-diff-toolbar]") !== null).toBe(tablet);
 });
 
 test("a failed side can retry without reloading the successful side", async () => {
@@ -411,4 +408,215 @@ test.each([false, true])("viewport margin is relative to the scrolling diff pane
   await screen.findByTestId("rendered-diff");
   expect(parser).toHaveBeenCalledTimes(1);
   expect(parser.mock.calls[0]?.[0].newFile?.name).toBe("above.ts");
+});
+
+test("toolbar counts exclude Other, pluralize, and jump menu reveals a collapsed file below sticky rows", async () => {
+  const source = file("src/nested/source.ts");
+  const scroll = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => {});
+  await mount(revision([source, file("other.txt", { topic: null })]));
+  const topic = screen.getByRole("region", { name: "Topic First" });
+  const header = document.getElementById(`diff-file-${source.id}`);
+  const toolbar = document.querySelector("[data-diff-toolbar]");
+  const topicHeader = topic.querySelector("[data-topic-header]");
+  const pane = screen.getByTestId("diff-pane");
+  const offset = vi.spyOn(pane, "scrollTo").mockImplementation(() => {});
+  Object.defineProperties(pane, { scrollHeight: { value: 3000 }, clientHeight: { value: 600 } });
+  if (!header) throw new Error("Missing file header");
+  vi.spyOn(header, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 1200, 400, 40));
+  if (!toolbar || !topicHeader) throw new Error("Missing toolbar/topic");
+  vi.spyOn(toolbar, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 400, 41));
+  vi.spyOn(topicHeader, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 41, 400, 110));
+  fireEvent.click(within(topic).getByRole("button", { name: "Collapse file" }));
+  fireEvent.click(within(topic).getByRole("button", { name: "Collapse topic" }));
+  expect(screen.queryByRole("region", { name: "File src/nested/source.ts" })).toBeNull();
+  fireEvent.keyDown(screen.getByRole("button", { name: "1 topic · 2 files" }), { key: "ArrowDown" });
+  const menu = await screen.findByRole("menu");
+  expect(within(menu).getByText("01 First")).toBeTruthy();
+  expect(within(menu).getByText("Other changes")).toBeTruthy();
+  expect(
+    within(menu)
+      .getAllByRole("menuitem")
+      .map((item) => item.textContent),
+  ).toEqual(["source.ts", "other.txt"]);
+  const item = within(menu).getByRole("menuitem", { name: "source.ts" });
+  expect(item.title).toBe(source.path);
+  fireEvent.click(item);
+  await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+  expect(within(topic).getByRole("button", { name: "Collapse topic" }).getAttribute("aria-expanded")).toBe("true");
+  expect(within(topic).getByRole("button", { name: "Collapse file" }).getAttribute("aria-expanded")).toBe("true");
+  expect(screen.getByRole("region", { name: "File src/nested/source.ts" })).toBeTruthy();
+  expect(scroll).not.toHaveBeenCalled();
+  expect(offset).toHaveBeenCalledExactlyOnceWith({ top: 1041, behavior: "instant" });
+});
+
+test("single topic/file counts and parsed additions in the jump menu", async () => {
+  await mount(revision([file("src/added.ts", { hasOld: false, status: "added" })]));
+  const jump = screen.getByRole("button", { name: "1 topic · 1 file" });
+  expect(within(screen.getByRole("region", { name: "Topic First" })).getByText("1 file")).toBeTruthy();
+  expect(screen.queryByText("+3")).toBeNull();
+  near("src/added.ts");
+  await screen.findByText("+3");
+  fireEvent.keyDown(jump, { key: "ArrowDown" });
+  expect(await screen.findByRole("menuitem", { name: "added.ts +3" })).toBeTruthy();
+});
+
+test("Split and Unified change renderer options and survive remount; phone keeps its unified layout", async () => {
+  const value = revision([file()]);
+  let mounted = await mount(value);
+  near("source.ts");
+  expect((await screen.findByTestId("rendered-diff")).getAttribute("data-style")).toBe("split");
+  fireEvent.click(screen.getByRole("radio", { name: "Unified" }));
+  expect(screen.getByTestId("rendered-diff").getAttribute("data-style")).toBe("unified");
+  expect(screen.getByRole("radio", { name: "Unified" }).getAttribute("aria-checked")).toBe("true");
+  mounted.unmount();
+  mounted = await mount(value);
+  near("source.ts");
+  expect((await screen.findByTestId("rendered-diff")).getAttribute("data-style")).toBe("unified");
+  fireEvent.click(screen.getByRole("radio", { name: "Split" }));
+  expect(screen.getByTestId("rendered-diff").getAttribute("data-style")).toBe("split");
+  mounted.unmount();
+  vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
+  await mount(value);
+  near("source.ts");
+  expect((await screen.findByTestId("rendered-diff")).getAttribute("data-style")).toBe("unified");
+  expect(screen.queryByRole("radiogroup", { name: "Diff layout" })).toBeNull();
+  expect(localStorage.getItem("emend.diff.layout")).toBe("split");
+});
+
+test("disabled storage still allows layout changes", async () => {
+  vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+    throw new Error("Disabled");
+  });
+  vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+    throw new Error("Disabled");
+  });
+  await mount(revision([file()]));
+  near("source.ts");
+  await screen.findByTestId("rendered-diff");
+  fireEvent.click(screen.getByRole("radio", { name: "Unified" }));
+  expect(screen.getByTestId("rendered-diff").getAttribute("data-style")).toBe("unified");
+});
+
+function placedThread(target: Extract<Target, { kind: "topic" | "file" | "lines" }>, body: string): ThreadView {
+  return {
+    id: crypto.randomUUID(),
+    target,
+    placement: { status: "placed", location: target },
+    state: "open",
+    createdOn: 2,
+    comments: [{ id: crypto.randomUUID(), author: "user", body, sent: false, sentOn: null }],
+  };
+}
+
+test("topic and file counts include placed threads only; collapse keeps topic discussion and restores file state", async () => {
+  const topicThread = placedThread({ kind: "topic", slug: "first" }, "Topic discussion");
+  const fileThread = placedThread({ kind: "file", path: "source.ts" }, "File discussion");
+  const lineThread = placedThread(
+    { kind: "lines", path: "source.ts", side: "new", start: 1, end: 1, lines: ["one"], before: [], after: [] },
+    "Line discussion",
+  );
+  const unplaced: ThreadView = {
+    ...placedThread({ kind: "file", path: "source.ts" }, "Unplaced discussion"),
+    placement: { status: "unplaced", reason: "file-gone" },
+  };
+  await mount(revision([file()], { threads: [topicThread, fileThread, lineThread, unplaced] }));
+  const topic = screen.getByRole("region", { name: "Topic First" });
+  const fileRegion = screen.getByRole("region", { name: "File source.ts" });
+  expect(topic.querySelector("[data-topic-header]")?.textContent).toContain("3 threads");
+  expect(fileRegion.querySelector("[data-file-header]")?.textContent).toContain("2 threads");
+  near("source.ts");
+  await screen.findByTestId("rendered-diff");
+  fireEvent.click(within(fileRegion).getByRole("button", { name: "Collapse file" }));
+  expect(within(fileRegion).getByRole("button", { name: "Expand file" }).getAttribute("aria-expanded")).toBe("false");
+  expect(screen.queryByTestId("rendered-diff")).toBeNull();
+  expect(within(fileRegion).getByText("File discussion")).toBeTruthy();
+  expect(within(fileRegion).getByText("Line discussion")).toBeTruthy();
+  fireEvent.click(within(topic).getByRole("button", { name: "Comment on topic" }));
+  fireEvent.click(within(topic).getByRole("button", { name: "Collapse topic" }));
+  expect(within(topic).getByRole("button", { name: "Expand topic" }).getAttribute("aria-expanded")).toBe("false");
+  expect(screen.queryByRole("region", { name: "File source.ts" })).toBeNull();
+  expect(screen.getByText("Topic discussion")).toBeTruthy();
+  expect(screen.getByRole("textbox", { name: "Comment" })).toBeTruthy();
+  expect(topic.querySelector("[data-topic-header]")?.querySelector("textarea")).toBeNull();
+  fireEvent.click(within(topic).getByRole("button", { name: "Expand topic" }));
+  expect(within(fileRegion).getByRole("button", { name: "Expand file" })).toBeTruthy();
+  fireEvent.click(within(fileRegion).getByRole("button", { name: "Expand file" }));
+  await screen.findByTestId("rendered-diff");
+  expect(parser).toHaveBeenCalledTimes(1);
+});
+
+test.each([
+  ["added", "A"],
+  ["modified", "M"],
+  ["deleted", "D"],
+  ["renamed", "R"],
+  ["mode-changed", "T"],
+] as const)("file header announces %s, with status letter %s", async (status, letter) => {
+  const value = file("src/name.ts", { status, oldPath: status === "renamed" ? "old/name.ts" : null });
+  await mount(revision([value]));
+  const header = document.getElementById(`diff-file-${value.id}`);
+  expect(header).toBeTruthy();
+  const statusMark = within(header as HTMLElement).getByTitle(status.replaceAll("-", " "));
+  expect(within(statusMark).getByText(letter).getAttribute("aria-hidden")).toBe("true");
+  expect(within(statusMark).getByText(status.replaceAll("-", " "))).toBeTruthy();
+  expect(within(header as HTMLElement).getByRole("heading", { name: "src/name.ts" }).title).toBe("src/name.ts");
+  if (status === "renamed")
+    expect(within(header as HTMLElement).getByTitle("Renamed from old/name.ts").textContent).toBe(
+      "Renamed from old/name.ts",
+    );
+});
+
+test("file +/- counts come from changed hunk lines, persist after collapse, and binary has none", async () => {
+  fetchMock.mockImplementation(
+    async (path: string) => new Response(path.endsWith("/old") ? "same\nold\ntail\n" : "same\nnew\nextra\ntail\n"),
+  );
+  const value = file();
+  const binary = file("binary", { flag: "binary" });
+  await mount(revision([value, binary]));
+  const header = document.getElementById(`diff-file-${value.id}`) as HTMLElement;
+  expect(within(header).queryByText(/^\+/)).toBeNull();
+  near("source.ts");
+  expect(await within(header).findByText("+2")).toBeTruthy();
+  expect(within(header).getByText("−1")).toBeTruthy();
+  fireEvent.click(within(header).getByRole("button", { name: "Collapse file" }));
+  expect(within(header).getByText("+2")).toBeTruthy();
+  expect(within(document.getElementById(`diff-file-${binary.id}`) as HTMLElement).queryByText(/^[+−]\d/)).toBeNull();
+});
+
+test("Other keeps its unranked header, files and comments but never a Writeup link", async () => {
+  await mount(revision([file("misc.txt", { topic: null })], { topics: [] }), { writeupVisible: false });
+  const topic = screen.getByRole("region", { name: "Topic Other changes" });
+  expect(screen.getByRole("button", { name: "0 topics · 1 file" })).toBeTruthy();
+  expect(within(topic).getByText("—").getAttribute("aria-hidden")).toBe("true");
+  expect(within(topic).queryByRole("link", { name: "Writeup" })).toBeNull();
+  fireEvent.click(within(topic).getByRole("button", { name: "Comment on topic" }));
+  expect(screen.getByRole("textbox", { name: "Comment" })).toBeTruthy();
+});
+
+test.each([390, 768, 1280])("R8 fix1 deep paths and rename labels remain complete at %s px", async (width) => {
+  vi.stubGlobal("matchMedia", (query: string) => ({
+    matches: width >= Number(query.match(/\d+/)?.[0] ?? Infinity),
+    addEventListener() {},
+    removeEventListener() {},
+  }));
+  const path = "source/very/deep/important/directory/tree/with/a/long/module-name.ts";
+  const oldPath = "previous/equally/deep/directory/tree/old-module-name.ts";
+  await mount(revision([file(path, { oldPath, status: "renamed", flag: "binary" })]));
+  const heading = screen.getByRole("heading", { level: 4, name: path });
+  expect(heading.textContent).toBe(path);
+  expect(heading.querySelector("bdi")?.textContent).toBe(path);
+  expect(heading.querySelectorAll("wbr")).toHaveLength(path.split("/").length - 1);
+  const renamed = screen.getByTitle(`Renamed from ${oldPath}`);
+  expect(renamed.textContent).toBe(`Renamed from ${oldPath}`);
+  expect(renamed.querySelector("bdi")?.textContent).toBe(oldPath);
+});
+
+test.each([390, 1280])("R8 fix1 a revision without a writeup has no Writeup link at %s px", async (width) => {
+  vi.stubGlobal("matchMedia", (query: string) => ({
+    matches: width >= Number(query.match(/\d+/)?.[0] ?? Infinity),
+    addEventListener() {},
+    removeEventListener() {},
+  }));
+  await mount(revision([file()], { writeupEmpty: true, main: "diff" }), { writeupVisible: false });
+  expect(screen.queryByRole("link", { name: "Writeup" })).toBeNull();
 });

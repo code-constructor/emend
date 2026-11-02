@@ -50,7 +50,7 @@ export function Composer({
   returnFocus?: (saved: boolean) => HTMLElement | null;
 }) {
   const key = storageKey ?? (commentId ? editDraftKey(reviewId, commentId) : draftKey(reviewId, target, threadId));
-  const owner = useComposerOwner(key, surface);
+  const owner = useComposerOwner(key, surface, target, threadId, commentId);
   const phone = useLayout() === "phone";
   const saved = useRef(false);
   useLayoutEffect(() => {

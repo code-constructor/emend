@@ -8,6 +8,7 @@
 @import "./styles/prose.css";
 @import "./styles/reading.css";
 @import "./styles/threads.css";
+@import "./styles/diff.css";
 
 @layer components {
   .review-input {

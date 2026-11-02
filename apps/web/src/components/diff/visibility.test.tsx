@@ -6,6 +6,7 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { DiffPane } from "./DiffPane.tsx";
 import { parsePair } from "./parse.worker.ts";
+import type { DiffParser } from "./parse-client.ts";
 
 // Keep the actual renderer. Worker transport is exercised separately against the built worker.
 vi.mock("@pierre/diffs/react", async (original) => ({
@@ -61,16 +62,16 @@ const revision = (files: FileView[], threads: ThreadView[], title = "Topic"): Re
 let client: QueryClient;
 let callbacks: Map<Element, (entries: Partial<IntersectionObserverEntry>[]) => void>;
 let fetchMock: ReturnType<typeof vi.fn>;
-function Pane() {
+function Pane({ parser = parsePair }: { parser?: DiffParser }) {
   const { data } = useQuery<RevisionView>({ queryKey: ["test-revision"], staleTime: Infinity });
-  return data && <DiffPane reviewId={reviewId} revision={data} parser={parsePair} />;
+  return data && <DiffPane reviewId={reviewId} revision={data} parser={parser} />;
 }
-async function mount(value: RevisionView) {
+async function mount(value: RevisionView, parser?: DiffParser) {
   client.setQueryData(["test-revision"], value);
   const root = createRootRoute({
     component: () => (
       <QueryClientProvider client={client}>
-        <Pane />
+        <Pane parser={parser} />
       </QueryClientProvider>
     ),
   });
@@ -115,8 +116,9 @@ test.each([false, true])("identical rename preserves line thread under the heade
   await mount(revision([file()], [thread("Rename comment")]));
   near("new.txt");
   await waitFor(() => expect(document.querySelector("diffs-container")).toBeTruthy());
-  const header = screen.getByText("Rename comment").closest("[data-file-header]");
+  const header = screen.getByText("Rename comment").closest(".em-diff-discussion");
   expect(header).toBeTruthy();
+  expect(header?.previousElementSibling?.hasAttribute("data-file-header")).toBe(true);
   expect(within(header as HTMLElement).getByText("new.txt · line 2")).toBeTruthy();
   expect(screen.getAllByText("Rename comment")).toHaveLength(1);
 });
@@ -125,7 +127,7 @@ test.each([{ path: "pnpm-lock.yaml" }, { path: "binary.txt", flag: "binary" as c
   async (values) => {
     await mount(revision([file(values)], [thread("Hidden diff comment", { ...target, path: values.path })]));
     near(values.path);
-    expect(screen.getByText("Hidden diff comment").closest("[data-file-header]")).toBeTruthy();
+    expect(screen.getByText("Hidden diff comment").closest(".em-diff-discussion")).toBeTruthy();
     expect(screen.getByText(`${values.path} · line 2`)).toBeTruthy();
     expect(fetchMock).not.toHaveBeenCalled();
   },
@@ -164,9 +166,9 @@ test("header threads and unplaced threads retain their visible locations", async
   );
   near("new.txt");
   await waitFor(() => expect(document.querySelector("diffs-container")).toBeTruthy());
-  expect(screen.getByText("File comment").closest("[data-file-header]")).toBeTruthy();
-  expect(screen.getByText("Topic comment").closest("[data-topic-header]")).toBeTruthy();
-  const header = screen.getByText("Old range comment").closest("[data-file-header]");
+  expect(screen.getByText("File comment").closest(".em-diff-discussion")).toBeTruthy();
+  expect(screen.getByText("Topic comment").closest(".em-diff-discussion")).toBeTruthy();
+  const header = screen.getByText("Old range comment").closest(".em-diff-discussion");
   expect(within(header as HTMLElement).getByText("old.txt · lines 1–2 (old)")).toBeTruthy();
   expect(
     within(screen.getByRole("region", { name: "Unplaced comments" })).getByText("Unplaced line comment"),
@@ -195,12 +197,21 @@ test("real slots place line threads and adding a same-line thread keeps the exis
   );
   expect((original as HTMLTextAreaElement).value).toBe("Follow-up");
 });
-test("hostile path and topic title remain exact header text", async () => {
-  const path = "<img src=x onerror=alert(1)>.txt",
-    title = "<script>alert(1)</script>";
-  await mount(revision([file({ path, flag: "binary" })], [], title));
+test("hostile topic, path and rename remain exact text in the headers and jump menu", async () => {
+  vi.stubGlobal("matchMedia", () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+  const path = "src/<script>evil()<img src=x onerror=evil()>.txt";
+  const oldPath = "old/<img src=x onerror=evil()><script>old()</script>.txt";
+  const title = "<script>evil()</script><img src=x onerror=evil()>";
+  await mount(revision([file({ path, oldPath, flag: "binary" })], [], title));
   expect(screen.getByRole("heading", { level: 4 }).textContent).toBe(path);
   expect(screen.getByRole("heading", { level: 3 }).textContent).toBe(title);
+  expect(screen.getByTitle(`Renamed from ${oldPath}`).textContent).toBe(`Renamed from ${oldPath}`);
+  fireEvent.keyDown(screen.getByRole("button", { name: "1 topic · 1 file" }), { key: "ArrowDown" });
+  const menu = await screen.findByRole("menu");
+  expect(within(menu).getByText(`01 ${title}`).textContent).toBe(`01 ${title}`);
+  const item = within(menu).getByRole("menuitem", { name: path.slice(4) });
+  expect(item.textContent).toBe(path.slice(4));
+  expect(item.title).toBe(path);
   expect(document.querySelector("script,img,[onerror]")).toBeNull();
 });
 
@@ -276,4 +287,82 @@ test.each([
   const moved = screen.getByLabelText(label) as HTMLTextAreaElement;
   expect(moved.value).toBe(text);
   await waitFor(() => expect(document.activeElement).toBe(moved));
+});
+
+test("R8 manual file collapse returns a real annotation to the fallback and reopening restores its slot once", async () => {
+  fetchMock.mockImplementation(
+    async (path: string) => new Response(path.endsWith("/old") ? "one\nold\n" : "one\ntwo\n"),
+  );
+  const value = thread("Collapsible annotation");
+  await mount(revision([file()], [value]));
+  near("new.txt");
+  await waitFor(() =>
+    expect(document.getElementById(`diff-thread-${value.id}`)?.closest("diffs-container")).toBeTruthy(),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Collapse file" }));
+  await waitFor(() => expect(document.querySelector("diffs-container")).toBeNull());
+  const fallback = screen.getByText("Collapsible annotation").closest(".em-diff-discussion");
+  expect(fallback?.previousElementSibling?.hasAttribute("data-file-header")).toBe(true);
+  expect(screen.getAllByText("Collapsible annotation")).toHaveLength(1);
+  fireEvent.click(screen.getByRole("button", { name: "Expand file" }));
+  await waitFor(() =>
+    expect(document.getElementById(`diff-thread-${value.id}`)?.closest("diffs-container")).toBeTruthy(),
+  );
+  expect(screen.getAllByText("Collapsible annotation")).toHaveLength(1);
+});
+
+test("R8 fix4 returning to an inline replacement preserves focus and text outside the lazy range", async () => {
+  vi.stubGlobal("matchMedia", () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+  fetchMock.mockImplementation(
+    async (path: string) => new Response(path.endsWith("/old") ? "one\nold\n" : "one\ntwo\n"),
+  );
+  const pending = Promise.withResolvers<ReturnType<typeof parsePair>>();
+  const parser = vi.fn<DiffParser>((pair) => (pair.newFile?.name === "new.txt" ? pending.promise : parsePair(pair)));
+  const value = thread("Reply in file A");
+  value.comments = value.comments.map((comment) => ({ ...comment, sent: true, sentOn: 1 }));
+  await mount(
+    revision([file(), file({ path: "other.txt", oldPath: null, status: "modified", order: 1 })], [value]),
+    parser,
+  );
+  near("new.txt");
+  await waitFor(() => expect(parser).toHaveBeenCalledOnce());
+  fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+  const fallback = document.getElementById(`diff-thread-${value.id}`) as HTMLElement;
+  const original = within(fallback).getByRole("textbox", { name: "Reply" });
+  expect(fallback.closest("[data-slot-pending]")).toBeTruthy();
+
+  const otherFile = within(screen.getByRole("region", { name: "File other.txt" }));
+  fireEvent.click(otherFile.getByRole("button", { name: "Comment on file" }));
+  const newer = otherFile.getByRole("textbox", { name: "Comment" });
+  expect(document.activeElement).toBe(newer);
+  await act(async () =>
+    pending.resolve(
+      parsePair({
+        oldFile: { name: "old.txt", contents: "one\nold\n" },
+        newFile: { name: "new.txt", contents: "one\ntwo\n" },
+      }),
+    ),
+  );
+  await waitFor(() =>
+    expect(document.getElementById(`diff-thread-${value.id}`)?.closest("diffs-container")).toBeTruthy(),
+  );
+  const replacement = screen.getByRole("textbox", { name: "Reply" }) as HTMLTextAreaElement;
+  expect(replacement).not.toBe(original);
+  expect(original.isConnected).toBe(false);
+  expect(document.activeElement).toBe(newer);
+
+  act(() => replacement.focus());
+  fireEvent.change(replacement, { target: { value: "Continue after the reply moved" } });
+  expect(document.activeElement).toBe(replacement);
+  near("new.txt", false);
+  const outside = screen.getByRole("textbox", { name: "Reply" }) as HTMLTextAreaElement;
+  expect(outside.value).toBe("Continue after the reply moved");
+  expect(document.activeElement).toBe(outside);
+  near("new.txt");
+  await waitFor(() =>
+    expect(document.getElementById(`diff-thread-${value.id}`)?.closest("diffs-container")).toBeTruthy(),
+  );
+  const returned = screen.getByRole("textbox", { name: "Reply" }) as HTMLTextAreaElement;
+  expect(returned.value).toBe("Continue after the reply moved");
+  expect(document.activeElement).toBe(returned);
 });

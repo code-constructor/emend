@@ -4,15 +4,39 @@ import { QueryClient } from "@tanstack/react-query";
 import { createMemoryHistory } from "@tanstack/react-router";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { Window } from "happy-dom";
+import type { ComponentProps, ReactNode } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { App } from "./App.tsx";
 import type { DiffPaneProps } from "./components/diff/DiffPane.tsx";
+import type { ParsedDiff } from "./components/diff/FileDiff.tsx";
+import { parsePair } from "./components/diff/parse.worker.ts";
+import type { DiffParser } from "./components/diff/parse-client.ts";
+import * as diffPresentation from "./components/diff/presentation.ts";
 import { blockLink } from "./components/threads/ThreadCard.tsx";
-import { draftKey } from "./lib/drafts.ts";
+import { claimDraft } from "./lib/composer-owner.ts";
+import { draftKey, editDraftKey, saveDraft } from "./lib/drafts.ts";
 import { cancelThreadActionFocus } from "./lib/thread-action-focus.ts";
 import { validateReviewSearch } from "./router.tsx";
 
-const loading = vi.hoisted(() => ({ ready: undefined as Promise<void> | undefined }));
+const loading = vi.hoisted(() => ({
+  ready: undefined as Promise<void> | undefined,
+  parser: undefined as DiffParser | undefined,
+  rendering: "normal" as "normal" | "delayed" | "without-slots",
+}));
+vi.mock("@pierre/diffs/react", async (original) => {
+  const actual = await original<typeof import("@pierre/diffs/react")>();
+  return {
+    ...actual,
+    WorkerPoolContextProvider: ({ children }: { children: ReactNode }) => children,
+    FileDiff: (props: ComponentProps<typeof actual.FileDiff>) =>
+      loading.rendering === "delayed" ? null : (
+        <actual.FileDiff
+          {...props}
+          lineAnnotations={loading.rendering === "without-slots" ? [] : props.lineAnnotations}
+        />
+      ),
+  };
+});
 vi.mock("./components/diff/LazyDiffPane.tsx", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./components/diff/LazyDiffPane.tsx")>();
   return {
@@ -20,6 +44,7 @@ vi.mock("./components/diff/LazyDiffPane.tsx", async (importOriginal) => {
     LazyDiffPane: (props: DiffPaneProps) => (
       <actual.LazyDiffPane
         {...props}
+        parser={loading.parser}
         load={async () => {
           await loading.ready;
           return import("./components/diff/DiffPane.tsx");
@@ -107,6 +132,8 @@ beforeEach(() => {
   revisionReply = undefined;
   loaded = Promise.withResolvers<void>();
   loading.ready = loaded.promise;
+  loading.parser = undefined;
+  loading.rendering = "normal";
   localStorage.clear();
   window.dispatchEvent(new StorageEvent("storage", { key: null, storageArea: localStorage }));
   vi.stubGlobal(
@@ -150,7 +177,7 @@ function mount(search = "?tab=writeup&rev=1") {
 
 test.each([1280, 768, 390])("Files in diff waits for lazy rendering and scrolls its topic at %s px", async (pixels) => {
   width = pixels;
-  const scroll = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => {});
+  const scroll = vi.spyOn(diffPresentation, "scrollDiffTarget");
   const { history, container } = mount();
   const link = await screen.findByRole("link", { name: "Files in diff: Plant a seed" });
   const href = new URL((link as HTMLAnchorElement).href);
@@ -163,12 +190,12 @@ test.each([1280, 768, 390])("Files in diff waits for lazy rendering and scrolls 
   fireEvent.click(link);
   await waitFor(() => expect(history.location.hash).toBe("#diff-topic-seed"));
   expect(screen.getByText("Loading diff…")).toBeTruthy();
-  expect(scroll.mock.instances.some((node) => (node as HTMLElement).id === "diff-topic-seed")).toBe(false);
+  expect(scroll.mock.calls.some(([node]) => (node as HTMLElement).id === "diff-topic-seed")).toBe(false);
   await act(async () => {
     loaded.resolve();
   });
   await waitFor(() =>
-    expect(scroll.mock.instances.some((node) => (node as HTMLElement).id === "diff-topic-seed")).toBe(true),
+    expect(scroll.mock.calls.some(([node]) => (node as HTMLElement).id === "diff-topic-seed")).toBe(true),
   );
   if (pixels >= 768) {
     expect(container.querySelector("[data-block-id]")).toBe(block);
@@ -178,7 +205,7 @@ test.each([1280, 768, 390])("Files in diff waits for lazy rendering and scrolls 
     scroll.mockClear();
     fireEvent.click(link);
     await waitFor(() =>
-      expect(scroll.mock.instances.some((node) => (node as HTMLElement).id === "diff-topic-seed")).toBe(true),
+      expect(scroll.mock.calls.some(([node]) => (node as HTMLElement).id === "diff-topic-seed")).toBe(true),
     );
   } else {
     expect(screen.queryByTestId("reading-pane")).toBeNull();
@@ -257,6 +284,7 @@ test.each(
     });
     const expectedTab = destination !== "map" && pixels < 768 ? "diff" : "writeup";
     const targetId = destination === "map" ? "topic-seed" : "diff-topic-seed";
+    const diffScroll = vi.spyOn(diffPresentation, "scrollDiffTarget");
     const href = new URL((link as HTMLAnchorElement).href);
     expect([...href.searchParams.keys()].sort()).toEqual(["rev", "tab"]);
     expect(href.searchParams.get("tab")).toBe(expectedTab);
@@ -276,7 +304,13 @@ test.each(
       loaded.resolve();
     });
     await waitFor(() => expect(client.isFetching({ queryKey: ["revision", id, 1] })).toBe(0));
-    await waitFor(() => expect(scroll.mock.instances.some((node) => (node as HTMLElement).id === targetId)).toBe(true));
+    await waitFor(() =>
+      expect(
+        [...scroll.mock.instances, ...diffScroll.mock.calls.map(([node]) => node)].some(
+          (node) => (node as HTMLElement).id === targetId,
+        ),
+      ).toBe(true),
+    );
     expect(history.location.hash).toBe(`#${targetId}`);
     expect(history.location.search).toContain(`tab=${expectedTab}`);
     expect(history.location.search).not.toContain("thread");
@@ -1094,13 +1128,15 @@ test.each([1280, 390])("Show in place reaches a line thread, using the phone Dif
   };
   currentRevision.files = currentRevision.files.map((file) => ({ ...file, hasNew: true }));
   currentRevision.threads = [{ ...placedWriteupThread(), target, placement: { status: "placed", location: target } }];
-  const scroll = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => {});
+  const scroll = vi.spyOn(diffPresentation, "scrollDiffTarget");
   const { history } = mount("?tab=comments&rev=1");
   fireEvent.click(await screen.findByRole("link", { name: "Show in place" }));
   await act(async () => loaded.resolve());
   await screen.findByTestId("diff-pane");
   expect(searchParams(history).get("tab")).toBe(pixels === 390 ? "diff" : "comments");
-  await waitFor(() => expect(scroll.mock.instances).toContain(document.getElementById(`diff-thread-${id}`)));
+  await waitFor(() =>
+    expect(scroll.mock.calls.map(([node]) => node)).toContain(document.getElementById(`diff-thread-${id}`)),
+  );
 });
 test("desktop block composer is inline after the block's threads, with one quote", async () => {
   currentRevision.threads = [placedWriteupThread()];
@@ -1273,3 +1309,546 @@ test("fix1 a removed phone selection prompt returns focus to the reading pane", 
   fireEvent.keyDown(within(sheet).getByRole("textbox", { name: "Comment" }), { key: "Escape" });
   await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId("reading-pane")));
 });
+
+test("R8 Files in diff expands a collapsed topic before scrolling, including a repeated link intent", async () => {
+  const scroll = vi.spyOn(diffPresentation, "scrollDiffTarget");
+  mount();
+  await act(async () => loaded.resolve());
+  const diff = within(await screen.findByTestId("diff-pane"));
+  for (let attempt = 0; attempt < 2; attempt++) {
+    fireEvent.click(await diff.findByRole("button", { name: "Collapse topic" }));
+    expect(diff.queryByRole("region", { name: "File seed.txt" })).toBeNull();
+    scroll.mockClear();
+    fireEvent.click(screen.getByRole("link", { name: "Files in diff: Plant a seed" }));
+    await waitFor(() =>
+      expect(diff.getByRole("button", { name: "Collapse topic" }).getAttribute("aria-expanded")).toBe("true"),
+    );
+    expect(diff.getByRole("region", { name: "File seed.txt" })).toBeTruthy();
+    await waitFor(() =>
+      expect(scroll.mock.calls.map(([node]) => node)).toContain(document.getElementById("diff-topic-seed")),
+    );
+  }
+});
+
+test.each(["file", "lines"] as const)(
+  "R8 a Show in place %s thread link expands both containers and scrolls after expansion",
+  async (kind) => {
+    const target =
+      kind === "file"
+        ? { kind, path: "seed.txt" }
+        : { kind, path: "seed.txt", side: "new" as const, start: 1, end: 1, lines: ["seed"], before: [], after: [] };
+    currentRevision.files = currentRevision.files.map((file) => ({ ...file, hasNew: true }));
+    currentRevision.threads = [{ ...placedWriteupThread(), target, placement: { status: "placed", location: target } }];
+    const scrolled: { id: string; hidden: boolean; expanded: string | null | undefined }[] = [];
+    vi.spyOn(diffPresentation, "scrollDiffTarget").mockImplementation((element) => {
+      scrolled.push({
+        id: element.id,
+        hidden: !!element.closest("[hidden]"),
+        expanded: element
+          .closest("[data-topic]")
+          ?.querySelector('[aria-label="Collapse file"]')
+          ?.getAttribute("aria-expanded"),
+      });
+    });
+    mount("?tab=comments&rev=1");
+    await act(async () => loaded.resolve());
+    const diff = within(await screen.findByTestId("diff-pane"));
+    fireEvent.click(await diff.findByRole("button", { name: "Collapse file" }));
+    fireEvent.click(diff.getByRole("button", { name: "Collapse topic" }));
+    fireEvent.click(within(screen.getByTestId("reading-pane")).getByRole("link", { name: "Show in place" }));
+    await waitFor(() => expect(scrolled).toContainEqual({ id: `diff-thread-${id}`, hidden: false, expanded: "true" }));
+    expect(diff.getByRole("button", { name: "Collapse topic" }).getAttribute("aria-expanded")).toBe("true");
+    // Refreshing unrelated data must not replay the completed intent.
+    fireEvent.click(diff.getByRole("button", { name: "Collapse file" }));
+    await act(async () => client.setQueryData(["revision", id, 1], { ...currentRevision }));
+    expect(diff.getByRole("button", { name: "Expand file" })).toBeTruthy();
+  },
+);
+
+test("R8 a file header URL expands its topic and file through the same route intent", async () => {
+  const scroll = vi.spyOn(diffPresentation, "scrollDiffTarget");
+  const { history } = mount();
+  await act(async () => loaded.resolve());
+  const diff = within(await screen.findByTestId("diff-pane"));
+  fireEvent.click(await diff.findByRole("button", { name: "Collapse file" }));
+  fireEvent.click(diff.getByRole("button", { name: "Collapse topic" }));
+  await act(async () => history.push(`/r/${id}?tab=writeup&rev=1#diff-file-${id}`));
+  await waitFor(() =>
+    expect(scroll.mock.calls.map(([node]) => node)).toContain(document.getElementById(`diff-file-${id}`)),
+  );
+  expect(diff.getByRole("button", { name: "Collapse file" }).getAttribute("aria-expanded")).toBe("true");
+  expect(diff.getByRole("region", { name: "File seed.txt" })).toBeTruthy();
+});
+
+test.each(["file", "lines"] as const)("R8 Resume of a %s draft expands a collapsed topic and file", async (kind) => {
+  const target =
+    kind === "file"
+      ? { kind, path: "seed.txt" }
+      : { kind, path: "seed.txt", side: "new" as const, start: 1, end: 1, lines: ["seed"], before: [], after: [] };
+  currentRevision.files = currentRevision.files.map((file) => ({ ...file, hasNew: true }));
+  localStorage.setItem(draftKey(id, target), "Resume the seed review");
+  mount("?tab=comments&rev=1");
+  await act(async () => loaded.resolve());
+  const diff = within(await screen.findByTestId("diff-pane"));
+  fireEvent.click(await diff.findByRole("button", { name: "Collapse file" }));
+  fireEvent.click(diff.getByRole("button", { name: "Collapse topic" }));
+  fireEvent.click(within(screen.getByTestId("reading-pane")).getByRole("button", { name: "Resume" }));
+  const editor = await diff.findByRole("textbox", { name: "Comment" });
+  expect((editor as HTMLTextAreaElement).value).toBe("Resume the seed review");
+  expect(editor.closest("[hidden]")).toBeNull();
+  expect(diff.getByRole("button", { name: "Collapse file" }).getAttribute("aria-expanded")).toBe("true");
+});
+
+test.each([1280, 768, 390])(
+  "R8 Writeup links follow pane visibility at %s px and use reading navigation",
+  async (pixels) => {
+    width = pixels;
+    const { history } = mount(pixels === 390 ? "?tab=diff&rev=1" : "?tab=writeup&rev=1");
+    await act(async () => loaded.resolve());
+    const diff = within(await screen.findByTestId("diff-pane"));
+    await diff.findByRole("heading", { name: "Plant a seed" });
+    if (pixels !== 390) {
+      expect(diff.queryByRole("link", { name: "Writeup" })).toBeNull();
+      fireEvent.click(screen.getByRole("tab", { name: "Comments 2" }));
+    }
+    const link = await diff.findByRole("link", { name: "Writeup" });
+    expect(new URL((link as HTMLAnchorElement).href).searchParams.get("rev")).toBe("1");
+    const scroll = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => {});
+    fireEvent.click(link);
+    await screen.findByRole("heading", { name: "Topic 1: Plant a seed" });
+    expect(searchParams(history).get("tab")).toBe("writeup");
+    await waitFor(() => expect(scroll.mock.instances).toContain(document.getElementById("topic-seed")));
+  },
+);
+
+test("R8 one writeup observer follows the top topic without scrolling the diff", async () => {
+  currentRevision.topics.push({ slug: "water", title: "Water the garden", summary: "", importance: 2 });
+  currentRevision.writeup.sections.push({ key: "t-water-body", topic: "water", label: "Water the garden", blocks: [] });
+  const observers: {
+    callback: () => void;
+    options?: IntersectionObserverInit;
+    elements: Element[];
+    disconnected: boolean;
+  }[] = [];
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class {
+      entry: (typeof observers)[number];
+      constructor(callback: () => void, options?: IntersectionObserverInit) {
+        this.entry = { callback, options, elements: [], disconnected: false };
+        observers.push(this.entry);
+      }
+      observe(element: Element) {
+        this.entry.elements.push(element);
+      }
+      disconnect() {
+        this.entry.disconnected = true;
+      }
+    },
+  );
+  mount();
+  await act(async () => loaded.resolve());
+  await screen.findByRole("heading", { name: "Topic 1: Plant a seed" });
+  const reading = screen.getByTestId("reading-pane");
+  const current = observers.filter((observer) => observer.options?.root === reading && !observer.disconnected);
+  expect(current).toHaveLength(1);
+  const observer = current[0];
+  expect(observer?.elements.map((section) => section.id)).toEqual(["topic-seed", "topic-water"]);
+  vi.spyOn(reading, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 100, 500, 500));
+  const seed = document.getElementById("topic-seed") as HTMLElement;
+  const water = document.getElementById("topic-water") as HTMLElement;
+  vi.spyOn(seed, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 80, 500, 500));
+  const waterBounds = vi.spyOn(water, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 580, 500, 600));
+  const scroll = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => {});
+  act(() => observer?.callback());
+  const seedHeader = document.querySelector("#diff-topic-seed [data-topic-header]");
+  const waterHeader = document.querySelector("#diff-topic-water [data-topic-header]");
+  expect(seedHeader?.getAttribute("aria-current")).toBe("true");
+  expect(seedHeader?.querySelector(".bg-topic-solid")).toBeTruthy();
+  expect(waterHeader?.hasAttribute("aria-current")).toBe(false);
+  waterBounds.mockReturnValue(new DOMRect(0, 90, 500, 600));
+  act(() => observer?.callback());
+  expect(seedHeader?.hasAttribute("aria-current")).toBe(false);
+  expect(waterHeader?.getAttribute("aria-current")).toBe("true");
+  expect(scroll).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("tab", { name: "Comments 2" }));
+  await screen.findByText("No comments yet.");
+  expect(observer?.disconnected).toBe(true);
+  expect(waterHeader?.hasAttribute("aria-current")).toBe(false);
+});
+
+test.each(["Show in place", "hash", "claim", "edit claim", "phone edit claim", "retry"])(
+  "R8 fix1 %s waits for a lazy line-100 thread's final annotation slot",
+  async (navigation) => {
+    const phoneEdit = navigation === "phone edit claim";
+    if (phoneEdit) width = 390;
+    const old = Array.from({ length: 120 }, (_, index) => `line ${index + 1}`).join("\n");
+    const next = old.replace("line 100", "changed line 100");
+    const target = {
+      kind: "lines" as const,
+      path: "seed.txt",
+      side: "new" as const,
+      start: 100,
+      end: 100,
+      lines: ["changed line 100"],
+      before: [],
+      after: [],
+    };
+    currentRevision.files = currentRevision.files.map((file) => ({ ...file, flag: null, hasOld: true, hasNew: true }));
+    currentRevision.threads = [{ ...placedWriteupThread(), target, placement: { status: "placed", location: target } }];
+    if (navigation === "edit claim" || phoneEdit)
+      currentRevision.threads = currentRevision.threads.map((thread) => ({
+        ...thread,
+        target: { ...target, path: "previous/seed.txt" },
+        comments: thread.comments.map((comment) => ({ ...comment, sent: false, sentOn: null })),
+      }));
+    const sides = Promise.withResolvers<void>();
+    const parsed = Promise.withResolvers<ParsedDiff>();
+    const parser = vi.fn<DiffParser>(() => parsed.promise);
+    loading.parser = parser;
+    const fetchPrevious = vi.mocked(fetch).getMockImplementation();
+    let failed = navigation === "retry";
+    vi.mocked(fetch).mockImplementation(async (path, init) => {
+      if (typeof path === "string" && path.startsWith(`/api/v1/files/${id}/`)) {
+        await sides.promise;
+        if (failed && path.endsWith("/old"))
+          return Response.json({ error: { code: "not_found", message: "Synthetic failure" } }, { status: 404 });
+        return new Response(path.endsWith("/old") ? old : next);
+      }
+      if (!fetchPrevious) throw new Error("Missing request handler");
+      return fetchPrevious(path, init);
+    });
+    const scroll = vi.spyOn(diffPresentation, "scrollDiffTarget");
+    const focused: { input: HTMLElement; pending: boolean }[] = [];
+    const originalFocus = HTMLElement.prototype.focus;
+    vi.spyOn(HTMLElement.prototype, "focus").mockImplementation(function (this: HTMLElement, options) {
+      if (this instanceof HTMLTextAreaElement)
+        focused.push({ input: this, pending: !!this.closest("[hidden], [data-slot-pending]") });
+      originalFocus.call(this, options);
+    });
+    const { history } = mount(phoneEdit ? "?tab=diff&rev=1" : "?tab=comments&rev=1");
+    await act(async () => loaded.resolve());
+    const diff = within(await screen.findByTestId("diff-pane"));
+    expect(await diff.findByText("Loads near viewport")).toBeTruthy();
+    fireEvent.click(diff.getByRole("button", { name: "Collapse file" }));
+    fireEvent.click(diff.getByRole("button", { name: "Collapse topic" }));
+    if (navigation === "Show in place")
+      fireEvent.click(within(screen.getByTestId("reading-pane")).getByRole("link", { name: "Show in place" }));
+    else if (navigation === "claim") act(() => claimDraft(draftKey(id, target, id), "diff"));
+    else if (navigation === "edit claim" || phoneEdit)
+      act(() => {
+        saveDraft(editDraftKey(id, id), "Edit the relocated comment");
+        claimDraft(editDraftKey(id, id), "diff");
+      });
+    else await act(async () => history.push(`/r/${id}?tab=comments&rev=1#diff-thread-${id}`));
+    await diff.findByText("Loading diff…");
+    const fallback = document.getElementById(`diff-thread-${id}`);
+    expect(fallback?.closest("[hidden]")).toBeNull();
+    expect(fallback?.closest("[data-slot-pending]")).toBeTruthy();
+    expect(scroll).not.toHaveBeenCalled();
+    await act(async () => sides.resolve());
+    if (failed) {
+      await diff.findByText("Could not load this diff.");
+      expect(fallback?.closest("[data-slot-pending]")).toBeTruthy();
+      expect(scroll).not.toHaveBeenCalled();
+      failed = false;
+      fireEvent.click(diff.getByRole("button", { name: "Retry" }));
+    }
+    await waitFor(() => expect(parser).toHaveBeenCalledOnce());
+    expect(scroll).not.toHaveBeenCalled();
+    await act(async () =>
+      parsed.resolve(
+        parsePair({ oldFile: { name: "seed.txt", contents: old }, newFile: { name: "seed.txt", contents: next } }),
+      ),
+    );
+    await waitFor(() => expect(scroll).toHaveBeenCalledOnce());
+    const final = document.getElementById(`diff-thread-${id}`);
+    if (phoneEdit) {
+      const input = screen.getByRole("textbox", { name: "Edit comment" });
+      expect(document.activeElement).toBe(input);
+      expect(focused.every(({ pending }) => !pending)).toBe(true);
+      expect(scroll.mock.calls.at(-1)?.[0]).toBe(final);
+    } else if (navigation === "claim" || navigation === "edit claim") {
+      const input = within(final as HTMLElement).getByRole("textbox", {
+        name: navigation === "claim" ? "Reply" : "Edit comment",
+      });
+      expect(scroll.mock.calls.at(-1)?.[0]).toBe(input.closest(".em-composer"));
+      expect(document.activeElement).toBe(input);
+      expect(focused).toEqual([{ input, pending: false }]);
+    } else expect(scroll.mock.calls.at(-1)?.[0]).toBe(final);
+    expect(final?.closest("diffs-container")).toBeTruthy();
+    expect(final?.isConnected).toBe(true);
+    expect(fallback?.isConnected).toBe(false);
+    expect(final?.closest("[data-slot-pending]")).toBeNull();
+    await act(async () => client.setQueryData(["revision", id, 1], { ...currentRevision }));
+    expect(document.getElementById(`diff-thread-${id}`)).toBe(final);
+    expect(scroll).toHaveBeenCalledOnce();
+  },
+);
+
+test("R8 fix1 Resume reveals an already-mounted file composer before consuming its focus request", async () => {
+  mount();
+  await act(async () => loaded.resolve());
+  const diff = within(await screen.findByTestId("diff-pane"));
+  fireEvent.click(await diff.findByRole("button", { name: "Comment on file" }));
+  const input = diff.getByRole("textbox", { name: "Comment" });
+  fireEvent.change(input, { target: { value: "Retain the existing editor" } });
+  fireEvent.click(diff.getByRole("button", { name: "Collapse topic" }));
+  expect(input.closest("[hidden]")).toBeTruthy();
+  fireEvent.click(screen.getByRole("tab", { name: "Comments 2" }));
+  const resume = await within(screen.getByTestId("reading-pane")).findByRole("button", { name: "Resume" });
+  act(() => resume.focus());
+  const focus = input.focus.bind(input);
+  const hiddenAtFocus: boolean[] = [];
+  vi.spyOn(input, "focus").mockImplementation((options) => {
+    hiddenAtFocus.push(!!input.closest("[hidden]"));
+    focus(options);
+  });
+  const scroll = vi.spyOn(diffPresentation, "scrollDiffTarget");
+  fireEvent.click(resume);
+  await waitFor(() => expect(document.activeElement).toBe(input));
+  expect(hiddenAtFocus).toEqual([false]);
+  expect((input as HTMLTextAreaElement).value).toBe("Retain the existing editor");
+  expect(input.closest("[hidden]")).toBeNull();
+  expect(diff.getByRole("button", { name: "Collapse topic" }).getAttribute("aria-expanded")).toBe("true");
+  expect(scroll).toHaveBeenCalledExactlyOnceWith(input.closest(".em-composer"));
+});
+
+test.each(["binary", "oversized", "lockfile", "large", "identical", "missing-line"])(
+  "R8 fix1 %s line fallback completes navigation without waiting for a nonexistent slot",
+  async (reason) => {
+    const target = {
+      kind: "lines" as const,
+      path: reason === "lockfile" ? "pnpm-lock.yaml" : "seed.txt",
+      side: "new" as const,
+      start: 100,
+      end: 100,
+      lines: ["seed"],
+      before: [],
+      after: [],
+    };
+    currentRevision.files = currentRevision.files.map((file) => ({
+      ...file,
+      path: target.path,
+      flag: reason === "binary" || reason === "oversized" ? reason : null,
+      hasOld: true,
+      hasNew: true,
+    }));
+    currentRevision.threads = [{ ...placedWriteupThread(), target, placement: { status: "placed", location: target } }];
+    loading.parser = parsePair;
+    const fetchPrevious = vi.mocked(fetch).getMockImplementation();
+    vi.mocked(fetch).mockImplementation(async (path, init) => {
+      if (typeof path === "string" && path.startsWith(`/api/v1/files/${id}/`))
+        return new Response(
+          reason === "large"
+            ? "seed\n".repeat(10001)
+            : reason === "identical" || path.endsWith("/old")
+              ? "same\n"
+              : "changed\n",
+        );
+      if (!fetchPrevious) throw new Error("Missing request handler");
+      return fetchPrevious(path, init);
+    });
+    const scroll = vi.spyOn(diffPresentation, "scrollDiffTarget");
+    mount("?tab=comments&rev=1");
+    await act(async () => loaded.resolve());
+    fireEvent.click(
+      await within(await screen.findByTestId("reading-pane")).findByRole("link", { name: "Show in place" }),
+    );
+    await waitFor(() => expect(scroll).toHaveBeenCalledOnce());
+    const card = document.getElementById(`diff-thread-${id}`);
+    expect(card?.isConnected).toBe(true);
+    expect(card?.closest("[data-slot-pending], diffs-container")).toBeNull();
+    expect(scroll.mock.calls[0]?.[0]).toBe(card);
+  },
+);
+
+test.each(["Comment on review", "Comment on file", "input", "textarea"])(
+  "R8 fix2 a deferred Reply yields to newer focus in %s without losing its draft or open state",
+  async (destination) => {
+    const target = {
+      kind: "lines" as const,
+      path: "seed.txt",
+      side: "new" as const,
+      start: 2,
+      end: 2,
+      lines: ["new seed"],
+      before: [],
+      after: [],
+    };
+    currentRevision.files = currentRevision.files.map((file) => ({ ...file, flag: null, hasOld: true, hasNew: true }));
+    currentRevision.threads = [{ ...placedWriteupThread(), target, placement: { status: "placed", location: target } }];
+    const parsed = Promise.withResolvers<ParsedDiff>();
+    const parser = vi.fn<DiffParser>(() => parsed.promise);
+    loading.parser = parser;
+    const fetchPrevious = vi.mocked(fetch).getMockImplementation();
+    vi.mocked(fetch).mockImplementation(async (path, init) => {
+      if (typeof path === "string" && path.startsWith(`/api/v1/files/${id}/`))
+        return new Response(path.endsWith("/old") ? "one\nold seed\n" : "one\nnew seed\n");
+      if (!fetchPrevious) throw new Error("Missing request handler");
+      return fetchPrevious(path, init);
+    });
+    mount();
+    await act(async () => loaded.resolve());
+    const diff = within(await screen.findByTestId("diff-pane"));
+    const scroll = vi.spyOn(diffPresentation, "scrollDiffTarget");
+    const replyButton = await diff.findByRole("button", { name: "Reply" });
+    const fallback = document.getElementById(`diff-thread-${id}`) as HTMLElement;
+    fireEvent.click(replyButton);
+    const reply = within(fallback).getByRole("textbox", { name: "Reply" });
+    // Include an empty but explicitly open reply, which cannot be restored from text alone.
+    const text = destination === "textarea" ? "" : "Keep this pending reply";
+    fireEvent.change(reply, { target: { value: text } });
+    await waitFor(() => expect(parser).toHaveBeenCalledOnce());
+    expect(fallback.closest("[data-slot-pending]")).toBeTruthy();
+    expect(scroll).not.toHaveBeenCalled();
+    let newer: HTMLElement;
+    if (destination === "Comment on review") {
+      fireEvent.click(screen.getByRole("button", { name: destination }));
+      newer = await within(screen.getByTestId("reading-pane")).findByRole("textbox", { name: "Comment" });
+    } else if (destination === "Comment on file") {
+      fireEvent.click(diff.getByRole("button", { name: destination }));
+      newer = await diff.findByRole("textbox", { name: "Comment" });
+    } else {
+      render(destination === "input" ? <input aria-label="Newer field" /> : <textarea aria-label="Newer field" />);
+      newer = screen.getByRole("textbox", { name: "Newer field" });
+    }
+    act(() => newer.focus());
+    expect(document.activeElement).toBe(newer);
+    scroll.mockClear();
+    await act(async () =>
+      parsed.resolve(
+        parsePair({
+          oldFile: { name: "seed.txt", contents: "one\nold seed\n" },
+          newFile: { name: "seed.txt", contents: "one\nnew seed\n" },
+        }),
+      ),
+    );
+    await waitFor(() => expect(document.getElementById(`diff-thread-${id}`)?.closest("diffs-container")).toBeTruthy());
+    const final = document.getElementById(`diff-thread-${id}`) as HTMLElement;
+    expect(fallback.isConnected).toBe(false);
+    expect((within(final).getByRole("textbox", { name: "Reply" }) as HTMLTextAreaElement).value).toBe(text);
+    expect(document.activeElement).toBe(newer);
+    expect(scroll).not.toHaveBeenCalled();
+    await act(async () => client.setQueryData(["revision", id, 1], { ...currentRevision }));
+    expect(document.activeElement).toBe(newer);
+    expect(scroll).not.toHaveBeenCalled();
+  },
+);
+
+test("R8 fix2 a rendered diff with no annotation slot completes its intent at the fallback", async () => {
+  const target = {
+    kind: "lines" as const,
+    path: "seed.txt",
+    side: "new" as const,
+    start: 2,
+    end: 2,
+    lines: ["new seed"],
+    before: [],
+    after: [],
+  };
+  currentRevision.files = currentRevision.files.map((file) => ({ ...file, flag: null, hasOld: true, hasNew: true }));
+  currentRevision.threads = [{ ...placedWriteupThread(), target, placement: { status: "placed", location: target } }];
+  loading.parser = parsePair;
+  loading.rendering = "delayed";
+  const fetchPrevious = vi.mocked(fetch).getMockImplementation();
+  vi.mocked(fetch).mockImplementation(async (path, init) => {
+    if (typeof path === "string" && path.startsWith(`/api/v1/files/${id}/`))
+      return new Response(path.endsWith("/old") ? "one\nold seed\n" : "one\nnew seed\n");
+    if (!fetchPrevious) throw new Error("Missing request handler");
+    return fetchPrevious(path, init);
+  });
+  const scroll = vi.spyOn(diffPresentation, "scrollDiffTarget");
+  mount("?tab=comments&rev=1");
+  await act(async () => loaded.resolve());
+  fireEvent.click(
+    await within(await screen.findByTestId("reading-pane")).findByRole("link", { name: "Show in place" }),
+  );
+  // Parsed metadata has mounted DiffView, but Pierre has not rendered yet.
+  await waitFor(() => expect(document.querySelector(".em-diff-code")).toBeTruthy());
+  const fallback = document.getElementById(`diff-thread-${id}`) as HTMLElement;
+  expect(document.querySelector("diffs-container")).toBeNull();
+  expect(fallback.closest("[data-slot-pending]")).toBeTruthy();
+  expect(scroll).not.toHaveBeenCalled();
+  await act(async () => {
+    loading.rendering = "without-slots";
+    client.setQueryData(["revision", id, 1], { ...currentRevision });
+  });
+  await waitFor(() => expect(scroll).toHaveBeenCalledExactlyOnceWith(fallback));
+  const shadow = document.querySelector("diffs-container")?.shadowRoot;
+  expect(shadow?.querySelector("[data-line]")).toBeTruthy();
+  expect(shadow?.querySelector('slot[name^="annotation-"]')).toBeNull();
+  expect(fallback.isConnected).toBe(true);
+  expect(fallback.closest("[data-slot-pending], diffs-container")).toBeNull();
+  await act(async () => client.setQueryData(["revision", id, 1], { ...currentRevision }));
+  expect(scroll).toHaveBeenCalledOnce();
+});
+
+test.each([false, true])(
+  "R8 fix3 returning to a canceled Reply renews focus through its inline move (newer composer=%s)",
+  async (newerComposer) => {
+    const target = {
+      kind: "lines" as const,
+      path: "seed.txt",
+      side: "new" as const,
+      start: 2,
+      end: 2,
+      lines: ["new seed"],
+      before: [],
+      after: [],
+    };
+    currentRevision.files = currentRevision.files.map((file) => ({ ...file, flag: null, hasOld: true, hasNew: true }));
+    currentRevision.threads = [{ ...placedWriteupThread(), target, placement: { status: "placed", location: target } }];
+    const parsed = Promise.withResolvers<ParsedDiff>();
+    const parser = vi.fn<DiffParser>(() => parsed.promise);
+    loading.parser = parser;
+    const fetchPrevious = vi.mocked(fetch).getMockImplementation();
+    vi.mocked(fetch).mockImplementation(async (path, init) => {
+      if (typeof path === "string" && path.startsWith(`/api/v1/files/${id}/`))
+        return new Response(path.endsWith("/old") ? "one\nold seed\n" : "one\nnew seed\n");
+      if (!fetchPrevious) throw new Error("Missing request handler");
+      return fetchPrevious(path, init);
+    });
+    mount();
+    await act(async () => loaded.resolve());
+    const diff = within(await screen.findByTestId("diff-pane"));
+    fireEvent.click(await diff.findByRole("button", { name: "Reply" }));
+    const fallback = document.getElementById(`diff-thread-${id}`) as HTMLElement;
+    const reply = within(fallback).getByRole("textbox", { name: "Reply" });
+    await waitFor(() => expect(parser).toHaveBeenCalledOnce());
+    expect(fallback.closest("[data-slot-pending]")).toBeTruthy();
+
+    render(<input aria-label="Other field" />);
+    const other = screen.getByRole("textbox", { name: "Other field" });
+    act(() => other.focus());
+    expect(document.activeElement).toBe(other);
+    act(() => reply.focus());
+    fireEvent.change(reply, { target: { value: "Continue this reply after coming back" } });
+    expect(document.activeElement).toBe(reply);
+
+    let newer: HTMLElement | undefined;
+    if (newerComposer) {
+      fireEvent.click(screen.getByRole("button", { name: "Comment on review" }));
+      newer = await within(screen.getByTestId("reading-pane")).findByRole("textbox", { name: "Comment" });
+      expect(document.activeElement).toBe(newer);
+    }
+    const scroll = vi.spyOn(diffPresentation, "scrollDiffTarget");
+    await act(async () =>
+      parsed.resolve(
+        parsePair({
+          oldFile: { name: "seed.txt", contents: "one\nold seed\n" },
+          newFile: { name: "seed.txt", contents: "one\nnew seed\n" },
+        }),
+      ),
+    );
+    await waitFor(() => expect(document.getElementById(`diff-thread-${id}`)?.closest("diffs-container")).toBeTruthy());
+    const final = document.getElementById(`diff-thread-${id}`) as HTMLElement;
+    const moved = within(final).getByRole("textbox", { name: "Reply" }) as HTMLTextAreaElement;
+    expect(fallback.isConnected).toBe(false);
+    expect(moved).not.toBe(reply);
+    expect(moved.value).toBe("Continue this reply after coming back");
+    expect(document.activeElement).toBe(newer ?? moved);
+    if (newerComposer) expect(scroll).not.toHaveBeenCalled();
+    else expect(scroll).toHaveBeenCalledExactlyOnceWith(moved.closest(".em-composer"));
+  },
+);

@@ -20,6 +20,7 @@ import { Composer } from "../components/threads/Composer.tsx";
 import { ThreadList } from "../components/threads/ThreadList.tsx";
 import { Button } from "../components/ui/Button.tsx";
 import { claimDraft } from "../lib/composer-owner.ts";
+import type { NavigateDiff } from "../lib/diff-navigation.ts";
 import { draftKey, hasDraft, type SavedDraft, saveDraft, subscribeDrafts } from "../lib/drafts.ts";
 import { useReviewEvents } from "../lib/events.ts";
 import { useInboxCollapsed, useLayout } from "../lib/layout.ts";
@@ -39,6 +40,7 @@ function Reading({
   openDoc,
   targeted,
   onOpenDoc,
+  onCurrentTopic,
 }: {
   reviewId: string;
   revision: RevisionView;
@@ -52,6 +54,7 @@ function Reading({
   openDoc?: RevisionView["docs"][number];
   targeted: boolean;
   onOpenDoc: (path: string) => void;
+  onCurrentTopic?: (slug: string | undefined) => void;
 }) {
   const props = {
     reviewId,
@@ -83,6 +86,7 @@ function Reading({
       search={search}
       phone={phone}
       resumedBlockId={resumedBlockId}
+      onCurrentTopic={onCurrentTopic}
     />
   );
 }
@@ -163,6 +167,11 @@ function LoadedReview({
   // Resolving the lazy pane does not otherwise rerender this route's pending scroll effect.
   const [, setDiffRendered] = useState(0);
   const onDiffRendered = useCallback(() => setDiffRendered((value) => value + 1), []);
+  const navigateDiff = useRef<NavigateDiff | null>(null);
+  const onDiffNavigator = useCallback((navigate: NavigateDiff | null) => {
+    navigateDiff.current = navigate;
+  }, []);
+  const [currentTopic, setCurrentTopic] = useState<string>();
   const revision = query.data;
   const [resumed, setResumed] = useState<(SavedDraft & { tab: NonNullable<ReviewSearch["tab"]> }) | null>(null);
   const resumedPlacement = resumed && revision ? draftPlacement(resumed, revision) : undefined;
@@ -355,6 +364,10 @@ function LoadedReview({
       claimDraft(draftKey(review.id, thread.target, thread.id), search.tab === "docs" ? "reading" : "comments");
       return;
     }
+    if (intent.elementId.startsWith("diff-")) {
+      if (navigateDiff.current?.({ elementId: intent.elementId })) pending.current = null;
+      return;
+    }
     const element = document.getElementById(intent.elementId);
     if (!element) return;
     pending.current = null;
@@ -443,6 +456,7 @@ function LoadedReview({
                     htmlNavigation={htmlNavigation}
                     composingPath={resumed?.target?.kind === "html-span" ? resumed.target.path : undefined}
                     resumedBlockId={resumedBlockId}
+                    onCurrentTopic={layout !== "phone" && hasDiff ? setCurrentTopic : undefined}
                   />
                 )}
                 {resumed?.target && !isDiffTarget(resumed.target) && (
@@ -476,6 +490,10 @@ function LoadedReview({
                 resume={resumed?.target && isDiffTarget(resumed.target) ? resumed : undefined}
                 onResumeEnd={endResume}
                 onRendered={onDiffRendered}
+                onNavigator={onDiffNavigator}
+                currentTopic={currentTopic}
+                writeupVisible={readingTab === "writeup"}
+                search={search}
               />
             ) : (
               <p role={query.isError ? "alert" : "status"} className="p-5">

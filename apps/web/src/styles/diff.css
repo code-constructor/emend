@@ -1,0 +1,105 @@
+@layer components {
+  .em-diff-pane {
+    --diff-toolbar-height: 0px;
+    background: var(--bg-surface);
+  }
+  .em-diff-pane[data-toolbar] {
+    --diff-toolbar-height: 41px;
+  }
+  .em-diff-toolbar {
+    position: sticky;
+    top: 0;
+    z-index: calc(var(--z-sticky) + 1);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--border-1);
+    background: var(--bg-surface);
+  }
+  .em-diff-topic {
+    scroll-margin-top: var(--diff-toolbar-height);
+  }
+  .em-topic {
+    position: sticky;
+    top: var(--diff-toolbar-height);
+    z-index: var(--z-sticky);
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 10px;
+    padding: 14px 12px 12px 16px;
+    border-bottom: 1px solid var(--border-1);
+    background: var(--bg-surface);
+  }
+  .em-topic[aria-current="true"] {
+    box-shadow: inset 0 2px var(--topic-line);
+  }
+  .em-diff-file {
+    margin-top: 12px;
+  }
+  .em-file {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 40px;
+    padding: 0 6px;
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius-md) var(--radius-md) 0 0;
+    background: var(--bg-sunken);
+    color: var(--fg-2);
+    font: var(--type-meta);
+  }
+  .em-file[data-collapsed] {
+    border-radius: var(--radius-md);
+  }
+  .em-file-path {
+    font-stretch: var(--mono-stretch);
+    overflow-wrap: anywhere;
+  }
+  .em-diff-body {
+    border: 1px solid var(--border-1);
+    border-top: 0;
+    border-radius: 0 0 var(--radius-md) var(--radius-md);
+    overflow: clip;
+  }
+  .em-diff-discussion:empty {
+    display: none;
+  }
+  .em-diff-discussion > * {
+    margin: 8px 12px;
+  }
+  .em-diff-summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: var(--bg-sunken);
+    color: var(--fg-3);
+    font: var(--type-meta);
+  }
+  .em-diff-code,
+  .em-diff-host {
+    font: var(--type-code);
+    font-stretch: var(--mono-stretch);
+  }
+  .em-diff-host {
+    --diffs-bg-addition-override: var(--diff-add-bg);
+    --diffs-bg-addition-emphasis-override: var(--diff-add-word);
+    --diffs-addition-color-override: var(--diff-add-fg);
+    --diffs-bg-deletion-override: var(--diff-del-bg);
+    --diffs-bg-deletion-emphasis-override: var(--diff-del-word);
+    --diffs-deletion-color-override: var(--diff-del-fg);
+    --diffs-bg-context-override: var(--bg-surface);
+    --diffs-bg-context-gutter-override: var(--diff-gutter);
+    --diffs-bg-separator-override: var(--diff-hunk-bg);
+    --diffs-bg-selection-override: var(--diff-select-bg);
+    --diffs-fg-number-override: var(--fg-3);
+    --diffs-font-family: var(--font-mono);
+    /* Resolve against --type-code on the wrapper, without duplicating its metrics. */
+    --diffs-font-size: 1em;
+    --diffs-line-height: 1lh;
+  }
+}

@@ -7,7 +7,8 @@ afterEach(cleanup);
 test.each(["split", "unified"] as const)(
   "real %s renderer preserves hostile text without creating elements",
   async (style) => {
-    const text = "<script>alert(1)</script>\n<img src=x onerror=alert(1)>\njavascript:alert(1)\n</span><b>\n";
+    const text =
+      '<script>alert(1)</script>\n<img src=x onerror=alert(1)>\njavascript:alert(1)\n</span><b>\n<svg onload=alert(1)>\n<a href="javascript:alert(1)">link</a>\nclick node "javascript:alert(1)"\n';
     const parsed = parsePair({ oldFile: null, newFile: { name: "hostile.txt", contents: text } });
     const view = render(
       <DiffView fileDiff={parsed} diffStyle={style} annotations={[]} onSelect={() => {}} selected={null} />,
@@ -15,7 +16,7 @@ test.each(["split", "unified"] as const)(
     const host = view.container.querySelector("diffs-container");
     await waitFor(() => expect(host?.shadowRoot?.querySelector("[data-line]")).toBeTruthy());
     const shadow = host?.shadowRoot;
-    expect(shadow?.querySelector("script, img, b, [onerror], [href^='javascript:']")).toBeNull();
+    expect(shadow?.querySelector("script, img, b, [onerror], [onload], [href^='javascript:']")).toBeNull();
     const lines = [...(shadow?.querySelectorAll("[data-line]") ?? [])].map((line) => line.textContent);
     expect(lines).toEqual(text.trimEnd().split("\n"));
   },
