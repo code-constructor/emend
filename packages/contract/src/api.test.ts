@@ -11,6 +11,8 @@ import {
   PublishResponse,
   SCOPES_BY_KIND,
   Scope,
+  ServerStopping,
+  ServerStopRequest,
   TokenKind,
 } from "./index.ts";
 
@@ -75,7 +77,7 @@ test("exports the v1 API, limits, file vocabulary and reserved fallback", () => 
 
 test("assigns only the specified scopes to each token kind", () => {
   expect([...Scope.options].sort()).toEqual(
-    ["pairings:create", "devices:manage", "publish", "take", "reply", "read", "comment", "send"].sort(),
+    ["pairings:create", "devices:manage", "server:stop", "publish", "take", "reply", "read", "comment", "send"].sort(),
   );
   for (const scopes of Object.values(SCOPES_BY_KIND)) {
     for (const scope of scopes) expect(Scope.parse(scope)).toBe(scope);
@@ -83,7 +85,7 @@ test("assigns only the specified scopes to each token kind", () => {
   expect(Scope.safeParse("approve").success).toBe(false);
   expect(TokenKind.options).toEqual(["admin", "agent", "reviewer"]);
   expect(SCOPES_BY_KIND).toEqual({
-    admin: ["pairings:create", "devices:manage"],
+    admin: ["pairings:create", "devices:manage", "server:stop"],
     agent: ["publish", "take", "reply"],
     reviewer: ["read", "comment", "send", "pairings:create", "devices:manage"],
   });
@@ -96,6 +98,14 @@ test("accepts initial and additive capabilities while stripping unknown fields",
   expect(
     Capabilities.safeParse({ ...capabilities, features: [...capabilities.features, "future-feature"] }).success,
   ).toBe(true);
+});
+
+test("server stopping confirms only an accepted stop request", () => {
+  expect(ServerStopRequest.parse({})).toEqual({});
+  expect(ServerStopRequest.safeParse({ extra: true }).success).toBe(false);
+  expect(ServerStopping.parse({ stopping: true })).toEqual({ stopping: true });
+  for (const value of [{}, { stopping: false }, { stopping: "true" }, null])
+    expect(ServerStopping.safeParse(value).success).toBe(false);
 });
 
 test("validates publish response ids, revision, URL and placement counts", () => {

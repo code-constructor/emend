@@ -8,6 +8,7 @@ import { findExecutable } from "../executable.ts";
 import { CliError } from "../http.ts";
 import { isWorktreeRoot } from "../publish/root.ts";
 import type { CliRuntime } from "../runtime.ts";
+import type { ServerReadyOptions } from "./takeover.ts";
 
 export interface ServiceResult {
   code: number | string;
@@ -28,6 +29,8 @@ export interface ServiceOptions extends Partial<CliRuntime> {
   cwd?: string;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
+  stopLocalServer?: () => Promise<string | undefined>;
+  waitForServer?: (options: ServerReadyOptions) => Promise<{ url: string; pid: number } | null>;
 }
 export type ServiceAction = "install" | "uninstall" | "status";
 export type ServiceTool = (args: string[], failure?: "throw" | "report" | "ignore") => Promise<ServiceResult>;
@@ -39,6 +42,8 @@ export interface ServiceContext extends CliRuntime {
   tool: (name: string) => Promise<ServiceTool>;
   now: () => number;
   sleep: (ms: number) => Promise<void>;
+  stopLocalServer: () => Promise<string | undefined>;
+  waitForServer: (options: ServerReadyOptions) => Promise<{ url: string; pid: number } | null>;
 }
 export const unsupportedService =
   "emend service supports systemd on Linux and launchd on macOS; run emend serve yourself.";

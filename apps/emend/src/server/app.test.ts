@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { ERROR_STATUS, ErrorBody, LIMITS, PairingCreated, SCOPES_BY_KIND } from "@emend/contract";
+import { Capabilities, ERROR_STATUS, ErrorBody, LIMITS, PairingCreated, SCOPES_BY_KIND } from "@emend/contract";
 import { and, eq } from "drizzle-orm";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { devices, pairings, tokens } from "../db/schema.ts";
@@ -17,15 +17,17 @@ let now: number;
 let admin: string;
 let agent: string;
 let webRoot: string;
+let responses: (() => void)[];
 const host = "127.0.0.1:3636";
 const origin = `http://${host}`;
 const day = 86_400_000;
-function makeApp(secureCookies = false, extraHost?: string) {
+function makeApp(secureCookies = false, extraHost?: string, onStopRequest?: () => void) {
   return createApp({
     db: fixture.db,
     blobs: new BlobStore(fixture.db, join(fixture.dir, "state")),
     instance: { id: fixture.instanceId, name: "Synthetic" },
     now: () => now,
+    onStopRequest,
     config: {
       serverKey: "A".repeat(43),
       allowedHosts: [host, "localhost:3636", "[::1]:3636", ...(extraHost ? [extraHost] : [])],
@@ -37,11 +39,19 @@ function makeApp(secureCookies = false, extraHost?: string) {
   });
 }
 function request(path: string, method = "GET", headers: Record<string, string> = {}, body?: unknown) {
-  return app.request(`${origin}${path.startsWith("/api/") ? path : `/api/v1${path}`}`, {
-    method,
-    headers: { Host: host, ...(body === undefined ? {} : { "Content-Type": "application/json" }), ...headers },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  });
+  return app.request(
+    `${origin}${path.startsWith("/api/") ? path : `/api/v1${path}`}`,
+    {
+      method,
+      headers: { Host: host, ...(body === undefined ? {} : { "Content-Type": "application/json" }), ...headers },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    },
+    {
+      onResponseSent: (callback) => {
+        responses.push(callback);
+      },
+    },
+  );
 }
 const bearer = (secret: string) => ({ Authorization: `Bearer ${secret}` });
 async function issue(purpose = "device", credential: Record<string, string> = bearer(admin)) {
@@ -60,6 +70,7 @@ async function error(response: Response, code: keyof typeof ERROR_STATUS, head =
   if (!head) expect(ErrorBody.parse(await response.json()).error.code).toBe(code);
 }
 beforeEach(async () => {
+  responses = [];
   fixture = await testDb();
   now = Date.UTC(2026, 0, 1);
   webRoot = join(fixture.dir, "web");
@@ -69,6 +80,35 @@ beforeEach(async () => {
   admin = (await createToken(fixture.db, fixture.ownerId, "admin", { now })).secret;
   agent = (await createToken(fixture.db, fixture.ownerId, "agent", { instanceId: fixture.instanceId, now })).secret;
   app = makeApp();
+});
+
+test("only an admin can request a stop, after the response is sent and only once", async () => {
+  const stop = vi.fn();
+  app = makeApp(false, undefined, stop);
+  expect(Capabilities.parse(await (await request("/capabilities")).json()).features).toContain("server-stop");
+  await error(await request("/server/stop", "POST"), "unauthorized");
+  await error(await request("/server/stop", "POST", bearer(agent)), "forbidden");
+  const cookie = await login();
+  await error(await request("/server/stop", "POST", { Cookie: cookie, Origin: origin }), "forbidden");
+  await error(await request("/server/stop", "POST", bearer(admin), { extra: true }), "invalid_request");
+  expect(responses).toEqual([]);
+  const first = await request("/server/stop", "POST", bearer(admin));
+  expect(first.status).toBe(202);
+  expect(await first.json()).toEqual({ stopping: true });
+  expect(stop).not.toHaveBeenCalled();
+  responses.shift()?.();
+  expect(stop).toHaveBeenCalledOnce();
+  const second = await request("/server/stop", "POST", bearer(admin), {});
+  expect(second.status).toBe(202);
+  expect(await second.json()).toEqual({ stopping: true });
+  responses.shift()?.();
+  expect(stop).toHaveBeenCalledOnce();
+});
+
+test("without a stop handler the server advertises no feature and refuses the route", async () => {
+  expect(Capabilities.parse(await (await request("/capabilities")).json()).features).not.toContain("server-stop");
+  await error(await request("/server/stop", "POST", bearer(admin)), "not_found");
+  expect(responses).toEqual([]);
 });
 afterEach(async () => {
   vi.restoreAllMocks();

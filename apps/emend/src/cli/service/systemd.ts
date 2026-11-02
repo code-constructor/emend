@@ -1,6 +1,7 @@
 import { unlink } from "node:fs/promises";
 import { userInfo } from "node:os";
 import { isAbsolute, join } from "node:path";
+import { escapeReference } from "../escape.ts";
 import { CliError } from "../http.ts";
 import {
   clearServicePending,
@@ -84,8 +85,28 @@ export async function systemdService(action: ServiceAction, context: ServiceCont
     io.stdout("emend: no saved service options; the service now uses the defaults\n");
   await systemctl(["--user", "daemon-reload"]);
   await systemctl(["--user", "enable", "emend"]);
-  await systemctl(["--user", "restart", "emend"]);
+  await systemctl(["--user", "stop", "emend"]);
+  const url = await context.stopLocalServer();
+  if (url !== undefined)
+    io.stdout(`emend: stopped the emend server at ${escapeReference(url)}, so the service can take over\n`);
+  await systemctl(["--user", "start", "emend"]);
   await clearServicePending(stateDir);
+  let mainPid = 0;
+  const found = await context.waitForServer({
+    tailscale: flags.includes("--tailscale"),
+    mainPid: async () => {
+      const result = await systemctl(["--user", "show", "--property=MainPID", "--value", "emend"], "ignore");
+      const pid = Number(result.stdout.trim());
+      mainPid = result.code === 0 && Number.isSafeInteger(pid) && pid > 0 ? pid : 0;
+      return mainPid;
+    },
+  });
+  if (!found)
+    throw new CliError(
+      mainPid === 0
+        ? "the emend service did not start a server; run journalctl --user -u emend to see why."
+        : "the emend service runs, but this command could not confirm its server; run journalctl --user -u emend to see why, or run emend service install again in your own terminal if an agent sandbox runs this command.",
+    );
   io.stdout("emend: service installed\n");
   try {
     const loginctl = await tool("loginctl");

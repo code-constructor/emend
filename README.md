@@ -29,9 +29,11 @@ To keep the server running and start it at login, run `emend service install` fi
 inbox.
 
 A server that `emend` started keeps running until you stop that `emend serve` process
-(`pgrep -af '[e]mend.mjs serve'` finds it; `pgrep -lf` on macOS). Stop it before you install the
-service or update emend: the service cannot start while it holds the port, and it keeps running
-the old version.
+(`pgrep -af '[e]mend.mjs serve'` finds it; `pgrep -lf` on macOS). `emend service install` asks
+the emend server that runs for you, whether `emend` started it or you run `emend serve` yourself,
+to stop, so the service can take over. If it reports a server it cannot ask to stop (one from an
+older emend), stop that process yourself, then run it again. Without the service, stop that server
+after you update emend: it keeps running the old version.
 
 Give your agents the review skills:
 

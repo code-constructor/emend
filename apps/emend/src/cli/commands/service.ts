@@ -14,6 +14,7 @@ import {
 } from "../service/common.ts";
 import { launchdService } from "../service/launchd.ts";
 import { systemdService } from "../service/systemd.ts";
+import { stopLocalServer, waitForServer } from "../service/takeover.ts";
 import { parseServeArgs, UsageError } from "./serve.ts";
 
 export async function serviceCommand(stateDir: string, args: string[], io: Io) {
@@ -24,6 +25,8 @@ export async function serviceCommand(stateDir: string, args: string[], io: Io) {
   try {
     if (action === "install") parseServeArgs(flags);
     const options = io.service ?? {};
+    const uid = options.uid ?? process.getuid?.();
+    if (uid === 0) throw new CliError("run emend service as the user who runs emend, not as root.");
     const platform = options.platform ?? process.platform;
     if (platform !== "linux" && platform !== "darwin") throw new CliError(unsupportedService);
     const home = options.home ?? homedir();
@@ -33,6 +36,8 @@ export async function serviceCommand(stateDir: string, args: string[], io: Io) {
       validatePaths(runtime.node, runtime.entry, stateDir);
       await validateServiceRuntime(runtime, options.cwd ?? process.cwd());
     }
+    const now = options.now ?? (() => performance.now());
+    const sleep = options.sleep ?? setTimeout;
     const context: ServiceContext = {
       ...runtime,
       home,
@@ -40,12 +45,13 @@ export async function serviceCommand(stateDir: string, args: string[], io: Io) {
       flags,
       io,
       tool: (name) => serviceTool(name, home, io, options.runner ?? runService),
-      now: options.now ?? (() => performance.now()),
-      sleep: options.sleep ?? setTimeout,
+      now,
+      sleep,
+      stopLocalServer: options.stopLocalServer ?? (() => stopLocalServer(stateDir, { now, sleep })),
+      waitForServer: options.waitForServer ?? ((ready) => waitForServer(stateDir, { ...ready, now, sleep })),
     };
     if (platform === "linux") await systemdService(action, context, options.username);
     else {
-      const uid = options.uid ?? process.getuid?.();
       if (uid === undefined) throw new CliError("Could not determine the service user.");
       await launchdService(action, context, uid);
     }

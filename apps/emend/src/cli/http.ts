@@ -107,11 +107,15 @@ export async function apiRequest(
     signal?: AbortSignal;
     onSend?: () => void;
     successStatuses?: readonly number[];
+    verifyLocal?: () => Promise<boolean>;
   },
 ): Promise<unknown> {
   if (target.via === "direct") throw new CliError("The emend request requires a server.");
   opts.signal?.throwIfAborted();
-  if (target.via === "local" && !(await discover(stateDir, 5000, target.url)))
+  if (
+    target.via === "local" &&
+    !(opts.verifyLocal ? await opts.verifyLocal() : await discover(stateDir, 5000, target.url))
+  )
     throw new CliError("Could not authenticate the emend server.");
   opts.signal?.throwIfAborted();
   let response: Response;

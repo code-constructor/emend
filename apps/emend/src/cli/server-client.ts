@@ -16,11 +16,12 @@ import { ensureStateDir, StateFolderWriteError, stateAccessError } from "../stat
 import { VERSION } from "../version.ts";
 import { cliRuntime } from "./runtime.ts";
 
-export async function discover(
-  stateDir: string,
-  timeoutMs: number,
-  expectedUrl?: string,
-): Promise<{ url: string } | null> {
+export interface ServerRecord {
+  url: string;
+  pid: number;
+  key: string;
+}
+export async function serverRecord(stateDir: string, expectedUrl?: string): Promise<ServerRecord | null> {
   try {
     const record: unknown = JSON.parse(await readFile(join(stateDir, "server.json"), "utf8"));
     if (
@@ -48,30 +49,99 @@ export async function discover(
       (expectedUrl !== undefined && url.origin !== expectedUrl)
     )
       return null;
-    process.kill(record.pid, 0);
-    const challenge = randomBytes(32).toString("base64url");
-    const response = await fetch(`${url.origin}/api/v1/capabilities`, {
-      redirect: "error",
-      headers: { [SERVER_CHALLENGE_HEADER]: challenge, "X-Emend-Client": `cli/${VERSION}` },
-      signal: AbortSignal.timeout(Math.max(1, timeoutMs)),
-    });
-    const proof = ServerProof.safeParse(response.headers.get(SERVER_PROOF_HEADER));
-    if (
-      !proof.success ||
-      !timingSafeEqual(
-        Buffer.from(proof.data, "base64url"),
-        Buffer.from(serverProof(ServerChallenge.parse(record.key), challenge), "base64url"),
-      )
-    )
-      return null;
-    if (!response.ok || !Capabilities.safeParse(await response.json()).success) return null;
-    return { url: url.origin };
+    try {
+      process.kill(record.pid, 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EPERM") return null;
+    }
+    return { url: url.origin, pid: record.pid, key: ServerChallenge.parse(record.key) };
   } catch (error) {
     const mapped = stateAccessError(stateDir, error);
     if (mapped instanceof StateFolderWriteError) throw mapped;
     return null;
   }
 }
+
+async function capabilitiesBody(response: Response): Promise<Capabilities | null> {
+  const limit = 65536;
+  if (Number(response.headers.get("Content-Length")) > limit) {
+    void response.body?.cancel().catch(() => {});
+    return null;
+  }
+  const reader = response.body?.getReader();
+  if (!reader) return null;
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > limit) {
+        void reader.cancel().catch(() => {});
+        return null;
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  try {
+    const parsed = Capabilities.safeParse(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
+export type ServerProbe =
+  | { kind: "verified"; capabilities: Capabilities | null }
+  | { kind: "absent" | "unverified" | "unanswered" };
+export async function probeServer(
+  record: ServerRecord,
+  timeoutMs: number,
+  readCapabilities = true,
+): Promise<ServerProbe> {
+  try {
+    const challenge = randomBytes(32).toString("base64url");
+    const response = await fetch(`${record.url}/api/v1/capabilities`, {
+      redirect: "error",
+      headers: { [SERVER_CHALLENGE_HEADER]: challenge, "X-Emend-Client": `cli/${VERSION}` },
+      signal: AbortSignal.timeout(Math.max(1, Math.ceil(timeoutMs))),
+    });
+    const proof = ServerProof.safeParse(response.headers.get(SERVER_PROOF_HEADER));
+    if (
+      !proof.success ||
+      !timingSafeEqual(
+        Buffer.from(proof.data, "base64url"),
+        Buffer.from(serverProof(record.key, challenge), "base64url"),
+      )
+    ) {
+      void response.body?.cancel().catch(() => {});
+      return { kind: "unverified" };
+    }
+    if (!readCapabilities || !response.ok) {
+      void response.body?.cancel().catch(() => {});
+      return { kind: "verified", capabilities: null };
+    }
+    return { kind: "verified", capabilities: await capabilitiesBody(response) };
+  } catch (error) {
+    const cause = error instanceof Error ? (error.cause as NodeJS.ErrnoException | undefined) : undefined;
+    return { kind: cause?.code === "ECONNREFUSED" ? "absent" : "unanswered" };
+  }
+}
+
+export async function discover(
+  stateDir: string,
+  timeoutMs: number,
+  expectedUrl?: string,
+): Promise<{ url: string } | null> {
+  const record = await serverRecord(stateDir, expectedUrl);
+  if (!record) return null;
+  const result = await probeServer(record, timeoutMs);
+  return result.kind === "verified" && result.capabilities ? { url: record.url } : null;
+}
+
 export async function ensureServer(
   stateDir: string,
   opts: { node?: string; entry?: string; timeoutMs?: number } = {},

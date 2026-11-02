@@ -22,6 +22,10 @@ export const Capabilities = z.object({
 });
 export type Capabilities = z.infer<typeof Capabilities>;
 
+export const ServerStopRequest = z.strictObject({});
+export const ServerStopping = z.object({ stopping: z.literal(true) });
+export type ServerStopping = z.infer<typeof ServerStopping>;
+
 export const PairingPurpose = z.enum(["device", "machine"]);
 export type PairingPurpose = z.infer<typeof PairingPurpose>;
 export const PairingRequest = z.object({ purpose: PairingPurpose.default("device") });

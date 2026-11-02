@@ -1,10 +1,49 @@
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { join } from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 import { run } from "../../main.ts";
 import { startServer } from "../../server/serve.ts";
+import { stopLocalServer } from "../service/takeover.ts";
 import { parseServeArgs } from "./serve.ts";
 
 vi.mock("../../server/serve.ts", () => ({ startServer: vi.fn() }));
 afterEach(() => vi.restoreAllMocks());
+
+test.each([false, true])("a stop request exits zero with SIGTERM cleanup (tailscale: %s)", async (tailscale) => {
+  const stateDir = await mkdtemp(join(process.env.EMEND_HOME as string, "serve-stop-"));
+  const actual = await vi.importActual<typeof import("../../server/serve.ts")>("../../server/serve.ts");
+  const proxy = await import("../tailscale.ts");
+  vi.spyOn(proxy, "tailscaleSelf").mockResolvedValue({ dnsName: "review.example.ts.net" });
+  vi.spyOn(proxy, "ensureTailscaleServe").mockResolvedValue({ otherHttpsPorts: false });
+  const remove = vi.spyOn(proxy, "removeTailscaleServe").mockResolvedValue(undefined);
+  let server: Awaited<ReturnType<typeof startServer>> | undefined;
+  let stop: (() => void) | undefined;
+  vi.mocked(startServer).mockImplementation(async (options) => {
+    stop = options.onStopRequest;
+    server = await actual.startServer(options);
+    return server;
+  });
+  const stdout = vi.fn();
+  const stderr = vi.fn();
+  const result = run(["serve", "--port", "0", ...(tailscale ? ["--tailscale"] : [])], {
+    env: { ...process.env, EMEND_HOME: stateDir },
+    stdout,
+    stderr,
+  });
+  try {
+    await vi.waitFor(() => expect(stdout).toHaveBeenCalledOnce());
+    expect(await stopLocalServer(stateDir)).toBe(server?.url);
+    expect(await result).toBe(0);
+    await expect(readFile(join(stateDir, "server.json"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect(remove).toHaveBeenCalledTimes(tailscale ? 1 : 0);
+    expect(stderr).not.toHaveBeenCalled();
+  } finally {
+    stop?.();
+    await result;
+    await server?.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
 test("serve defaults to loopback, allows explicit host and port zero, and rejects bad flags", async () => {
   expect(parseServeArgs([])).toEqual({ host: "127.0.0.1", port: 3636 });
   expect(parseServeArgs(["--host", "192.0.2.1", "--port", "0"])).toEqual({ host: "192.0.2.1", port: 0 });

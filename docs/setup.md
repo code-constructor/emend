@@ -41,17 +41,21 @@ Then run emend --version and show me the result.
 ## 2. Keep the server running (optional)
 
 `emend service install` runs the server as a systemd user unit on Linux or a launchd agent on
-macOS, started at login. Install it before you first run `emend`: a server that `emend` started
-holds the port until you stop that `emend serve` process. Without the service, `emend` starts the
-server when you run it.
+macOS, started at login. When an emend server already runs, whether `emend` started it or you run
+`emend serve` yourself, the command asks it to stop so the service can take over. A server from an
+older emend cannot be asked: the command says so, and you stop that `emend serve` process yourself
+(`pgrep -af '[e]mend.mjs serve'` finds it; `pgrep -lf` on macOS), then run the command again. It
+reports an error, with the place to read the service log, when it cannot confirm that the service's
+own server answers. Without the service, `emend` starts the server when you run it.
 
 ```text
 Rules: show me each change and wait for my yes; never read secrets or emend's state folder; if a
 dotfiles tool manages a file or link you would change, change its source and tell me how to apply it.
-Install the emend service. First ask me to run pgrep -af '[e]mend.mjs serve' (pgrep -lf on macOS)
-in my own terminal, since your sandbox cannot see other processes, and to end any emend server it
-lists; run no process listing yourself. Then run emend service install and emend service status,
-and show me the output of both.
+Install the emend service: run emend service install and emend service status outside your
+sandbox, since they need emend's state folder, the service manager and 127.0.0.1, and show me the
+output of both. If it reports a server it cannot ask to stop, ask me to run pgrep -af
+'[e]mend.mjs serve' (pgrep -lf on macOS) in my own terminal and to end that server, then run emend
+service install again; run no process listing yourself.
 ```
 
 ## 3. Give your agents the review skills

@@ -1,5 +1,6 @@
 import { mkdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
+import { escapeReference } from "../escape.ts";
 import { CliError } from "../http.ts";
 import {
   clearServicePending,
@@ -77,7 +78,7 @@ export async function launchdService(action: ServiceAction, context: ServiceCont
     if (!(await serviceFile(path))) io.stdout("emend: service not installed\n");
     else {
       const result = await launchctl(["print", target], "ignore");
-      serviceStatus(io, path, result.code === 0 && serviceState(result.stdout) === "running");
+      serviceStatus(io, path, result.code === 0 && serviceField(result.stdout, "state") === "running");
     }
     return;
   }
@@ -108,8 +109,29 @@ export async function launchdService(action: ServiceAction, context: ServiceCont
   if (resetToDefaults && previous !== content)
     io.stdout("emend: no saved service options; the service now uses the defaults\n");
   if (stop) await waitForBootout(launchctl, target, context);
+  const url = await context.stopLocalServer();
+  if (url !== undefined)
+    io.stdout(`emend: stopped the emend server at ${escapeReference(url)}, so the service can take over\n`);
   await launchctl(["bootstrap", domain, path]);
   await clearServicePending(stateDir);
+  let mainPid = 0;
+  const found = await context.waitForServer({
+    tailscale: flags.includes("--tailscale"),
+    mainPid: async () => {
+      const result = await launchctl(["print", target], "ignore");
+      const pid = Number(serviceField(result.stdout, "pid"));
+      mainPid = result.code === 0 && Number.isSafeInteger(pid) && pid > 0 ? pid : 0;
+      return mainPid;
+    },
+  });
+  if (!found) {
+    const log = escapeReference(join(home, "Library/Logs/emend.log"));
+    throw new CliError(
+      mainPid === 0
+        ? `the emend service did not start a server; see ${log}.`
+        : `the emend service runs, but this command could not confirm its server; see ${log}, or run emend service install again in your own terminal if an agent sandbox runs this command.`,
+    );
+  }
   io.stdout("emend: service installed\n");
 }
 
@@ -122,11 +144,11 @@ async function waitForBootout(launchctl: ServiceTool, target: string, context: S
   }
 }
 
-function serviceState(output: string): string | undefined {
+function serviceField(output: string, field: string): string | undefined {
   let depth = 0;
   for (const line of output.split("\n")) {
     const text = line.trim();
-    if (depth === 1 && text.startsWith("state = ")) return text.slice("state = ".length);
+    if (depth === 1 && text.startsWith(`${field} = `)) return text.slice(`${field} = `.length);
     if (text.endsWith("{")) depth++;
     else if (text === "}") depth--;
   }

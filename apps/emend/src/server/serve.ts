@@ -63,6 +63,7 @@ export interface ServerOptions {
   port?: number;
   publicOrigin?: string;
   webRoot?: string;
+  onStopRequest?: () => void;
 }
 interface DiscoveryIdentity {
   pid: number;
@@ -87,7 +88,7 @@ export async function startServer(
           const address = server.address();
           if (!address || typeof address === "string") throw new Error("Invalid bound address.");
           const config = serverConfig(address.address, address.port, webRoot, opts.publicOrigin, key);
-          const app = createApp({ ...state, now: Date.now, config });
+          const app = createApp({ ...state, now: Date.now, config, onStopRequest: opts.onStopRequest });
           server.on("request", nodeRequestHandler(app, config));
           resolve({ url: localUrl(address.address, address.port), port: address.port });
         } catch (error) {
@@ -181,10 +182,18 @@ export function nodeRequestHandler(
       await refuse("bad_host");
       return;
     }
-    const adapter = getRequestListener((request) => app.fetch(request), {
-      overrideGlobalObjects: false,
-      errorHandler: () => adapterError(path, "invalid_request"),
-    });
+    const adapter = getRequestListener(
+      (request) =>
+        app.fetch(request, {
+          onResponseSent: (callback) => {
+            outgoing.once("finish", callback);
+          },
+        }),
+      {
+        overrideGlobalObjects: false,
+        errorHandler: () => adapterError(path, "invalid_request"),
+      },
+    );
     try {
       await adapter(incoming, outgoing);
     } catch {

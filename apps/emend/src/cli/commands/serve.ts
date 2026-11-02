@@ -57,7 +57,13 @@ export async function serveCommand(stateDir: string, options: ReturnType<typeof 
     startup.signal.throwIfAborted();
     if (options.tailscale && !self) throw new CliError(tailscaleUnavailable);
     const publicOrigin = self ? `https://${self.dnsName}` : undefined;
-    const starting = startServer({ stateDir, host: options.host, port: options.port, publicOrigin });
+    const starting = startServer({
+      stateDir,
+      host: options.host,
+      port: options.port,
+      publicOrigin,
+      onStopRequest: () => stop(0),
+    });
     try {
       server = await Promise.race([
         starting,

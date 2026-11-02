@@ -59,11 +59,11 @@ The content path uses its capability key and never reads cookies. The server bin
 
 | Token kind | Scopes |
 | --- | --- |
-| `admin` | `pairings:create`, `devices:manage` |
+| `admin` | `pairings:create`, `devices:manage`, `server:stop` |
 | `agent` | `publish`, `take`, `reply` |
 | `reviewer` | `read`, `comment`, `send`, `pairings:create`, `devices:manage` |
 
-`Scope` is the enum of all eight scope strings; `SCOPES_BY_KIND` is typed against it.
+`Scope` is the enum of all nine scope strings; `SCOPES_BY_KIND` is typed against it.
 
 Only the reviewer session creates user comments, Sends and approvals. An agent reply cannot resolve
 a thread or count as a Send. Every query filters the authenticated principal's `owner_id`.
@@ -78,6 +78,7 @@ a machine token reaches only reviews from its own instance.
 | Method | Path | Who | Purpose |
 | --- | --- | --- | --- |
 | GET | `/api/v1/capabilities` | Anyone | API version, app version and supported features. |
+| POST | `/api/v1/server/stop` | Admin | Stop the server; return `ServerStopping = { stopping: true }` (202). No body or an empty `ServerStopRequest = {}`. |
 | POST | `/api/v1/session` | Browser, no existing credential required | Exchange `SessionRequest` for a reviewer session (204); refuses machine pairings. |
 | DELETE | `/api/v1/session` | Reviewer | End the current browser session. |
 | POST | `/api/v1/pairings` | Admin, reviewer | Create from `PairingRequest`; return `PairingCreated` (201). |
@@ -106,6 +107,11 @@ a machine token reaches only reviews from its own instance.
 | POST | `/api/v1/deliveries/:id/confirm` | Agent | Confirm receipt of a claimed delivery. |
 | POST | `/api/v1/comments/:id/reply` | Agent | Answer a comment with an outcome. |
 | GET | `/content/:contentKey/*` | Holder of the key | Read isolated HTML docs and assets from a revision. |
+
+Only an admin bearer with `server:stop` may call `/api/v1/server/stop`. The server sends its
+202 response before shutting down through the same cleanup as SIGTERM and exiting 0. Repeated
+requests while stopping return 202 without starting another shutdown. Capabilities advertises
+`server-stop` only when a stop handler is available; otherwise the route returns `404 not_found`.
 
 ## Schemas
 

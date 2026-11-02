@@ -16,9 +16,12 @@ import { dirname, join, relative, sep } from "node:path";
 import { LIMITS } from "@emend/contract";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { type Io, run } from "../../main.ts";
+import { startServer } from "../../server/serve.ts";
 import * as stateFiles from "../../state/files.ts";
+import { CliError } from "../http.ts";
 import type { ServiceOptions, ServiceResult, ServiceRunner } from "../service/common.ts";
 import { writeService } from "../service/common.ts";
+import { waitForServer as waitForManagedServer } from "../service/takeover.ts";
 
 vi.mock("../service/common.ts", async (original) => {
   const actual = await original<typeof import("../service/common.ts")>();
@@ -44,6 +47,9 @@ let stderr: string[];
 let options: ServiceOptions;
 let io: Io;
 let recorded: ReturnType<typeof vi.fn<ServiceRunner>>;
+let callLog: string[][];
+let stopLocalServer: ReturnType<typeof vi.fn<NonNullable<ServiceOptions["stopLocalServer"]>>>;
+let waitForServer: ReturnType<typeof vi.fn<NonNullable<ServiceOptions["waitForServer"]>>>;
 let elapsed: number;
 let sleep: ReturnType<typeof vi.fn<(ms: number) => Promise<void>>>;
 
@@ -71,6 +77,9 @@ beforeEach(async () => {
   stdout = [];
   stderr = [];
   recorded = vi.fn(async (_file, args) => (args[0] === "print" ? failed : ok));
+  callLog = [];
+  stopLocalServer = vi.fn(async () => undefined);
+  waitForServer = vi.fn(async () => ({ url: "http://127.0.0.1:3636", pid: 12345 }));
   elapsed = 0;
   sleep = vi.fn(async (ms) => {
     elapsed += ms;
@@ -87,7 +96,18 @@ beforeEach(async () => {
     entry: join(home, "emend.mjs"),
     username: "synthetic-user",
     uid: 501,
-    runner: recorded,
+    runner: async (file, args, context) => {
+      callLog.push([file, ...args]);
+      return recorded(file, args, context);
+    },
+    stopLocalServer: async () => {
+      callLog.push(["stopLocalServer"]);
+      return stopLocalServer();
+    },
+    waitForServer: async (ready) => {
+      callLog.push(["waitForServer"]);
+      return waitForServer(ready);
+    },
     cwd,
     now: () => elapsed,
     sleep,
@@ -117,7 +137,7 @@ async function put(path: string, content: string) {
   await writeFile(path, content);
 }
 function calls() {
-  return recorded.mock.calls.map(([file, args]) => [file, ...args]);
+  return callLog;
 }
 function systemctl(...args: string[]) {
   return [join(bin, "systemctl"), "--user", ...args];
@@ -130,6 +150,9 @@ function launchctl(...args: string[]) {
 }
 function resetOutput() {
   recorded.mockClear();
+  stopLocalServer.mockClear();
+  waitForServer.mockClear();
+  callLog.length = 0;
   stdout.length = 0;
   stderr.length = 0;
 }
@@ -156,7 +179,10 @@ WantedBy=default.target
   expect(calls()).toEqual([
     systemctl("daemon-reload"),
     systemctl("enable", "emend"),
-    systemctl("restart", "emend"),
+    systemctl("stop", "emend"),
+    ["stopLocalServer"],
+    systemctl("start", "emend"),
+    ["waitForServer"],
     loginctl(),
   ]);
   expect(stderr).toEqual([]);
@@ -168,9 +194,8 @@ test.each(["deleted unit", "failed uninstall"])(
     let running = "";
     recorded.mockImplementation(async (_file, args) => {
       if (args.includes("disable")) return failed;
-      // systemd start leaves an active process alone; restart always uses the current unit.
-      if (args.includes("restart") || (args.includes("enable") && args.includes("--now") && !running))
-        running = await readFile(unitPath(), "utf8");
+      if (args.includes("stop")) running = "";
+      if (args.includes("start") && !running) running = await readFile(unitPath(), "utf8");
       return ok;
     });
     expect(await invoke("install", "--host", "0.0.0.0")).toBe(0);
@@ -187,7 +212,10 @@ test.each(["deleted unit", "failed uninstall"])(
     expect(calls()).toEqual([
       systemctl("daemon-reload"),
       systemctl("enable", "emend"),
-      systemctl("restart", "emend"),
+      systemctl("stop", "emend"),
+      ["stopLocalServer"],
+      systemctl("start", "emend"),
+      ["waitForServer"],
       loginctl(),
     ]);
     expect(running).toBe(await readFile(unitPath(), "utf8"));
@@ -202,7 +230,8 @@ test("Linux reloads an unchanged unit with no pending record after an interrupte
   recorded.mockImplementation(async (_file, args) => {
     if (args.includes("disable")) return failed;
     if (args.includes("daemon-reload")) loaded = await readFile(unitPath(), "utf8");
-    if (args.includes("restart")) running = loaded;
+    if (args.includes("stop")) running = "";
+    if (args.includes("start") && !running) running = loaded;
     return ok;
   });
   expect(await invoke("install", "--host", "0.0.0.0")).toBe(0);
@@ -247,7 +276,10 @@ test("Linux reloads an unchanged unit with no pending record after an interrupte
   expect(calls()).toEqual([
     systemctl("daemon-reload"),
     systemctl("enable", "emend"),
-    systemctl("restart", "emend"),
+    systemctl("stop", "emend"),
+    ["stopLocalServer"],
+    systemctl("start", "emend"),
+    ["waitForServer"],
     loginctl(),
   ]);
   expect(loaded).toBe(content);
@@ -299,9 +331,46 @@ test("macOS writes the exact plist with port 4000 and XML-escaped paths", async 
 </dict>
 </plist>
 `);
-  expect(calls()).toEqual([launchctl("bootstrap", "gui/501", plistPath())]);
+  expect(calls()).toEqual([["stopLocalServer"], launchctl("bootstrap", "gui/501", plistPath()), ["waitForServer"]]);
   expect((await stat(join(home, "Library/Logs"))).isDirectory()).toBe(true);
   expect(stderr).toEqual([]);
+});
+
+test("a first macOS install stops the detached server without bootout", async () => {
+  options.platform = "darwin";
+  await expect(lstat(plistPath())).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(lstat(pendingPath())).rejects.toMatchObject({ code: "ENOENT" });
+  stopLocalServer.mockResolvedValueOnce("http://127.0.0.1:3636");
+  expect(await invoke("install")).toBe(0);
+  expect(calls()).toEqual([["stopLocalServer"], launchctl("bootstrap", "gui/501", plistPath()), ["waitForServer"]]);
+  expect(stdout).toEqual([
+    "emend: stopped the emend server at http://127.0.0.1:3636, so the service can take over\n",
+    "emend: service installed\n",
+  ]);
+});
+
+test("a failed systemd stop never signals a server or starts the service", async () => {
+  recorded.mockImplementation(async (_file, args) => (args.includes("stop") ? failed : ok));
+  expect(await invoke("install")).toBe(1);
+  expect(calls()).toEqual([systemctl("daemon-reload"), systemctl("enable", "emend"), systemctl("stop", "emend")]);
+  expect(stderr).toEqual(["emend: systemctl --user stop emend: first failure\n"]);
+  expect(stdout).toEqual([]);
+  expect(stopLocalServer).not.toHaveBeenCalled();
+  expect(waitForServer).not.toHaveBeenCalled();
+});
+
+test("a macOS server start timeout escapes the log path", async () => {
+  options.platform = "darwin";
+  home = join(root, "home\u202e");
+  options.home = home;
+  waitForServer.mockResolvedValueOnce(null);
+  expect(await invoke("install")).toBe(1);
+  expect(stderr).toEqual([
+    `emend: the emend service did not start a server; see ${root}/home\\u{202e}/Library/Logs/emend.log.\n`,
+  ]);
+  expect(stdout).toEqual([]);
+  expect((await stat(plistPath())).isFile()).toBe(true);
+  await expect(lstat(pendingPath())).rejects.toMatchObject({ code: "ENOENT" });
 });
 
 test.each([undefined, "relative", "/absolute"])(
@@ -320,6 +389,160 @@ describe.each(["linux", "darwin"])("%s service lifecycle", (platform) => {
     options.platform = platform;
   });
 
+  test.each(["install", "uninstall", "status"])("root cannot run service %s", async (action) => {
+    options.uid = 0;
+    expect(await invoke(action)).toBe(1);
+    expect(stderr).toEqual(["emend: run emend service as the user who runs emend, not as root.\n"]);
+    expect(stdout).toEqual([]);
+    expect(calls()).toEqual([]);
+    await expect(lstat(path())).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  test.each(["matching", "old", "zero"])("confirms only the managed server (pid: %s)", async (kind) => {
+    const server = await startServer({ stateDir: state, port: 0 });
+    const mainPid = kind === "matching" ? process.pid : kind === "old" ? process.pid + 1 : 0;
+    recorded.mockImplementation(async (_file, args) => {
+      if (args.includes("show")) return { ...ok, stdout: `${mainPid}\n` };
+      if (args[0] === "print")
+        return { ...ok, stdout: `target = {\n nested = {\n pid = ${process.pid}\n }\n pid = ${mainPid}\n}\n` };
+      return ok;
+    });
+    waitForServer.mockImplementation((ready) =>
+      waitForManagedServer(state, { ...ready, timeoutMs: 500, now: () => elapsed, sleep }),
+    );
+    try {
+      expect(await invoke("install")).toBe(kind === "matching" ? 0 : 1);
+      const query =
+        platform === "linux"
+          ? systemctl("show", "--property=MainPID", "--value", "emend")
+          : launchctl("print", "gui/501/dev.emend.server");
+      expect(calls()).toContainEqual(query);
+      if (kind === "matching") {
+        expect(stdout).toEqual(["emend: service installed\n"]);
+        expect(stderr).toEqual([]);
+      } else {
+        const log =
+          platform === "linux" ? "run journalctl --user -u emend" : `see ${join(home, "Library/Logs/emend.log")}`;
+        expect(stderr).toEqual([
+          kind === "zero"
+            ? platform === "linux"
+              ? `emend: the emend service did not start a server; ${log} to see why.\n`
+              : `emend: the emend service did not start a server; ${log}.\n`
+            : `emend: the emend service runs, but this command could not confirm its server; ${log}${platform === "linux" ? " to see why" : ""}, or run emend service install again in your own terminal if an agent sandbox runs this command.\n`,
+        ]);
+        expect(stdout).toEqual([]);
+        expect(elapsed).toBe(500);
+        expect(calls().filter((call) => JSON.stringify(call) === JSON.stringify(query))).toHaveLength(3);
+      }
+      expect((await stat(path())).isFile()).toBe(true);
+      await expect(lstat(pendingPath())).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("tailscale readiness waits for the public origin after matching the managed pid", async () => {
+    const server = await startServer({ stateDir: state, port: 0, publicOrigin: "https://review.example.ts.net" });
+    recorded.mockImplementation(async (_file, args) => {
+      if (args.includes("show")) return { ...ok, stdout: `${process.pid}\n` };
+      if (args[0] === "print") return { ...ok, stdout: `target = {\n pid = ${process.pid}\n}\n` };
+      return ok;
+    });
+    sleep.mockImplementation(async (ms) => {
+      elapsed += ms;
+      expect(stdout).toEqual([]);
+      if (elapsed >= 400) server.setPublicOriginReady(true);
+    });
+    waitForServer.mockImplementation((ready) =>
+      waitForManagedServer(state, { ...ready, timeoutMs: 1000, now: () => elapsed, sleep }),
+    );
+    try {
+      expect(await invoke("install", "--tailscale")).toBe(0);
+      expect(elapsed).toBe(400);
+      expect(stdout).toEqual(["emend: service installed\n"]);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("stops the service and detached server before starting and confirming the replacement", async () => {
+    expect(await invoke("install")).toBe(0);
+    resetOutput();
+    stopLocalServer.mockResolvedValueOnce("http://127.0.0.1:3636");
+    waitForServer.mockImplementationOnce(async () => {
+      await expect(lstat(pendingPath())).rejects.toMatchObject({ code: "ENOENT" });
+      expect(stdout).toEqual([
+        "emend: stopped the emend server at http://127.0.0.1:3636, so the service can take over\n",
+      ]);
+      return { url: "http://127.0.0.1:3636", pid: 12345 };
+    });
+    expect(await invoke("install")).toBe(0);
+    expect(calls()).toEqual(
+      platform === "linux"
+        ? [
+            systemctl("daemon-reload"),
+            systemctl("enable", "emend"),
+            systemctl("stop", "emend"),
+            ["stopLocalServer"],
+            systemctl("start", "emend"),
+            ["waitForServer"],
+            loginctl(),
+          ]
+        : [
+            launchctl("bootout", "gui/501/dev.emend.server"),
+            launchctl("print", "gui/501/dev.emend.server"),
+            ["stopLocalServer"],
+            launchctl("bootstrap", "gui/501", path()),
+            ["waitForServer"],
+          ],
+    );
+    expect(stdout).toEqual([
+      "emend: stopped the emend server at http://127.0.0.1:3636, so the service can take over\n",
+      "emend: service installed\n",
+    ]);
+    expect(stderr).toEqual([]);
+  });
+
+  test("a server start timeout keeps the service file and clears the pending record", async () => {
+    waitForServer.mockImplementationOnce(async () => {
+      await expect(lstat(pendingPath())).rejects.toMatchObject({ code: "ENOENT" });
+      return null;
+    });
+    expect(await invoke("install")).toBe(1);
+    expect(stderr).toEqual([
+      platform === "linux"
+        ? "emend: the emend service did not start a server; run journalctl --user -u emend to see why.\n"
+        : `emend: the emend service did not start a server; see ${join(home, "Library/Logs/emend.log")}.\n`,
+    ]);
+    expect(stdout).toEqual([]);
+    expect((await stat(path())).isFile()).toBe(true);
+    await expect(lstat(pendingPath())).rejects.toMatchObject({ code: "ENOENT" });
+    expect(stopLocalServer).toHaveBeenCalledOnce();
+    expect(waitForServer).toHaveBeenCalledOnce();
+    expect(calls()).not.toContainEqual(loginctl());
+  });
+
+  test("a server stop failure prevents service startup", async () => {
+    const message =
+      "the emend server at http://127.0.0.1:3636 did not stop; stop it, then run emend service install again.";
+    stopLocalServer.mockRejectedValueOnce(new CliError(message));
+    expect(await invoke("install")).toBe(1);
+    expect(stderr).toEqual([`emend: ${message}\n`]);
+    expect(stdout).toEqual([]);
+    expect(calls()).not.toContainEqual(systemctl("start", "emend"));
+    expect(calls()).not.toContainEqual(launchctl("bootstrap", "gui/501", path()));
+    expect(waitForServer).not.toHaveBeenCalled();
+    await expect(lstat(pendingPath())).resolves.toBeDefined();
+  });
+
+  test.each(["uninstall", "status"])("%s never stops or waits for a local server", async (action) => {
+    expect(await invoke("install")).toBe(0);
+    resetOutput();
+    expect(await invoke(action)).toBe(0);
+    expect(stopLocalServer).not.toHaveBeenCalled();
+    expect(waitForServer).not.toHaveBeenCalled();
+  });
+
   test("identical install preserves bytes and mtime while restarting the service", async () => {
     expect(await invoke("install", "--port", "4000")).toBe(0);
     const content = await readFile(path());
@@ -331,11 +554,21 @@ describe.each(["linux", "darwin"])("%s service lifecycle", (platform) => {
     expect((await stat(path())).mtimeMs).toBe(before.mtimeMs);
     expect(calls()).toEqual(
       platform === "linux"
-        ? [systemctl("daemon-reload"), systemctl("enable", "emend"), systemctl("restart", "emend"), loginctl()]
+        ? [
+            systemctl("daemon-reload"),
+            systemctl("enable", "emend"),
+            systemctl("stop", "emend"),
+            ["stopLocalServer"],
+            systemctl("start", "emend"),
+            ["waitForServer"],
+            loginctl(),
+          ]
         : [
             launchctl("bootout", "gui/501/dev.emend.server"),
             launchctl("print", "gui/501/dev.emend.server"),
+            ["stopLocalServer"],
             launchctl("bootstrap", "gui/501", path()),
+            ["waitForServer"],
           ],
     );
   });
@@ -350,11 +583,21 @@ describe.each(["linux", "darwin"])("%s service lifecycle", (platform) => {
     expect(content).toContain("192.0.2.1");
     expect(calls()).toEqual(
       platform === "linux"
-        ? [systemctl("daemon-reload"), systemctl("enable", "emend"), systemctl("restart", "emend"), loginctl()]
+        ? [
+            systemctl("daemon-reload"),
+            systemctl("enable", "emend"),
+            systemctl("stop", "emend"),
+            ["stopLocalServer"],
+            systemctl("start", "emend"),
+            ["waitForServer"],
+            loginctl(),
+          ]
         : [
             launchctl("bootout", "gui/501/dev.emend.server"),
             launchctl("print", "gui/501/dev.emend.server"),
+            ["stopLocalServer"],
             launchctl("bootstrap", "gui/501", path()),
+            ["waitForServer"],
           ],
     );
     expect(stderr).toEqual([]);
@@ -469,7 +712,9 @@ test("an identical but unloaded launch agent is bootstrapped without rewriting",
   expect(calls()).toEqual([
     launchctl("bootout", "gui/501/dev.emend.server"),
     launchctl("print", "gui/501/dev.emend.server"),
+    ["stopLocalServer"],
     launchctl("bootstrap", "gui/501", plistPath()),
+    ["waitForServer"],
   ]);
 });
 
@@ -531,7 +776,10 @@ test("a fake systemctl in a relative PATH entry is never run", async () => {
   expect(calls()).toEqual([
     systemctl("daemon-reload"),
     systemctl("enable", "emend"),
-    systemctl("restart", "emend"),
+    systemctl("stop", "emend"),
+    ["stopLocalServer"],
+    systemctl("start", "emend"),
+    ["waitForServer"],
     loginctl(),
   ]);
   expect(recorded.mock.calls[0]).toEqual([
@@ -564,11 +812,21 @@ describe.each(["linux", "darwin"])("%s pending installs", (platform) => {
   const path = () => (platform === "linux" ? unitPath() : plistPath());
   const changedCalls = () =>
     platform === "linux"
-      ? [systemctl("daemon-reload"), systemctl("enable", "emend"), systemctl("restart", "emend"), loginctl()]
+      ? [
+          systemctl("daemon-reload"),
+          systemctl("enable", "emend"),
+          systemctl("stop", "emend"),
+          ["stopLocalServer"],
+          systemctl("start", "emend"),
+          ["waitForServer"],
+          loginctl(),
+        ]
       : [
           launchctl("bootout", "gui/501/dev.emend.server"),
           launchctl("print", "gui/501/dev.emend.server"),
+          ["stopLocalServer"],
           launchctl("bootstrap", "gui/501", path()),
+          ["waitForServer"],
         ];
   beforeEach(() => {
     options.platform = platform;
@@ -577,7 +835,7 @@ describe.each(["linux", "darwin"])("%s pending installs", (platform) => {
   for (const previous of ["absent", "changed"]) {
     const steps =
       platform === "linux"
-        ? ["write", "daemon-reload", "enable", "restart"]
+        ? ["write", "daemon-reload", "enable", "stop", "start"]
         : ["write", ...(previous === "changed" ? ["wait"] : []), "bootstrap"];
     test.each(steps)(`a failed ${previous} install at %s is finished by a retry`, async (step) => {
       if (previous === "changed") expect(await invoke("install")).toBe(0);
@@ -615,11 +873,21 @@ describe.each(["linux", "darwin"])("%s pending installs", (platform) => {
       expect(await invoke("install", "--port", "4000")).toBe(0);
       expect(calls()).toEqual(
         platform === "linux"
-          ? [systemctl("daemon-reload"), systemctl("enable", "emend"), systemctl("restart", "emend"), loginctl()]
+          ? [
+              systemctl("daemon-reload"),
+              systemctl("enable", "emend"),
+              systemctl("stop", "emend"),
+              ["stopLocalServer"],
+              systemctl("start", "emend"),
+              ["waitForServer"],
+              loginctl(),
+            ]
           : [
               launchctl("bootout", "gui/501/dev.emend.server"),
               launchctl("print", "gui/501/dev.emend.server"),
+              ["stopLocalServer"],
               launchctl("bootstrap", "gui/501", path()),
+              ["waitForServer"],
             ],
       );
     });
@@ -654,7 +922,9 @@ test.each([false, true])("launchd waits for disappearance even when bootout fail
   expect(calls()).toEqual([
     launchctl("bootout", "gui/501/dev.emend.server"),
     ...Array.from({ length: 3 }, () => launchctl("print", "gui/501/dev.emend.server")),
+    ["stopLocalServer"],
     launchctl("bootstrap", "gui/501", plistPath()),
+    ["waitForServer"],
   ]);
   expect(sleep.mock.calls).toEqual([[200], [200]]);
   expect(elapsed).toBe(400);
@@ -701,7 +971,7 @@ test.each(["$", '"', "'", "\\"])("macOS still accepts node paths containing %j",
   options.node = join(home, `node${char}`);
   await writeFile(options.node, "synthetic node");
   expect(await invoke("install")).toBe(0);
-  expect(calls()).toEqual([launchctl("bootstrap", "gui/501", plistPath())]);
+  expect(calls()).toEqual([["stopLocalServer"], launchctl("bootstrap", "gui/501", plistPath()), ["waitForServer"]]);
 });
 
 describe.each(["linux", "darwin"])("%s install boundaries", (platform) => {
@@ -776,8 +1046,16 @@ describe.each(["linux", "darwin"])("%s install boundaries", (platform) => {
       expect((await lstat(path())).isFile()).toBe(true);
       expect(calls()).toEqual(
         platform === "linux"
-          ? [systemctl("daemon-reload"), systemctl("enable", "emend"), systemctl("restart", "emend"), loginctl()]
-          : [launchctl("bootstrap", "gui/501", plistPath())],
+          ? [
+              systemctl("daemon-reload"),
+              systemctl("enable", "emend"),
+              systemctl("stop", "emend"),
+              ["stopLocalServer"],
+              systemctl("start", "emend"),
+              ["waitForServer"],
+              loginctl(),
+            ]
+          : [["stopLocalServer"], launchctl("bootstrap", "gui/501", plistPath()), ["waitForServer"]],
       );
     });
   }
@@ -806,8 +1084,16 @@ describe.each(["linux", "darwin"])("%s install boundaries", (platform) => {
     expect((await lstat(path())).isFile()).toBe(true);
     expect(calls()).toEqual(
       platform === "linux"
-        ? [systemctl("daemon-reload"), systemctl("enable", "emend"), systemctl("restart", "emend"), loginctl()]
-        : [launchctl("bootstrap", "gui/501", plistPath())],
+        ? [
+            systemctl("daemon-reload"),
+            systemctl("enable", "emend"),
+            systemctl("stop", "emend"),
+            ["stopLocalServer"],
+            systemctl("start", "emend"),
+            ["waitForServer"],
+            loginctl(),
+          ]
+        : [["stopLocalServer"], launchctl("bootstrap", "gui/501", plistPath()), ["waitForServer"]],
     );
   });
 
@@ -895,7 +1181,7 @@ describe.each(["linux", "darwin"])("%s saved service options", (platform) => {
       expect(await readFile(path(), "utf8")).toBe(content);
       expect(await saved()).toEqual(flags);
       expect(calls()).toContainEqual(
-        platform === "linux" ? systemctl("restart", "emend") : launchctl("bootstrap", "gui/501", path()),
+        platform === "linux" ? systemctl("start", "emend") : launchctl("bootstrap", "gui/501", path()),
       );
     },
   );
@@ -944,10 +1230,10 @@ describe.each(["linux", "darwin"])("%s saved service options", (platform) => {
     expect(stdout).toEqual(["emend: service installed\n"]);
   });
 
-  test("an older install announces defaults before a failed restart or bootstrap", async () => {
+  test("an older install announces defaults before a failed start or bootstrap", async () => {
     expect(await invoke("install", "--tailscale")).toBe(0);
     await unlink(optionsPath());
-    const start = platform === "linux" ? "restart" : "bootstrap";
+    const start = platform === "linux" ? "start" : "bootstrap";
     let outputAtStart: string[] | undefined;
     recorded.mockImplementation(async (_file, args) => {
       if (args.includes(start)) {
@@ -1292,7 +1578,7 @@ describe.each(["linux", "darwin"])("%s saved service options", (platform) => {
   );
 
   for (const installed of [false, true]) {
-    test.each(["pending", "unit", "options", "restart"])(
+    test.each(["pending", "unit", "options", "start"])(
       `a failed ${installed ? "repeat" : "first"} install at %s recovers the options for the unit on disk`,
       async (step) => {
         if (installed) expect(await invoke("install", "--tailscale")).toBe(0);
@@ -1304,9 +1590,9 @@ describe.each(["linux", "darwin"])("%s saved service options", (platform) => {
           return writer(file, ...args);
         });
         if (step === "unit") vi.mocked(writeService).mockRejectedValueOnce(new Error("synthetic unit write failure"));
-        if (step === "restart") {
+        if (step === "start") {
           recorded.mockImplementation(async (_file, args) =>
-            args[0] === "print" || args.includes(platform === "linux" ? "enable" : "bootstrap") ? failed : ok,
+            args[0] === "print" || args.includes(platform === "linux" ? "start" : "bootstrap") ? failed : ok,
           );
         }
         try {
@@ -1314,7 +1600,7 @@ describe.each(["linux", "darwin"])("%s saved service options", (platform) => {
         } finally {
           spy.mockRestore();
         }
-        const renamed = step === "options" || step === "restart";
+        const renamed = step === "options" || step === "start";
         const expected = renamed ? ["--port", "4000"] : installed ? ["--tailscale"] : [];
         if (renamed) expect(await readFile(path(), "utf8")).toContain("4000");
         if (step !== "pending") expect((await stat(pendingPath())).mode & 0o777).toBe(0o600);

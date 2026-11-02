@@ -30,6 +30,7 @@ import { pairingRoutes } from "./routes/pairings.ts";
 import { publishRoutes } from "./routes/publish.ts";
 import { reviewRoutes } from "./routes/reviews.ts";
 import { sendRoutes } from "./routes/sends.ts";
+import { serverRoutes } from "./routes/server.ts";
 import { sessionRoutes } from "./routes/session.ts";
 import { threadRoutes } from "./routes/threads.ts";
 
@@ -40,6 +41,7 @@ export interface AppDeps {
   now: () => number;
   publishExecutor?: Executor;
   events?: ReviewEvents;
+  onStopRequest?: () => void;
   config: {
     serverKey: string;
     allowedHosts: string[];
@@ -51,6 +53,7 @@ export interface AppDeps {
 }
 export const ENDPOINTS = [
   { method: "GET", path: "/api/v1/capabilities", scope: "public" },
+  { method: "POST", path: "/api/v1/server/stop", scope: "server:stop" },
   { method: "POST", path: "/api/v1/session", scope: "public" },
   { method: "DELETE", path: "/api/v1/session", scope: "read" },
   { method: "POST", path: "/api/v1/pairings", scope: "pairings:create" },
@@ -135,7 +138,8 @@ export function createApp(deps: AppDeps) {
     if (json) await limitJsonBody(c, limit);
     await next();
   });
-  capabilitiesRoutes(app, deps.config.serverKey);
+  capabilitiesRoutes(app, deps.config.serverKey, deps.onStopRequest !== undefined);
+  serverRoutes(app, deps);
   pairingRoutes(app, deps);
   deviceRoutes(app, deps);
   const redemptions = pairingRedemptions(deps.now);
