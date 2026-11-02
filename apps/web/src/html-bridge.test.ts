@@ -21,7 +21,10 @@ function bridge(html: string, customHighlights = true) {
   const script = runInNewContext(`${source.replace("export const", "const")}; BRIDGE_SOURCE;`);
   const highlights = new Map();
   class Highlight {
-    constructor(public range: Range) {}
+    range: Range;
+    constructor(range: Range) {
+      this.range = range;
+    }
   }
   const replaceSync = vi.spyOn(window.CSSStyleSheet.prototype, "replaceSync");
   runInNewContext(script, {

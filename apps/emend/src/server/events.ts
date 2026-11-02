@@ -9,7 +9,10 @@ export class ReviewEvents {
   private waiting = new Map<string, Waiting>();
   private streams = new Map<string, number>();
   private waitingByOwner = new Map<string, number>();
-  constructor(private now: () => number) {}
+  private now: () => number;
+  constructor(now: () => number) {
+    this.now = now;
+  }
 
   subscribe(reviewId: string, listener: Listener) {
     let listeners = this.listeners.get(reviewId);

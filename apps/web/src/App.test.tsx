@@ -58,8 +58,10 @@ const revision = {
 class Events extends EventTarget {
   static opened: Events[] = [];
   close = vi.fn();
-  constructor(public url: string) {
+  url: string;
+  constructor(url: string) {
     super();
+    this.url = url;
     Events.opened.push(this);
   }
   emit(type: string, data: object) {

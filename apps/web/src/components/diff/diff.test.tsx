@@ -110,10 +110,15 @@ beforeEach(() => {
   vi.stubGlobal(
     "IntersectionObserver",
     class {
+      private callback: (entries: Partial<IntersectionObserverEntry>[]) => void;
+      private options?: IntersectionObserverInit;
       constructor(
-        private callback: (entries: Partial<IntersectionObserverEntry>[]) => void,
-        private options?: IntersectionObserverInit,
-      ) {}
+        callback: (entries: Partial<IntersectionObserverEntry>[]) => void,
+        options?: IntersectionObserverInit,
+      ) {
+        this.callback = callback;
+        this.options = options;
+      }
       observe(element: Element) {
         observers.push({ element, options: this.options, callback: this.callback });
       }

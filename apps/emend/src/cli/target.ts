@@ -69,11 +69,10 @@ export class AttachmentChangedError extends CliError {
 }
 
 export class AttachmentCredentialError extends CliError {
-  constructor(
-    readonly attachment: Attachment,
-    error: unknown,
-  ) {
+  readonly attachment: Attachment;
+  constructor(attachment: Attachment, error: unknown) {
     super(error instanceof CliError ? error.message : "Could not read the emend credential.");
+    this.attachment = attachment;
   }
 }
 
