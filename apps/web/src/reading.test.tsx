@@ -6,6 +6,7 @@ import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } fr
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { BlockReader } from "./components/reading/BlockReader.tsx";
 import { DocView } from "./components/reading/DocView.tsx";
 import { Writeup } from "./components/reading/Writeup.tsx";
 import { SendBar } from "./components/send/SendBar.tsx";
@@ -38,6 +39,71 @@ function required<T>(value: T | undefined | null): T {
   ok(value != null);
   return value;
 }
+test.each(["mouseup", "keyup"])("collapsing a selection on %s retires its comment prompt", (event) => {
+  const { container } = mount(
+    <BlockReader
+      reviewId={id}
+      revision={1}
+      changedBlocks={[]}
+      threads={[]}
+      groups={[{ key: "overview", blocks: [block] }]}
+    />,
+  );
+  const paragraph = required(container.querySelector("[data-block-id] p"));
+  const text = required(paragraph.firstChild);
+  const range = document.createRange();
+  range.setStart(text, 0);
+  range.setEnd(text, 4);
+  const selection = required(window.getSelection());
+  selection.removeAllRanges();
+  selection.addRange(range);
+  fireEvent.mouseUp(paragraph);
+  expect(screen.getByRole("button", { name: "Comment on selection" })).toBeTruthy();
+  selection.collapse(text, 0);
+  fireEvent(paragraph, new Event(event, { bubbles: true }));
+  expect(screen.queryByRole("button", { name: "Comment on selection" })).toBeNull();
+  expect(screen.queryByRole("textbox", { name: "Comment" })).toBeNull();
+  expect(fetchMock).not.toHaveBeenCalled();
+  selection.removeAllRanges();
+});
+test.each(["mouseup", "keyup"])(
+  "fix1 the selection prompt keeps its original target through its own %s",
+  async (event) => {
+    const { container } = mount(
+      <BlockReader
+        reviewId={id}
+        revision={1}
+        changedBlocks={[]}
+        threads={[]}
+        groups={[{ key: "overview", blocks: [block] }]}
+      />,
+    );
+    const paragraph = required(container.querySelector("[data-block-id] p"));
+    const text = required(paragraph.firstChild);
+    const range = document.createRange();
+    range.setStart(text, 1);
+    range.setEnd(text, 3);
+    const selection = required(window.getSelection());
+    selection.removeAllRanges();
+    selection.addRange(range);
+    fireEvent.mouseUp(paragraph);
+    const prompt = screen.getByRole("button", { name: "Comment on selection" });
+    selection.collapse(text, 0);
+    fireEvent(prompt, new Event(event, { bubbles: true }));
+    expect(prompt.isConnected).toBe(true);
+    fireEvent.click(prompt);
+    const input = screen.getByRole("textbox", { name: "Comment" });
+    fireEvent.change(input, { target: { value: "The selected letters" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save comment" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    expect(JSON.parse(fetchMock.mock.calls[0]?.[1]?.body).target).toMatchObject({
+      kind: "writeup-span",
+      blockId: block.id,
+      quote: "ee",
+    });
+    selection.removeAllRanges();
+  },
+);
 let client: QueryClient;
 let fetchMock: ReturnType<typeof vi.fn>;
 function mount(ui: ReactNode) {
@@ -157,7 +223,7 @@ test.each([false, true])(
     if (recovers) setItem.mockImplementationOnce(quotaExceeded);
     else setItem.mockImplementation(quotaExceeded);
     fireEvent.change(input, { target: { value: "Second" } });
-    expect(localStorage.getItem(key)).toBe("First");
+    expect(localStorage.getItem(key)).toBeNull();
     expect(loadDraft(key)).toBe("Second");
     setItem.mockClear();
     await act(async () => finish());
@@ -166,7 +232,7 @@ test.each([false, true])(
     expect(input.value).toBe("Second");
     expect(saved).not.toHaveBeenCalled();
     expect(setItem).toHaveBeenCalledExactlyOnceWith(key, "Second");
-    expect(localStorage.getItem(key)).toBe(recovers ? "Second" : "First");
+    expect(localStorage.getItem(key)).toBe(recovers ? "Second" : null);
     expect((screen.getByRole("button", { name: "Save comment" }) as HTMLButtonElement).disabled).toBe(false);
   },
 );
@@ -271,6 +337,7 @@ test("thread edits and deletes only unsent comments, replies, resolves and reope
     ),
   );
   fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+  fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete" }));
   await waitFor(() =>
     expect(fetchMock).toHaveBeenCalledWith(`/api/v1/comments/${id}`, expect.objectContaining({ method: "DELETE" })),
   );

@@ -92,7 +92,7 @@ export function ReviewRow({ review, now, onOpen }: { review: InboxItem; now: num
         <Link
           to="/r/$reviewId"
           params={{ reviewId: review.id }}
-          search={{ tab: "writeup" }}
+          search={{ rev: review.newestRevision }}
           activeOptions={{ includeSearch: false }}
           activeProps={{ "aria-current": "page" }}
           onClick={(event) => {

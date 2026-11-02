@@ -225,9 +225,132 @@ test("editing changes the target prefix and save label, and Cancel discards the 
   expect(screen.getByText("Edit · Writeup · Overview")).toBeTruthy();
   expect(screen.getByRole("button", { name: "Save changes" })).toBeTruthy();
   fireEvent.change(input, { target: { value: "An edit" } });
-  fireEvent.keyDown(input, { key: "Escape" });
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   expect(hasDraft(editDraftKey(id, id))).toBe(false);
   expect(screen.queryByRole("textbox")).toBeNull();
+});
+test.each([
+  { phone: false, action: "Escape" },
+  { phone: true, action: "Escape" },
+  { phone: true, action: "Close" },
+  { phone: true, action: "outside" },
+])("dismissing an edit with $action preserves its draft (phone $phone)", async ({ phone, action }) => {
+  width = phone ? 390 : 1280;
+  mount(card({ ...base, comments: base.comments.map((comment) => ({ ...comment, sent: false, sentOn: null })) }));
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  const input = screen.getByRole("textbox", { name: "Edit comment" });
+  fireEvent.change(input, { target: { value: "Keep this edited text" } });
+  if (action === "Escape") fireEvent.keyDown(input, { key: "Escape" });
+  else if (action === "Close") fireEvent.click(screen.getByRole("button", { name: "Close" }));
+  else {
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+    const overlay = document.querySelector(".bg-overlay");
+    if (!overlay) throw new Error("Missing sheet overlay");
+    fireEvent.pointerDown(overlay, { button: 0, pointerType: "mouse" });
+    fireEvent.pointerUp(overlay, { button: 0, pointerType: "mouse" });
+    fireEvent.click(overlay);
+  }
+  await waitFor(() => expect(screen.queryByRole("textbox")).toBeNull());
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(loadDraft(editDraftKey(id, id))).toBe("Keep this edited text");
+  expect(fetchMock).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  expect(screen.getByRole<HTMLTextAreaElement>("textbox", { name: "Edit comment" }).value).toBe(
+    "Keep this edited text",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  await waitFor(() => expect(screen.queryByRole("textbox")).toBeNull());
+  expect(hasDraft(editDraftKey(id, id))).toBe(false);
+});
+test.each([
+  { phone: false, action: "Escape" },
+  { phone: true, action: "Escape" },
+  { phone: true, action: "Close" },
+  { phone: true, action: "outside" },
+])("fix1 dismissing an unchanged edit with $action leaves no draft (phone $phone)", async ({ phone, action }) => {
+  width = phone ? 390 : 1280;
+  mount(card({ ...base, comments: base.comments.map((comment) => ({ ...comment, sent: false, sentOn: null })) }));
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  const input = screen.getByRole("textbox", { name: "Edit comment" });
+  expect(hasDraft(editDraftKey(id, id))).toBe(true);
+  if (action === "Escape") fireEvent.keyDown(input, { key: "Escape" });
+  else if (action === "Close") fireEvent.click(screen.getByRole("button", { name: "Close" }));
+  else {
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+    const overlay = document.querySelector(".bg-overlay");
+    if (!overlay) throw new Error("Missing sheet overlay");
+    fireEvent.pointerDown(overlay, { button: 0, pointerType: "mouse" });
+    fireEvent.pointerUp(overlay, { button: 0, pointerType: "mouse" });
+    fireEvent.click(overlay);
+  }
+  await waitFor(() => expect(screen.queryByRole("textbox")).toBeNull());
+  expect(hasDraft(editDraftKey(id, id))).toBe(false);
+  expect(localStorage.getItem(editDraftKey(id, id))).toBeNull();
+  expect(fetchMock).not.toHaveBeenCalled();
+});
+test("fix1 dismissal compares an edit with the comment's current body", () => {
+  const unsent = { ...base, comments: base.comments.map((comment) => ({ ...comment, sent: false, sentOn: null })) };
+  const view = mount(card(unsent));
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  const input = screen.getByRole("textbox", { name: "Edit comment" });
+  fireEvent.change(input, { target: { value: "Updated body" } });
+  view.rerender(
+    <QueryClientProvider client={client}>
+      {card({ ...unsent, comments: unsent.comments.map((comment) => ({ ...comment, body: "Updated body" })) })}
+    </QueryClientProvider>,
+  );
+  fireEvent.keyDown(input, { key: "Escape" });
+  expect(hasDraft(editDraftKey(id, id))).toBe(false);
+});
+test("Delete requires the dialog's danger action; Cancel and Escape do not delete", async () => {
+  mount(card({ ...base, comments: base.comments.map((comment) => ({ ...comment, sent: false, sentOn: null })) }));
+  for (const dismiss of ["Cancel", "Escape"]) {
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    const dialog = screen.getByRole("alertdialog", { name: "Delete this comment?" });
+    expect(within(dialog).getByText("It has not been sent yet. This cannot be undone.")).toBeTruthy();
+    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(fetchMock).not.toHaveBeenCalled();
+    if (dismiss === "Cancel") fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    else fireEvent.keyDown(dialog, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(fetchMock).not.toHaveBeenCalled();
+  }
+  fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+  const confirm = within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete" });
+  expect(confirm.className).toContain("text-danger-fg");
+  fireEvent.click(confirm);
+  await waitFor(() =>
+    expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
+      `/api/v1/comments/${id}`,
+      expect.objectContaining({ method: "DELETE" }),
+    ),
+  );
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+});
+test("dismissing an edit closes both copies and an explicit claim resumes its text", async () => {
+  const unsent = { ...base, comments: base.comments.map((comment) => ({ ...comment, sent: false, sentOn: null })) };
+  mount(
+    <>
+      <section aria-label="Reading copy">{card(unsent)}</section>
+      <section aria-label="Comments copy">
+        <ThreadCard reviewId={id} revision={2} thread={unsent} changedBlocks={[]} surface="comments" />
+      </section>
+    </>,
+  );
+  const reading = within(screen.getByRole("region", { name: "Reading copy" }));
+  fireEvent.click(reading.getByRole("button", { name: "Edit" }));
+  const input = screen.getByRole("textbox", { name: "Edit comment" });
+  fireEvent.change(input, { target: { value: "Shared unsaved edit" } });
+  fireEvent.keyDown(input, { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("textbox")).toBeNull());
+  expect(loadDraft(editDraftKey(id, id))).toBe("Shared unsaved edit");
+  act(() => claimDraft(editDraftKey(id, id), "comments"));
+  const resumed = within(screen.getByRole("region", { name: "Comments copy" })).getByRole<HTMLTextAreaElement>(
+    "textbox",
+    { name: "Edit comment" },
+  );
+  expect(resumed.value).toBe("Shared unsaved edit");
+  expect(screen.getAllByRole("textbox")).toHaveLength(1);
 });
 function PhoneComposer() {
   const [open, setOpen] = useState(true);

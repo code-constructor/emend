@@ -174,6 +174,7 @@ export function HtmlDocFrame({
         <div key={thread.id} className="space-y-2">
           <Button
             onClick={() => {
+              root.current?.scrollIntoView?.({ block: "start" });
               if (ready) post({ type: "emend:scroll", threadId: thread.id });
               else if (!gone.current) setShow({ threadId: thread.id, intent: {} });
             }}

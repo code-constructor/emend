@@ -15,7 +15,7 @@ import {
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { mutationMessage, useReviewMutation } from "../../api/mutations.ts";
 import { trackCommentCard } from "../../lib/comment-highlights.ts";
-import { claimDraft, useDraftClaim, useReplyComposer } from "../../lib/composer-owner.ts";
+import { claimDraft, useDraftClaim, useEditComposer, useReplyComposer } from "../../lib/composer-owner.ts";
 import {
   clearDraft,
   draftKey,
@@ -32,6 +32,7 @@ import { ChangedMarker } from "../status/ChangedMarker.tsx";
 import { OutcomeBadge } from "../status/OutcomeBadge.tsx";
 import { shownThreadState, ThreadStateBadge } from "../status/ThreadStateBadge.tsx";
 import { Button } from "../ui/Button.tsx";
+import { Dialog } from "../ui/Dialog.tsx";
 import { Icon } from "../ui/Icon.tsx";
 import { IconButton } from "../ui/IconButton.tsx";
 import { Composer } from "./Composer.tsx";
@@ -271,7 +272,10 @@ function Comment({
   comment: ThreadView["comments"][number];
 } & Pick<ThreadProps, "reviewId" | "revision" | "thread" | "topics" | "surface">) {
   const key = editDraftKey(reviewId, comment.id);
-  const editing = useSyncExternalStore(subscribeDrafts, () => hasDraft(key));
+  const draftExists = useSyncExternalStore(subscribeDrafts, () => hasDraft(key));
+  const { open: editOpen, close: closeEdit } = useEditComposer(key);
+  const editing = draftExists && editOpen;
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const editButton = useThreadActionFocus(reviewId, thread.id, surface, comment.id, editing);
   const mutation = useReviewMutation(reviewId, key);
   const agent = comment.author === "agent";
@@ -294,7 +298,7 @@ function Comment({
                 size="sm"
                 disabled={mutation.isPending}
                 onClick={() => {
-                  saveDraft(key, comment.body);
+                  if (!hasDraft(key)) saveDraft(key, comment.body);
                   claimDraft(key, surface);
                 }}
               />
@@ -304,13 +308,45 @@ function Comment({
               icon={Trash2}
               size="sm"
               disabled={mutation.isPending}
-              onClick={() =>
-                mutation.mutate(
-                  { path: `/api/v1/comments/${encodeURIComponent(comment.id)}`, method: "DELETE" },
-                  { onSuccess: () => clearDraft(key) },
-                )
-              }
+              onClick={() => setDeleteOpen(true)}
             />
+            <Dialog
+              open={deleteOpen}
+              onOpenChange={(open) => {
+                if (!mutation.isPending) setDeleteOpen(open);
+              }}
+              title="Delete this comment?"
+              description="It has not been sent yet. This cannot be undone."
+              actions={
+                <>
+                  <Button data-autofocus disabled={mutation.isPending} onClick={() => setDeleteOpen(false)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    variant="danger"
+                    disabled={mutation.isPending}
+                    onClick={() =>
+                      mutation.mutate(
+                        {
+                          path: `/api/v1/comments/${encodeURIComponent(comment.id)}`,
+                          method: "DELETE",
+                          deleteDraft: key,
+                        },
+                        {
+                          onSuccess: () => {
+                            setDeleteOpen(false);
+                          },
+                        },
+                      )
+                    }
+                  >
+                    Delete
+                  </Button>
+                </>
+              }
+            >
+              {mutation.error && <p role="alert">{mutationMessage(mutation.error)}</p>}
+            </Dialog>
           </span>
         )}
       </header>
@@ -323,13 +359,20 @@ function Comment({
             target={thread.target}
             topics={topics}
             commentId={comment.id}
-            onCancel={() => clearDraft(key)}
+            onCancel={() => {
+              clearDraft(key);
+              closeEdit();
+            }}
+            onDismiss={() => {
+              if (loadDraft(key) === comment.body) clearDraft(key);
+              closeEdit();
+            }}
             returnFocus={editButton.returnFocus}
           />
         ) : (
           <p className="em-comment__body">{comment.body}</p>
         )}
-        {mutation.error && <p role="alert">{mutationMessage(mutation.error)}</p>}
+        {mutation.error && !deleteOpen && <p role="alert">{mutationMessage(mutation.error)}</p>}
       </div>
     </li>
   );

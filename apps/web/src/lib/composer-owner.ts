@@ -13,6 +13,7 @@ type Entry = {
   handoff?: Claim;
 };
 const entries = new Map<string, Entry>();
+const edits = new Map<string, { dismissed: boolean; cards: Set<string> }>();
 const listeners = new Set<() => void>();
 let version = 0;
 function notify() {
@@ -66,6 +67,8 @@ function onFocusIntent(event: FocusEvent) {
 }
 /** An intent may arrive before its surface mounts (navigation or a lazy pane). */
 export function claimDraft(key: string, surface: string) {
+  const edit = edits.get(key);
+  if (edit) edit.dismissed = false;
   updatePendingFocus();
   cancelHandoffs();
   const value = entry(key);
@@ -119,6 +122,28 @@ export function useReplyComposer(key: string) {
     };
   }, [key, id]);
   return { open, close: () => closeReply(key) };
+}
+/** Dismissing an edit hides every copy without changing its draft or ownership handoff. */
+export function useEditComposer(key: string) {
+  const id = useId();
+  useSyncExternalStore(subscribe, snapshot, snapshot);
+  useLayoutEffect(() => {
+    const edit = edits.get(key) ?? { dismissed: false, cards: new Set<string>() };
+    edits.set(key, edit);
+    edit.cards.add(id);
+    return () => {
+      edit.cards.delete(id);
+      if (!edit.cards.size) edits.delete(key);
+    };
+  }, [key, id]);
+  return {
+    open: !edits.get(key)?.dismissed,
+    close: () => {
+      const edit = edits.get(key);
+      if (edit) edit.dismissed = true;
+      notify();
+    },
+  };
 }
 /** Closed cards must see intents even before they have mounted an editor. */
 export function useDraftClaim(keys: string | string[], surface: string) {

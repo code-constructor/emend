@@ -50,6 +50,7 @@ export function BlockReader({
 }) {
   const headingBase = useId();
   const root = useRef<HTMLDivElement>(null);
+  const selectionPrompt = useRef<HTMLDivElement>(null);
   const highlights = useRef<ReturnType<typeof registerCommentRanges>>(undefined);
   const opener = useRef<HTMLElement | null>(null);
   const [target, setTarget] = useState<Target | null>(null);
@@ -124,10 +125,15 @@ export function BlockReader({
   // Apply the current intent to new registrations too, without remapping text.
   useLayoutEffect(() => highlights.current?.setActiveThread(activeThreadId));
   useEffect(() => {
-    const capture = () => {
+    const capture = (event: Event) => {
       if (!root.current || composing) return;
+      if (event.target instanceof Node && selectionPrompt.current?.contains(event.target)) return;
       const selection = window.getSelection();
-      if (!selection || selection.isCollapsed) return;
+      if (!selection || selection.isCollapsed) {
+        setTarget(null);
+        setError("");
+        return;
+      }
       const anchor = selectionToAnchor(selection, root.current);
       if ("error" in anchor) {
         setTarget(null);
@@ -231,7 +237,10 @@ export function BlockReader({
         </section>
       ))}
       {!composing && (error || target) && (
-        <div className="sticky bottom-0 space-y-3 rounded-lg border border-line-2 bg-raised p-3 shadow-2">
+        <div
+          ref={selectionPrompt}
+          className="sticky bottom-0 space-y-3 rounded-lg border border-line-2 bg-raised p-3 shadow-2"
+        >
           {error && <p role="status">{error}</p>}
           {target && (
             <Button variant="primary" size="sm" icon={TextSelect} onClick={() => openComposer(target)}>

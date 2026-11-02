@@ -25,7 +25,7 @@ export function InboxRail({ onShow }: { onShow: () => void }) {
                   <Link
                     to="/r/$reviewId"
                     params={{ reviewId: review.id }}
-                    search={{ tab: "writeup" }}
+                    search={{ rev: review.newestRevision }}
                     aria-label={`${needsAttention(review) ? "Needs you: " : ""}${review.title}`}
                     activeOptions={{ includeSearch: false }}
                     activeProps={{ "aria-current": "page" }}

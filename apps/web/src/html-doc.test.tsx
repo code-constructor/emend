@@ -188,6 +188,7 @@ test("only this frame proposes anchors; composer freezes the quote and only revi
   expect(frame.isConnected).toBe(true);
 });
 test("ready and changed threads post only placed anchors for this doc; Show in doc scrolls", () => {
+  const outerScroll = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => {});
   const other = {
     ...thread,
     id: "22222222-2222-4222-8222-222222222222",
@@ -208,6 +209,9 @@ test("ready and changed threads post only placed anchors for this doc; Show in d
   expect(JSON.stringify(post.mock.calls)).not.toContain("Private synthetic comment");
   expect(JSON.stringify(post.mock.calls)).not.toContain("state");
   fireEvent.click(screen.getByText("Show in doc"));
+  expect(outerScroll.mock.instances).toEqual([document.getElementById(`html-doc-${path}`)]);
+  expect(outerScroll).toHaveBeenCalledExactlyOnceWith({ block: "start" });
+  expect(outerScroll.mock.invocationCallOrder[0]).toBeLessThan(post.mock.invocationCallOrder.at(-1) ?? 0);
   expect(post).toHaveBeenLastCalledWith({ type: "emend:scroll", threadId: id }, "*");
   update([]);
   expect(post).toHaveBeenLastCalledWith({ type: "emend:highlight", anchors: [] }, "*");

@@ -1068,7 +1068,7 @@ test.each([
   const { history, container } = mount(`/r/${id}?thread=${id}`);
   await waitFor(() => expect(history.location.search).toContain("tab=docs"));
   await waitFor(() =>
-    expect(scroll.mock.instances.some((node) => (node as HTMLElement).id === `thread-${id}`)).toBe(true),
+    expect(scroll.mock.instances.some((node) => (node as HTMLElement).id === "html-doc-seed.html")).toBe(true),
   );
   const link = screen.getByRole(width < 768 ? "link" : "tab", { name: new RegExp(tab) });
   if (width < 768) expect(new URL((link as HTMLAnchorElement).href).searchParams.has("thread")).toBe(false);
@@ -1130,7 +1130,7 @@ test.each([false, true])(
       await waitFor(() => expect(history.location.search).toContain("tab=docs"));
       expect(container.querySelector('iframe[title="seed.html"]')).not.toBeNull();
       await waitFor(() =>
-        expect(scroll.mock.instances.some((node) => (node as HTMLElement).id === `thread-${id}`)).toBe(true),
+        expect(scroll.mock.instances.some((node) => (node as HTMLElement).id === "html-doc-seed.html")).toBe(true),
       );
     }
     expect(document.getElementById(`thread-${id}`)).not.toBeNull();
@@ -1747,7 +1747,7 @@ test("no matches can be cleared and filtering preserves server order without cha
     within(screen.getByRole("list"))
       .getAllByRole("link")
       .map((row) => row.getAttribute("href")),
-  ).toEqual([`/r/${secondItem.id}?tab=writeup`, `/r/${id}?tab=writeup`]);
+  ).toEqual([`/r/${secondItem.id}?rev=${secondItem.newestRevision}`, `/r/${id}?rev=${item.newestRevision}`]);
   expect(history.location.search).toBe("");
 });
 
@@ -2086,7 +2086,7 @@ test.each([
   fireEvent.click(screen.getByRole("button", { name: "Show inbox" }));
   const dialog = await screen.findByRole("dialog", { name: "Inbox" });
   const destination = await within(dialog).findByRole("link", { name: /Another proposal/ });
-  expect(destination.getAttribute("href")).toBe(`/r/${secondItem.id}?tab=writeup`);
+  expect(destination.getAttribute("href")).toBe(`/r/${secondItem.id}?rev=${secondItem.newestRevision}`);
   destination.focus();
   let defaultPrevented = true;
   const onClick = (event: MouseEvent) => {

@@ -2,10 +2,12 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useSyncExternalStore } from "react";
 import {
   beginDraftSave,
+  clearDraft,
   clearDraftIfUnchanged,
   finishDraftSave,
   isDraftSaving,
   subscribeDrafts,
+  trackReviewDraftSave,
 } from "../lib/drafts.ts";
 import { ApiError, change } from "./client.ts";
 
@@ -25,27 +27,34 @@ export function useReviewMutation(reviewId: string, key?: string) {
       method = "POST",
       body,
       draft,
+      deleteDraft,
     }: {
       path: string;
       method?: "POST" | "PATCH" | "DELETE";
       body?: unknown;
       draft?: { key: string; text: string };
+      deleteDraft?: string;
     }) => {
       if (draft && !beginDraftSave(draft.key)) throw new Error("This draft is already saving.");
+      const finishReviewSave = draft || deleteDraft ? trackReviewDraftSave(reviewId) : undefined;
       try {
-        const result = await change(path, method, body);
-        if (draft) clearDraftIfUnchanged(draft.key, draft.text);
+        let result: unknown;
+        try {
+          result = await change(path, method, body);
+          if (draft) clearDraftIfUnchanged(draft.key, draft.text);
+          if (deleteDraft) clearDraft(deleteDraft);
+        } finally {
+          if (draft) finishDraftSave(draft.key);
+        }
+        await Promise.all([
+          client.invalidateQueries({ queryKey: ["revision", reviewId] }),
+          client.invalidateQueries({ queryKey: ["review", reviewId] }),
+          client.invalidateQueries({ queryKey: ["inbox"] }),
+        ]);
         return result;
       } finally {
-        if (draft) finishDraftSave(draft.key);
+        finishReviewSave?.();
       }
-    },
-    onSuccess: async () => {
-      await Promise.all([
-        client.invalidateQueries({ queryKey: ["revision", reviewId] }),
-        client.invalidateQueries({ queryKey: ["review", reviewId] }),
-        client.invalidateQueries({ queryKey: ["inbox"] }),
-      ]);
     },
   });
   return { ...mutation, isPending: pending || mutation.isPending };

@@ -1,8 +1,21 @@
 import { DEFAULT_MODE, type GoMode, LIMITS, MODE_LABELS } from "@emend/contract";
 import { Check, Pencil, Send } from "lucide-react";
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { mutationMessage, useReviewMutation } from "../../api/mutations.ts";
 import { plural } from "../../lib/count.ts";
+import {
+  beginReviewSend,
+  clearDraft,
+  clearDraftIfUnchanged,
+  finishReviewSend,
+  instructionKey,
+  isReviewDraftSaving,
+  isReviewSending,
+  listDrafts,
+  loadDraft,
+  saveDraft,
+  subscribeDrafts,
+} from "../../lib/drafts.ts";
 import { Button } from "../ui/Button.tsx";
 import { inputClass, inputSizes } from "../ui/field.tsx";
 import { Icon } from "../ui/Icon.tsx";
@@ -30,7 +43,12 @@ export function SendBar({
   phone?: boolean;
 }) {
   const [mode, setMode] = useState<GoMode>(DEFAULT_MODE);
-  const [instruction, setInstruction] = useState("");
+  const storageKey = instructionKey(reviewId);
+  const instruction = useSyncExternalStore(subscribeDrafts, () => loadDraft(storageKey));
+  const unsavedCount = useSyncExternalStore(subscribeDrafts, () => listDrafts(reviewId).length);
+  const commentSaving = useSyncExternalStore(subscribeDrafts, () => isReviewDraftSaving(reviewId));
+  const reviewSending = useSyncExternalStore(subscribeDrafts, () => isReviewSending(reviewId));
+  const shortcut = /Mac|iPhone|iPad|iPod/.test(navigator.platform) ? "⌘↵" : "Ctrl ↵";
   const [sheetOpen, setSheetOpen] = useState(false);
   const mounted = useRef(false);
   useEffect(() => {
@@ -41,6 +59,16 @@ export function SendBar({
   }, []);
   const submitting = useRef(false);
   const desktopInstructions = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const field = desktopInstructions.current;
+    if (!field || phone) return;
+    field.style.height = "";
+    if (!instruction || CSS.supports?.("field-sizing", "content")) return;
+    field.style.height = "auto";
+    const styles = getComputedStyle(field);
+    const border = (Number.parseFloat(styles.borderTopWidth) || 0) + (Number.parseFloat(styles.borderBottomWidth) || 0);
+    field.style.height = `${field.scrollHeight + border}px`;
+  }, [instruction, phone]);
   const focusDesktop = useRef(false);
   const sheetFormRef = useCallback((node: HTMLFormElement | null) => {
     if (!node) return;
@@ -51,6 +79,7 @@ export function SendBar({
     };
   }, []);
   const mutation = useReviewMutation(reviewId);
+  const sending = mutation.isPending || reviewSending;
   useEffect(() => {
     if (phone) {
       focusDesktop.current = false;
@@ -58,11 +87,11 @@ export function SendBar({
     }
     if (sheetOpen) setSheetOpen(false);
     const field = desktopInstructions.current;
-    if (focusDesktop.current && field && !mutation.isPending) {
+    if (focusDesktop.current && field && !sending) {
       focusDesktop.current = false;
       if (document.activeElement === document.body) field.focus();
     }
-  }, [phone, sheetOpen, mutation.isPending]);
+  }, [phone, sheetOpen, sending]);
   const toast = useToast();
   const formId = useId();
   const blocked = useId();
@@ -75,34 +104,50 @@ export function SendBar({
     revision !== undefined && revision < newestRevision
       ? `Revision ${newestRevision} is newer. Switch to it to send or approve.`
       : undefined;
-  const disabled = mutation.isPending || revision === undefined || !!olderReason;
+  const disabled = sending || commentSaving || unsavedCount > 0 || revision === undefined || !!olderReason;
   const approveBlocked = unsentCount > 0 && !approved;
+  const unsavedReason = unsavedCount
+    ? unsavedCount === 1
+      ? "1 unsaved comment: save or discard it first."
+      : `${unsavedCount} unsaved comments: save or discard them first.`
+    : undefined;
   const sendReason =
-    instruction.length > LIMITS.instructionChars
+    unsavedReason ??
+    (instruction.length > LIMITS.instructionChars
       ? `Shorten the instructions to ${LIMITS.instructionChars} characters.`
       : unsentCount === 0 && !instruction.trim()
         ? "Write a comment or an instruction first."
-        : undefined;
+        : undefined);
   const commentCount = `${unsentCount} ${plural(unsentCount, "comment")}`;
   const changeInstruction = (value: string) => {
     if (!submitting.current) mutation.reset();
-    setInstruction(value);
+    if (value) saveDraft(storageKey, value);
+    else clearDraft(storageKey);
   };
   const changeMode = (value: GoMode) => {
     if (!submitting.current) mutation.reset();
     setMode(value);
   };
   const submit = async (kind: "go" | "approve") => {
-    if (submitting.current || disabled || (kind === "go" ? !!sendReason : unsentCount > 0 || approved)) return;
+    if (
+      submitting.current ||
+      disabled ||
+      listDrafts(reviewId).length > 0 ||
+      isReviewDraftSaving(reviewId) ||
+      isReviewSending(reviewId) ||
+      (kind === "go" ? !!sendReason : unsentCount > 0 || approved)
+    )
+      return;
+    if (!beginReviewSend(reviewId)) return;
     submitting.current = true;
     try {
       await mutation.mutateAsync({
         path: `/api/v1/reviews/${encodeURIComponent(reviewId)}/sends`,
         body: kind === "approve" ? { revision, kind } : { revision, kind, mode, instruction },
       });
+      if (kind === "go") clearDraftIfUnchanged(storageKey, instruction);
       if (!mounted.current) return;
       if (kind === "go") {
-        setInstruction("");
         setSheetOpen(false);
         toast.show({
           tone: "success",
@@ -114,6 +159,7 @@ export function SendBar({
       // The mutation retains the error for the inline alert.
     } finally {
       submitting.current = false;
+      finishReviewSend(reviewId);
     }
   };
   const feedback = mutation.error && (
@@ -139,7 +185,12 @@ export function SendBar({
       icon={Check}
       disabled={disabled || unsentCount > 0 || approved}
       aria-describedby={
-        [approveBlocked && blocked, unavailable && revisionStatus, olderReason && olderReasonId]
+        [
+          approveBlocked && blocked,
+          unsavedReason && sendReasonId,
+          unavailable && revisionStatus,
+          olderReason && olderReasonId,
+        ]
           .filter(Boolean)
           .join(" ") || undefined
       }
@@ -197,9 +248,11 @@ export function SendBar({
                   size="lg"
                   icon={Send}
                   disabled={disabled}
-                  loading={mutation.isPending}
+                  loading={sending}
                   aria-describedby={
-                    [unavailable && revisionStatus, olderReason && olderReasonId].filter(Boolean).join(" ") || undefined
+                    [unavailable && revisionStatus, unsavedReason && sendReasonId, olderReason && olderReasonId]
+                      .filter(Boolean)
+                      .join(" ") || undefined
                   }
                 >
                   Send
@@ -227,7 +280,7 @@ export function SendBar({
                     fullWidth
                     icon={Send}
                     disabled={disabled || !!sendReason}
-                    loading={mutation.isPending}
+                    loading={sending}
                     aria-describedby={describedBy}
                   >
                     {unsentCount > 0
@@ -254,13 +307,13 @@ export function SendBar({
                   void submit("go");
                 }}
               >
-                <ModePicker cards value={mode} onChange={changeMode} disabled={mutation.isPending} />
+                <ModePicker cards value={mode} onChange={changeMode} disabled={sending} />
                 <Textarea
                   label="Instructions"
                   placeholder="Optional. Applies to every comment in this Send."
                   rows={2}
                   maxLength={LIMITS.instructionChars}
-                  disabled={mutation.isPending}
+                  disabled={sending}
                   value={instruction}
                   onChange={(event) => changeInstruction(event.target.value)}
                 />
@@ -284,22 +337,33 @@ export function SendBar({
                 ref={desktopInstructions}
                 aria-label="Instructions"
                 rows={1}
-                enterKeyHint="send"
+                enterKeyHint="enter"
                 placeholder="Instructions for the agent (optional)"
-                className={cn(inputClass, inputSizes.sm, "resize-none overflow-y-auto py-[3px] pl-[30px] leading-5")}
+                className={cn(
+                  inputClass,
+                  inputSizes.sm,
+                  "min-h-7 max-h-32 resize-none overflow-y-auto py-[3px] pl-[30px] leading-5",
+                  instruction && "h-auto [field-sizing:content]",
+                )}
                 maxLength={LIMITS.instructionChars}
-                disabled={mutation.isPending}
+                disabled={sending}
                 value={instruction}
                 onChange={(event) => changeInstruction(event.target.value)}
                 onKeyDown={(event) => {
-                  if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || event.keyCode === 229)
+                  if (
+                    event.key !== "Enter" ||
+                    !(event.metaKey || event.ctrlKey) ||
+                    event.nativeEvent.isComposing ||
+                    event.keyCode === 229
+                  )
                     return;
                   event.preventDefault();
                   event.currentTarget.form?.requestSubmit();
                 }}
               />
+              <kbd className="ml-1.5 shrink-0 text-fg-3 [font:var(--type-meta)]">{shortcut}</kbd>
             </div>
-            <ModePicker value={mode} onChange={changeMode} disabled={mutation.isPending} />
+            <ModePicker value={mode} onChange={changeMode} disabled={sending} />
           </div>
           <div className="flex shrink-0 gap-2">
             {approveButton}
@@ -308,7 +372,7 @@ export function SendBar({
               variant="primary"
               icon={Send}
               disabled={disabled || !!sendReason}
-              loading={mutation.isPending}
+              loading={sending}
               aria-describedby={describedBy}
             >
               {unsentCount > 0 ? `Send ${unsentCount}` : "Send"}
@@ -316,22 +380,24 @@ export function SendBar({
           </div>
         </form>
       )}
-      {(!phone || !sheetOpen) && (unavailable || (phone && (approveBlocked || olderReason)) || mutation.error) && (
-        <div className="space-y-1 px-4 pb-2">
-          {unavailable && (
-            <p
-              id={revisionStatus}
-              role={revisionError ? "alert" : "status"}
-              className="m-0 text-fg-3 [font:var(--type-meta)]"
-            >
-              {unavailable}
-            </p>
-          )}
-          {phone && approveBlocked && <p className="m-0 text-fg-3 [font:var(--type-meta)]">{approvalReason}</p>}
-          {phone && olderReason && <p className="m-0 text-fg-3 [font:var(--type-meta)]">{olderMessage}</p>}
-          {feedback}
-        </div>
-      )}
+      {(!phone || !sheetOpen) &&
+        (unavailable || (phone && (approveBlocked || olderReason || unsavedReason)) || mutation.error) && (
+          <div className="space-y-1 px-4 pb-2">
+            {unavailable && (
+              <p
+                id={revisionStatus}
+                role={revisionError ? "alert" : "status"}
+                className="m-0 text-fg-3 [font:var(--type-meta)]"
+              >
+                {unavailable}
+              </p>
+            )}
+            {phone && approveBlocked && <p className="m-0 text-fg-3 [font:var(--type-meta)]">{approvalReason}</p>}
+            {phone && unsavedReason && reason}
+            {phone && olderReason && <p className="m-0 text-fg-3 [font:var(--type-meta)]">{olderMessage}</p>}
+            {feedback}
+          </div>
+        )}
     </section>
   );
 }

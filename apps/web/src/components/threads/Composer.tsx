@@ -30,6 +30,7 @@ export function Composer({
   storageKey,
   onSaved,
   onCancel,
+  onDismiss,
   returnFocus,
   surface = "reading",
   wrap,
@@ -47,6 +48,7 @@ export function Composer({
   placeholder?: boolean;
   onSaved?: () => void;
   onCancel?: () => void;
+  onDismiss?: () => void;
   returnFocus?: (saved: boolean) => HTMLElement | null;
 }) {
   const key = storageKey ?? (commentId ? editDraftKey(reviewId, commentId) : draftKey(reviewId, target, threadId));
@@ -65,7 +67,7 @@ export function Composer({
   const cancel = onCancel
     ? () => {
         saved.current = false;
-        if (!loadDraft(key).trim()) clearDraft(key);
+        if (!commentId && !loadDraft(key).trim()) clearDraft(key);
         onCancel();
       }
     : undefined;
@@ -90,6 +92,7 @@ export function Composer({
       commentId={commentId}
       onSaved={onSaved}
       onCancel={cancel}
+      onDismiss={onDismiss ?? cancel}
     />
   );
   if (phone)
@@ -101,7 +104,7 @@ export function Composer({
         initialFocus={owner.input}
         returnFocus={() => returnFocus?.(saved.current) ?? null}
         onOpenChange={(open) => {
-          if (!open && !isDraftSaving(key)) cancel?.();
+          if (!open && !isDraftSaving(key)) (onDismiss ?? cancel)?.();
         }}
       >
         {editor}
@@ -122,6 +125,7 @@ function DraftComposer({
   commentId,
   onSaved,
   onCancel,
+  onDismiss,
 }: {
   phone: boolean;
   inputRef: RefObject<HTMLTextAreaElement | null>;
@@ -135,6 +139,7 @@ function DraftComposer({
   commentId?: string;
   onSaved?: () => void;
   onCancel?: () => void;
+  onDismiss?: () => void;
 }) {
   const body = useSyncExternalStore(subscribeDrafts, () => loadDraft(storageKey));
   const field = useId();
@@ -146,10 +151,10 @@ function DraftComposer({
     <form
       className="em-composer"
       onKeyDown={(event) => {
-        if (event.key === "Escape" && onCancel && !phone) {
+        if (event.key === "Escape" && onDismiss && !phone) {
           event.preventDefault();
           event.stopPropagation();
-          if (!mutation.isPending && !isDraftSaving(storageKey)) onCancel?.();
+          if (!mutation.isPending && !isDraftSaving(storageKey)) onDismiss();
         }
         if (
           event.key === "Enter" &&

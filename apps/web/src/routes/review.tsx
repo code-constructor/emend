@@ -346,7 +346,8 @@ function LoadedReview({
           doc: placed ? (openDoc?.path ?? location.path) : search.doc,
         };
         const nextHash = `thread-${thread.id}`;
-        intent.elementId = nextHash;
+        intent.elementId = placed ? `html-doc-${location.path}` : nextHash;
+        if (placed) intent.block = "start";
         intent.reply ||= !placed;
         if (placed) setHtmlNavigation({ threadId: thread.id, intent });
         if (search.tab !== next.tab || search.doc !== next.doc || hash !== nextHash) {

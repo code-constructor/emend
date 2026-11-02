@@ -1,8 +1,11 @@
 import { Target } from "@emend/contract";
 
 const prefix = "emend.draft.";
+const instructionPrefix = "emend.instruction.";
 const texts = new Map<string, string | null>();
 const saving = new Set<string>();
+const reviewSaves = new Map<string, number>();
+const sending = new Set<string>();
 const listeners = new Set<() => void>();
 export type SavedDraft = { key: string; target: Target | null; threadId?: string; commentId?: string };
 
@@ -17,7 +20,7 @@ window.addEventListener("storage", (event) => {
     // A localStorage event still supplies its value when storage access is denied.
   }
   if (event.key === null) texts.clear();
-  else if (event.key.startsWith(prefix)) {
+  else if (event.key.startsWith(prefix) || event.key.startsWith(instructionPrefix)) {
     texts.set(event.key, event.newValue);
   } else return;
   notify();
@@ -29,6 +32,9 @@ export function draftKey(reviewId: string, target: Target, threadId?: string) {
 }
 export function editDraftKey(reviewId: string, commentId: string) {
   return `${prefix}${reviewId}.edit.${commentId}`;
+}
+export function instructionKey(reviewId: string) {
+  return `${instructionPrefix}${reviewId}`;
 }
 export function listDrafts(reviewId: string): SavedDraft[] {
   const drafts: SavedDraft[] = [];
@@ -86,7 +92,11 @@ export function saveDraft(key: string, body: string) {
   try {
     localStorage.setItem(key, body);
   } catch {
-    /* Storage is optional. */
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      /* Storage is optional; the latest text remains in memory. */
+    }
   }
   notify();
 }
@@ -121,6 +131,33 @@ export function clearDraftIfUnchanged(key: string, submitted: string) {
 }
 export function isDraftSaving(key: string) {
   return saving.has(key);
+}
+export function isReviewDraftSaving(reviewId: string) {
+  return (reviewSaves.get(reviewId) ?? 0) > 0;
+}
+export function isReviewSending(reviewId: string) {
+  return sending.has(reviewId);
+}
+export function beginReviewSend(reviewId: string) {
+  if (sending.has(reviewId)) return false;
+  sending.add(reviewId);
+  notify();
+  return true;
+}
+export function finishReviewSend(reviewId: string) {
+  sending.delete(reviewId);
+  notify();
+}
+/** Hold Send through the cache refresh, after the editor's own save has finished. */
+export function trackReviewDraftSave(reviewId: string) {
+  reviewSaves.set(reviewId, (reviewSaves.get(reviewId) ?? 0) + 1);
+  notify();
+  return () => {
+    const remaining = (reviewSaves.get(reviewId) ?? 1) - 1;
+    if (remaining) reviewSaves.set(reviewId, remaining);
+    else reviewSaves.delete(reviewId);
+    notify();
+  };
 }
 export function beginDraftSave(key: string) {
   if (saving.has(key)) return false;

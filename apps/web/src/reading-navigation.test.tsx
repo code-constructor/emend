@@ -429,6 +429,102 @@ function prepareFrame(path: string) {
   return { frame, post };
 }
 
+test.each(["row", "rail"])(
+  "inbox %s opens the declared main doc and selects a newly published revision",
+  async (entry) => {
+    docsFixture();
+    currentRevision.main = gardenDoc.path;
+    if (entry === "rail") localStorage.setItem("emend.inbox.collapsed", "true");
+    const { history } = mount();
+    await screen.findByText("Keep growing");
+    const inboxLink = () =>
+      within(screen.getByRole("complementary", { name: "Inbox" })).getByRole("link", { name: /Synthetic garden/ });
+    await waitFor(() => expect(inboxLink()).toBeTruthy());
+    expect(new URL((inboxLink() as HTMLAnchorElement).href).search).toBe("?rev=1");
+    fireEvent.click(inboxLink());
+    await screen.findByRole("heading", { name: gardenDoc.path });
+    expect(screen.getByRole("tab", { name: "Docs 4" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.queryByText("Keep growing")).toBeNull();
+    expect(searchParams(history).get("rev")).toBe("1");
+    currentReview = {
+      ...currentReview,
+      newestRevision: 2,
+      revisions: [...currentReview.revisions, { seq: 2, createdAt: "2026-01-02T00:00:00.000Z" }],
+    };
+    await act(async () => {
+      client.setQueryData(["review", id], currentReview);
+      client.setQueryData(["inbox"], { items: [currentReview] });
+    });
+    expect(searchParams(history).get("rev")).toBe("1");
+    await waitFor(() => expect(new URL((inboxLink() as HTMLAnchorElement).href).search).toBe("?rev=2"));
+    fireEvent.click(inboxLink());
+    await waitFor(() => expect(searchParams(history).get("rev")).toBe("2"));
+    await screen.findByRole("button", { name: "Approve revision 2" });
+    expect(screen.getByRole("heading", { name: gardenDoc.path })).toBeTruthy();
+  },
+);
+
+test.each([1280, 390])(
+  "Show in place brings the HTML frame to the pane top before scrolling its highlight at %s px",
+  async (pixels) => {
+    width = pixels;
+    docsFixture();
+    currentRevision.threads = [
+      {
+        id,
+        createdOn: 1,
+        state: "open",
+        target: { kind: "html-span", path: htmlDoc.path, quote: "seed", prefix: "", suffix: "" },
+        placement: { status: "placed", location: { kind: "html-span", path: htmlDoc.path, start: 0, end: 4 } },
+        comments: [{ id, author: "user", body: "A placed comment", sent: true, sentOn: 1 }],
+      },
+    ];
+    const scroll = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => {});
+    mount("?tab=comments&rev=1");
+    fireEvent.click(await screen.findByRole("link", { name: "Show in place" }));
+    await screen.findByRole("heading", { name: htmlDoc.path });
+    const outer = document.getElementById(`html-doc-${htmlDoc.path}`);
+    await waitFor(() => expect(scroll.mock.instances).toContain(outer));
+    if (!outer) throw new Error("Missing HTML doc container");
+    const index = scroll.mock.instances.indexOf(outer);
+    expect(scroll.mock.calls[index]).toEqual([{ block: "start" }]);
+    expect(scroll.mock.instances).not.toContain(document.getElementById(`thread-${id}`));
+    const { frame, post } = prepareFrame(htmlDoc.path);
+    frameMessage(frame, { type: "emend:ready" });
+    await waitFor(() => expect(post).toHaveBeenCalledWith({ type: "emend:scroll", threadId: id }, "*"));
+    expect(scroll.mock.invocationCallOrder[index]).toBeLessThan(post.mock.invocationCallOrder.at(-1) ?? 0);
+  },
+);
+
+test("instructions survive navigation to another review and back, then clear after Send", async () => {
+  const other = "22222222-2222-4222-8222-222222222222";
+  const original = vi.mocked(fetch).getMockImplementation();
+  vi.mocked(fetch).mockImplementation(async (path, init) => {
+    if (path === `/api/v1/reviews/${other}`) return Response.json({ ...review, id: other, title: "Another garden" });
+    if (path === `/api/v1/reviews/${other}/revisions/1`) return Response.json(revision);
+    if (path === `/api/v1/reviews/${id}/sends`) return new Response(null, { status: 201 });
+    if (!original) throw new Error("Missing synthetic fetch");
+    return original(path, init);
+  });
+  const { history } = mount();
+  const input = () => screen.getByRole<HTMLTextAreaElement>("textbox", { name: "Instructions" });
+  await screen.findByText("Keep growing");
+  fireEvent.change(input(), { target: { value: "Retain the garden instructions" } });
+  await act(async () => history.push(`/r/${other}`));
+  await screen.findByRole("heading", { name: "Another garden" });
+  expect(input().value).toBe("");
+  await act(async () => history.back());
+  await screen.findByRole("heading", { name: "Synthetic garden" });
+  expect(input().value).toBe("Retain the garden instructions");
+  fireEvent.click(screen.getByRole("button", { name: "Send 2" }));
+  await waitFor(() => expect(input().value).toBe(""));
+  await act(async () => history.push(`/r/${other}`));
+  await screen.findByRole("heading", { name: "Another garden" });
+  await act(async () => history.back());
+  await screen.findByRole("heading", { name: "Synthetic garden" });
+  expect(input().value).toBe("");
+});
+
 test("review search keeps contract-valid doc paths and explicitly clears rejected paths", () => {
   expect(validateReviewSearch({ doc: gardenDoc.path }).doc).toBe(gardenDoc.path);
   for (const doc of [undefined, "", 1, ["seed.md"], "../seed.md", "/seed.md", "a\\b.md", "a\0.md", "\ud800"])
@@ -545,7 +641,8 @@ test.each(["block", "heading", "doc", "html-doc", "doc-thread", "html-thread"])(
     const { history } = mount(`?tab=docs#${elementId}`);
     await screen.findByRole("heading", { name: path });
     await waitFor(() => expect(searchParams(history).get("doc")).toBe(path));
-    await waitFor(() => expect(scroll.mock.instances).toContain(document.getElementById(elementId)));
+    const scrollTarget = kind === "html-thread" ? `html-doc-${path}` : elementId;
+    await waitFor(() => expect(scroll.mock.instances).toContain(document.getElementById(scrollTarget)));
     expect(history.length).toBe(1);
     expect(document.activeElement).not.toBe(screen.getByRole("heading", { name: path }));
   },

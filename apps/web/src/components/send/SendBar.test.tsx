@@ -10,6 +10,8 @@ const reviewId = "11111111-1111-4111-8111-111111111111";
 let client: QueryClient;
 let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
 beforeEach(() => {
+  localStorage.clear();
+  window.dispatchEvent(new StorageEvent("storage", { key: null }));
   client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 201 }));
   vi.stubGlobal("fetch", fetchMock);
@@ -70,12 +72,12 @@ test.each([0, 1, 2])("desktop count %s, Send eligibility and visible approval re
   }
 });
 
-test("blank instructions do not enable Send and Enter posts the selected mode and untrimmed instruction", async () => {
+test("blank instructions do not enable Send and Ctrl+Enter posts the selected mode and untrimmed instruction", async () => {
   mount();
   const instructions = input();
   expect(instructions.tagName).toBe("TEXTAREA");
   expect(instructions.getAttribute("rows")).toBe("1");
-  expect(instructions.getAttribute("enterkeyhint")).toBe("send");
+  expect(instructions.getAttribute("enterkeyhint")).toBe("enter");
   expect(instructions.getAttribute("placeholder")).toBe("Instructions for the agent (optional)");
   expect(instructions.maxLength).toBe(LIMITS.instructionChars);
   fireEvent.change(instructions, { target: { value: "  " } });
@@ -91,9 +93,9 @@ test("blank instructions do not enable Send and Enter posts the selected mode an
       .map((option) => option.textContent),
   ).toEqual(Object.values(MODE_LABELS));
   fireEvent.change(mode, { target: { value: "explain" } });
-  fireEvent.keyDown(instructions, { key: "Enter", isComposing: true });
+  fireEvent.keyDown(instructions, { key: "Enter", ctrlKey: true, isComposing: true });
   expect(fetchMock).not.toHaveBeenCalled();
-  fireEvent.keyDown(instructions, { key: "Enter" });
+  fireEvent.keyDown(instructions, { key: "Enter", ctrlKey: true });
   await screen.findByText("Sent your instructions to the agent");
   expectSend({ revision: 3, kind: "go", mode: "explain", instruction: "  Explain the boundary  " });
   expect(screen.getByText(`Revision 3 · ${MODE_LABELS.explain}`)).toBeTruthy();
@@ -285,7 +287,7 @@ test("Safari's IME confirmation Enter with keyCode 229 does not Send", async () 
   const instructions = input();
   fireEvent.compositionStart(instructions);
   fireEvent.change(instructions, { target: { value: "変換" } });
-  fireEvent.keyDown(instructions, { key: "Enter", isComposing: false, keyCode: 229 });
+  fireEvent.keyDown(instructions, { key: "Enter", ctrlKey: true, isComposing: false, keyCode: 229 });
   fireEvent.compositionEnd(instructions);
   fireEvent.keyUp(instructions, { key: "Enter", keyCode: 229 });
   await act(async () => {});
@@ -320,7 +322,7 @@ test.each([
   if (phone && action === "Send") fireEvent.click(button("Send"));
   const activate =
     action === "Enter"
-      ? () => fireEvent.keyDown(input(), { key: "Enter" })
+      ? () => fireEvent.keyDown(input(), { key: "Enter", ctrlKey: true })
       : () =>
           fireEvent.click(
             button(action === "Approve" ? /^Approve/ : phone ? "Send 1 comment on revision 3" : "Send 1"),
@@ -347,7 +349,7 @@ test("a multiline phone draft survives desktop editing and Shift+Enter, and post
   expect(fireEvent.keyDown(input(), { key: "Enter", shiftKey: true })).toBe(true);
   expect(fetchMock).not.toHaveBeenCalled();
   fireEvent.change(input(), { target: { value: "First line\nSecond line\nThird line" } });
-  fireEvent.keyDown(input(), { key: "Enter" });
+  fireEvent.keyDown(input(), { key: "Enter", ctrlKey: true });
   await screen.findByText("Sent your instructions to the agent");
   expectSend({ revision: 3, kind: "go", mode: "fix-clear", instruction: "First line\nSecond line\nThird line" });
 });
@@ -365,7 +367,7 @@ test("a 4100-character phone draft is retained through desktop edits while Send 
   fireEvent.change(input(), { target: { value: draft.slice(1) } });
   expect(input().value).toHaveLength(4099);
   expect(button("Send").disabled).toBe(true);
-  fireEvent.keyDown(input(), { key: "Enter" });
+  fireEvent.keyDown(input(), { key: "Enter", ctrlKey: true });
   expect(fetchMock).not.toHaveBeenCalled();
 });
 
@@ -545,7 +547,7 @@ test.each([
     const instructions = input();
     fireEvent.change(instructions, { target: { value: "Submitted instruction" } });
     act(() => {
-      fireEvent.keyDown(instructions, { key: "Enter" });
+      fireEvent.keyDown(instructions, { key: "Enter", ctrlKey: true });
       if (edit === "instruction") fireEvent.change(instructions, { target: { value: "Edited before settlement" } });
       else fireEvent.change(screen.getByRole("combobox", { name: "Mode" }), { target: { value: "explain" } });
     });
@@ -565,7 +567,7 @@ test.each([
     if (outcome === "success") {
       await screen.findByText("Sent your instructions to the agent");
       expect(screen.getByText(`Revision 3 · ${MODE_LABELS["fix-clear"]}`)).toBeTruthy();
-      expect(instructions.value).toBe("");
+      expect(instructions.value).toBe(edit === "instruction" ? "Edited before settlement" : "");
       expect(screen.queryByRole("alert")).toBeNull();
     } else {
       expect((await screen.findByRole("alert")).textContent).toBe("Synthetic failure");
