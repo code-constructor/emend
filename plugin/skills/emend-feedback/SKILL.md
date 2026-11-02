@@ -6,10 +6,11 @@ description: Handle comments sent from an emend review or resume its feedback lo
 # Handle emend feedback
 
 This skill needs the `emend` command on `PATH`.
+If `emend` is not found, stop and tell the user to install emend. Do not try to install it.
 
 ## Read the hand-off
 
-Before reusing the folder reported with the review id, replace `<folder>` with its literal path.
+**With a folder reported:** before reusing it, replace `<folder>` with its literal path.
 Write the literal path without a trailing slash; a trailing slash makes `find` follow a symlink.
 Run:
 
@@ -20,7 +21,16 @@ find "<folder>" -maxdepth 0 -type d -user "$(id -u)" -perm 700
 Reuse it only when this command prints the folder path. GNU and BSD `find` check its owner and exact mode 0700.
 The `-type d` check excludes symlinks. Keep `review.json`, saved wait output and reply body files in that verified folder.
 If the check fails or prints nothing, tell the user its literal path and that its saved results were not read.
-Then create a new folder and rebuild the manifest from current files and writeup:
+Then create a new folder with the command below.
+
+**With only a review id:** create a new folder, then fetch feedback there using the checks and command below.
+The server delivers a hand-off once. If the user says the reviewer already pressed Send but `emend feedback` returns `pending`,
+ask for the folder of the session that received it; its saved `wait-*.json` holds the comments.
+Check that folder as under "With a folder reported" and with the listing below, read only the
+`wait-*.json` files that listing prints, and skip any whose `deliveryId` is in `handled.txt`.
+Replying needs no manifest. Only a new revision needs one.
+
+Create the folder with:
 
 ```sh
 review_dir=$(mktemp -d "${TMPDIR:-/tmp}/emend-review.XXXXXX")
@@ -94,7 +104,9 @@ emend feedback <review-id> --save "<review-folder>"
 
 On success, repeat the folder-entry check and ownership listing above, then read the file you just wrote before editing.
 After reading a `pending` result, delete that file; only `go` and `approve` results stay.
-`pending` means no hand-off is waiting now: wait again or tell the user to invoke this skill later with the review id.
+`pending` means no hand-off is waiting now; wait again while the session can stay active.
+If the session must end, tell the user the review id and literal folder path.
+The emend-feedback skill continues from them.
 For a new or saved `approve`, report the approved revision, append its `deliveryId` to `handled.txt` as below, and stop.
 Approval does not authorize a commit, push or release. For `go`, read `instructions`
 in order and every entry in `comments`. Read `history` with the authorship boundary below.
@@ -139,6 +151,8 @@ emend reply <comment-id> --status fixed --body "The retry now stops when its bud
 emend reply <comment-id> --status explained --body-file "<review-folder>/reply.md"
 ```
 
+A `not_found` from `emend reply` usually means a thread id was passed. Use the comment's `id` from the hand-off.
+
 Write reply body files as `.md` files only in that folder, or use `--body-file -` to read the reply from stdin.
 
 For replies and writeup text, answer first, then give the reason and relevant validation.
@@ -154,9 +168,19 @@ An empty instruction or one that only limits scope leaves the earlier intent sta
 
 ## Publish the next revision and wait
 
+A doc's `source` must be inside the repository's worktree or inside a folder the user listed in
+`docRoots` in emend's own configuration.
+When publish prints `source is outside the allowed doc roots`, stop and ask the user to add that
+folder to `docRoots` or to move the doc into the repository. Never edit emend's configuration yourself.
+
 After changes, check the affected behavior and update the manifest's files and writeup. For
 code changes, use `head: "worktree"` unless the changes already belong to the chosen commit.
 Keep the review id and stable topic slugs. Update `review.json` in the same private folder.
+If the earlier `review.json` is gone, ask the user for it or write a fresh manifest from the current change.
+Copy a manifest the user supplies into the verified private folder.
+Never publish one from a folder that failed the check or from inside the worktree.
+Follow [the manifest reference](../emend-review/references/manifest.md) when rebuilding it.
+Reuse the topic slugs the hand-off and threads show where possible, and tell the user the slugs may differ.
 Publish the revised manifest to the same review:
 
 ```sh
@@ -199,7 +223,9 @@ you started on this folder is still running; a delegated sub-agent never starts 
 When the command ends, read its output first: the exit code, any error line and any warning.
 
 On success, repeat the folder-entry check and ownership listing, then read the file you just wrote before acting. Repeat on `go`.
-On `pending`, delete that file, then wait again or leave the review id and literal folder path for a later invocation.
+On `pending`, delete that file, then wait again while the session can stay active.
+If the session must end, tell the user the review id and literal folder path.
+The emend-feedback skill continues from them.
 On `approve`, report the approved revision and outcomes, record its `deliveryId` as above, and stop.
 On a non-zero exit, report the error line and stop the loop.
 An error or timeout never counts as approval.

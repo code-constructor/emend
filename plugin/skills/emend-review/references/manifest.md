@@ -21,7 +21,7 @@ The `-type d` check excludes symlinks. If the check fails, tell the user its lit
 Then create a new folder with the same `mktemp` command and rebuild the manifest.
 Save a manifest like this as `review.json` there. Report the literal folder path with the review id;
 shell variables do not survive between tool calls. Substitute that path for `<review-folder>` below.
-Run `emend publish --manifest "<review-folder>/review.json"` from the repository being reviewed.
+For code, run `emend publish --manifest "<review-folder>/review.json"` from the repository being reviewed.
 Keep saved wait output and reply body files in that same folder. Never read or write any of these
 files at a fixed shared path or inside the worktree.
 Use a review folder from one session at a time.
@@ -96,7 +96,9 @@ When the command ends, read its output first: the exit code, any error line and 
 
 On success, repeat the folder-entry check and ownership listing above, then read the file you just wrote.
 After reading a `pending` result, delete that file; only `go` and `approve` results stay.
-`pending` means no hand-off is waiting now; wait again or leave the review id and literal folder path for later.
+`pending` means no hand-off is waiting now; wait again while the session can stay active.
+If the session must end, tell the user the review id and literal folder path.
+The emend-feedback skill continues from them.
 Handle a `go` through emend-feedback. After its last reply and any new revision, append its `deliveryId` as one line.
 For a new or saved `approve`, report the approved revision, append its `deliveryId`, and stop.
 Use the verified `handled.txt`, or create it if absent, replacing `<deliveryId>` with that result's field:
@@ -116,7 +118,15 @@ and use real changed paths and accurate writeup text. `head` may also be a full 
 
 The PRD is included as a diff because it changed, and as a doc because the reviewer needs to
 read it. A doc's `path` is its published name. When the local filename differs, set `source`
-relative to the worktree root. It must end in the same kind of extension as `path`.
+to its local filename.
+Relative `source` paths resolve from the repository root or, outside a git repository, from the folder publish runs in.
+Outside a git repository, every doc source must sit in a folder listed in `docRoots`.
+If one does not, ask the user to add that folder; never edit emend's configuration yourself.
+It must end in the same kind of extension as `path`.
+A doc's `source` must be inside the repository's worktree or inside a folder the user listed in
+`docRoots` in emend's own configuration.
+When publish prints `source is outside the allowed doc roots`, stop and ask the user to add that
+folder to `docRoots` or to move the doc into the repository. Never edit emend's configuration yourself.
 Markdown docs render as safe blocks. Use Markdown for the writeup, not an HTML page.
 
 Set optional `main` to `"writeup"` or a declared doc path to choose the opening page, even with an empty writeup.
@@ -128,6 +138,26 @@ unavailable. When that request is known first-hand, replace null with Markdown d
 the change runs, assumptions, drift, and independent review findings. A docs-only review omits
 both `base` and `head`, includes only doc entries, and needs `--key` for its first publication.
 A code review on a detached HEAD also needs `--key` for its first publication.
+`--key` is only for a first publish; later revisions use `--review <review-id>`.
+Pick a key unique to this review, such as the doc's name and today's date
+(`offline-sync-plan-2026-11-02`). A key names one review: publishing with a key that is already in use adds
+a revision to that review.
+
+Use these constraints when writing the manifest:
+
+- Topic slugs use lowercase letters, digits and `-`, at most 64 characters. Start with a letter or digit.
+- `scope` is one word, at most 32 characters.
+- `door` is `one-way` or `two-way`.
+- `title` is at most 200 characters; `summary` is at most 2000.
+- `base` and `head` are full commit hashes. `head` may be `worktree`.
+- `importance` is 0 to 99. The reserved Other changes topic uses 100.
+
+Spell every key exactly as in the example, because unknown keys are dropped silently.
+For an invalid manifest, the CLI names the failing fields.
+If it says the manifest is not found, check the path. If it says the manifest is not valid JSON,
+fix the syntax at the line it names, if any; with no line, check for an empty or cut-off file.
+An unescaped quote or line break inside a string is the usual cause.
+Fix those fields and publish again.
 
 ```json
 {

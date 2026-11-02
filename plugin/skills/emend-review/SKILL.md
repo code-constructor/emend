@@ -6,6 +6,7 @@ description: Create and publish an emend review when asked to review plans, docs
 # Prepare an emend review
 
 This skill needs the `emend` command on `PATH`.
+If `emend` is not found, stop and tell the user to install emend. Do not try to install it.
 
 ## Establish the review
 
@@ -18,10 +19,12 @@ publishing; a branch name is not a manifest commit. Resolve it with:
 git merge-base <target> HEAD
 ```
 
+If publish prints `git lookup failed`, resolve `base` again with `git merge-base` and check that the commit exists in this clone.
+
 Report the commit count the review covers, its scope and any missing context.
-For a review containing only docs, omit both `base` and `head` and use `--key` when publishing.
+For a review containing only docs, omit both `base` and `head` and use `--key` for its first publish.
 The first publication of a code review on a detached HEAD also needs `--key`.
-Use `--review <review-id>` when publishing a revision of an existing review.
+`--key` is only for a first publish; later revisions use `--review <review-id>`.
 
 Set file roles deliberately. A PRD changed by this work belongs in `diff`; a PRD supplied for
 reading belongs in `doc`. The same path can appear once in each role when both views matter.
@@ -29,7 +32,8 @@ File extensions do not decide roles. Name each meaningful changed file and its t
 changes fall into Other changes. Never declare the reserved topic slug `other` yourself.
 
 Group the change by what the reader must decide. Give each topic a stable `slug`, short `title`,
-one-sentence `summary`, and `importance` from 0 to 100. Lower importance sorts first. Lead with
+one-sentence `summary`, and `importance` from 0 to 99. The reserved Other changes topic uses 100.
+Lower importance sorts first. Lead with
 security boundaries, irreversible effects, removals and uncertain behavior. Mechanical changes
 belong later, regardless of file size or alphabetic order.
 
@@ -66,8 +70,11 @@ and short sentences of 20 words or fewer.
 
 Read [the manifest example](references/manifest.md) before creating the manifest. Replace the
 synthetic values with the review's paths, commit hashes and text. Docs use `source` only when
-their local filename differs from the published path. Keep sources inside the worktree or a
-folder already allowed by the reviewer's emend configuration.
+their local filename differs from the published path.
+A doc's `source` must be inside the repository's worktree or inside a folder the user listed in
+`docRoots` in emend's own configuration.
+When publish prints `source is outside the allowed doc roots`, stop and ask the user to add that
+folder to `docRoots` or to move the doc into the repository. Never edit emend's configuration yourself.
 Create one private temporary folder per review, outside the worktree. In a POSIX shell:
 
 ```sh
@@ -107,8 +114,29 @@ emend publish --manifest "<review-folder>/review.json"
 For a docs-only first review:
 
 ```sh
-emend publish --manifest "<review-folder>/review.json" --key design-review
+emend publish --manifest "<review-folder>/review.json" --key <review-key>
 ```
+
+Pick a key unique to this review, such as the doc's name and today's date
+(`offline-sync-plan-2026-11-02`). A key names one review: publishing with a key that is already in use adds
+a revision to that review.
+
+Relative `source` paths resolve from the repository root or, outside a git repository, from the folder publish runs in.
+Outside a git repository, every doc source must sit in a folder listed in `docRoots`.
+If one does not, ask the user to add that folder; never edit emend's configuration yourself.
+
+For an invalid manifest, the CLI names the failing fields.
+If it says the manifest is not found, check the path. If it says the manifest is not valid JSON,
+fix the syntax at the line it names, if any; with no line, check for an empty or cut-off file.
+An unescaped quote or line break inside a string is the usual cause.
+Check [the manifest constraints](references/manifest.md).
+Fix those fields and publish again.
+
+The URL opens only while emend runs (`emend serve` or the installed service).
+If the reviewer says it does not load, tell them to start it. Do not republish.
+Do not start emend or change how it listens yourself.
+Publish prints a note when emend is not running.
+A wait started while emend is stopped keeps working; it picks up the Send once emend runs.
 
 Save the returned `reviewId`, `revision` and `url`. Report the literal folder path together with
 the review id, and give the URL to the reviewer. Surface any
@@ -218,7 +246,8 @@ All three normal results exit 0. Keep only `go` and `approve` results; delete a 
 - `approve`: for a new or saved approval, report the approved revision, record its `deliveryId` as below, and stop.
   Approval does not authorize a commit, push or release.
 - `pending`: no hand-off is waiting now. Delete that file, then wait again while the session can stay active.
-  If the session must end, tell the user to invoke emend-feedback later with the review id.
+  If the session must end, tell the user the review id and literal folder path.
+  The emend-feedback skill continues from them.
   Pending is not approval.
 
 Record each handled `go` or reported `approve` as one line, replacing `<deliveryId>` with that result's field.
