@@ -10,7 +10,63 @@ review from any device, your phone included.
 emend grew out of [hunk-review-skill](https://github.com/vendis-ai/hunk-review-skill), which stays
 maintained alongside it.
 
-Status: nothing built yet.
+Status: in development. The npm package is not published yet; until it is, install from a
+checkout as [Development](#development) says.
+
+## Install
+
+emend needs Node.js 24.18 or newer and git 2.44 or newer. Install the package with
+[mise](https://mise.jdx.dev) (preferred) or npm:
+
+```sh
+mise use -g npm:@shllg/emend
+# or
+npm install -g @shllg/emend
+```
+
+To keep the server running and start it at login, run `emend service install` first. Then run
+`emend` in a terminal: it starts the server if none runs, and prints a one-time link to the review
+inbox.
+
+A server that `emend` started keeps running until you stop that `emend serve` process
+(`pgrep -af '[e]mend.mjs serve'` finds it; `pgrep -lf` on macOS). Stop it before you install the
+service or update emend: the service cannot start while it holds the port, and it keeps running
+the old version.
+
+Give your agents the review skills:
+
+- Claude Code: `/plugin marketplace add shllg/emend`, then `/plugin install emend@emend`.
+- Codex and other agents that read `~/.agents/skills`: `emend skills install`.
+
+Then let the agents' commands leave their sandbox, as
+[Use with sandboxed agents](#use-with-sandboxed-agents) says.
+
+[docs/setup.md](docs/setup.md) walks through each step, the optional ones included, with a prompt
+for an agent that sets it up together with you.
+
+## Configure
+
+`emend config` lists the settings. `emend config add docRoots <folder>` lets agents publish docs
+from a folder outside their repository. `emend config set openBrowser true` makes `emend` open your
+browser instead of printing a one-time sign-in link. Run these yourself: an agent in its sandbox
+cannot write emend's settings.
+
+## Update
+
+```sh
+mise upgrade npm:@shllg/emend
+# or
+npm install -g @shllg/emend@latest
+```
+
+Then run `emend service install` again if you installed the service. It keeps its options and
+restarts the server, so the new version runs. Without the service, stop the server `emend` started;
+the next `emend` starts the new version. Do the same after you upgrade Node.js: the service
+starts emend with the Node.js it was installed with. If you ran `emend skills install`, run it
+again too: mise keeps each version in its own folder, and the command moves the links.
+
+Claude Code: `claude plugin marketplace update emend`, then `claude plugin update emend@emend`, and
+restart Claude Code.
 
 ## Use with sandboxed agents
 
@@ -53,42 +109,38 @@ Codex then runs these four commands outside its sandbox without asking. The MCP 
 
 ## Development
 
-Work from a checkout to try changes before they are released. Use these steps instead of the
-published plugin and `emend skills install`, not next to them: two installs list each skill twice.
+A checkout installs the same way as a release: `pnpm install:local` builds the committed `HEAD` in
+a temporary folder, packs it and installs the package. Use a clone that no agent or tool writes to,
+review a change before you pull it, and run the command again after each pull.
 
-These steps load the files live from your checkout, uncommitted and untracked files included,
-with your full rights in every project. Use a clone that no agent or tool writes to, run the
-commands from its root folder, and update it with `git pull` after you have reviewed the change.
+```sh
+pnpm install
+pnpm install:local
+```
 
-1. Build the CLI and put it on your `PATH`:
+If you linked `apps/emend/bin/emend` into a folder on your `PATH` before (the earlier development
+steps and `install.sh` did), remove that link, and stop every emend server that runs from a
+checkout: `pgrep -af '[e]mend.mjs serve'` lists them with their paths (`pgrep -lf` on macOS).
+Otherwise the commands your agents run outside their sandbox, and the server that serves the review
+app, run the checkout's build, which agents can change.
 
-   ```sh
-   pnpm install
-   pnpm build
-   mkdir -p ~/.local/bin
-   ln -s "$PWD/apps/emend/bin/emend" ~/.local/bin/emend
-   ```
+With mise on your `PATH`, the package goes to a folder in mise's data folder that `mise link`
+registers as `npm:@shllg/emend@local`; pass `--npm` to use `npm install -g` instead. If `emend` is
+not on your `PATH` yet, the command prints the folder to add. It also restarts an installed
+service, so the new build runs.
 
-   `~/.local/bin` must be on your `PATH`; any other folder on your `PATH` works too. Run
-   `pnpm build` again after a change.
+For Claude Code, add the checkout as a plugin marketplace instead of the GitHub one, never both:
 
-2. Claude Code: add the checkout as a plugin marketplace and install the plugin from it.
+```text
+/plugin marketplace add <path to your checkout>
+/plugin install emend@emend
+```
 
-   ```text
-   /plugin marketplace add <path to your checkout>
-   /plugin install emend@emend
-   ```
+Claude Code reads the skills from the checkout's `plugin/` folder, uncommitted changes included. A
+pulled change takes effect at the next session start or after `/reload-plugins`. For other agents,
+run `emend skills install` once; its links point into the installed package.
 
-   Claude Code loads the skills from the checkout's `plugin/` folder. Run `/reload-plugins` after
-   you edit a skill.
-
-3. Codex and other agents that read `~/.agents/skills`: link each skill.
-
-   ```sh
-   mkdir -p ~/.agents/skills
-   ln -s "$PWD/plugin/skills/emend-review" ~/.agents/skills/emend-review
-   ln -s "$PWD/plugin/skills/emend-feedback" ~/.agents/skills/emend-feedback
-   ```
+`pnpm verify` runs every check. [AGENTS.md](AGENTS.md) holds the working rules.
 
 ## License
 
