@@ -10,6 +10,11 @@ export class OversizedFile extends CliError {
     super("file exceeds its size limit");
   }
 }
+export class NotRegularFile extends CliError {
+  constructor() {
+    super("expected a regular file");
+  }
+}
 export const inside = (root: string, file: string) => {
   const path = relative(root, file);
   return path === "" || (!isAbsolute(path) && path !== ".." && !path.startsWith(`..${sep}`));
@@ -69,7 +74,7 @@ export async function readRegular(
   const root = roots?.find((root) => inside(root, file));
   if (root && !(await leadingFolders(root, file))) throw new CliError("source is behind a symlink or non-folder");
   const info = await fs.lstat(file);
-  if (!info.isFile()) throw new CliError("expected a regular file");
+  if (!info.isFile()) throw new NotRegularFile();
   if (info.size > limit) throw new OversizedFile();
   const handle = await fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {

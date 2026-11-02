@@ -6,6 +6,7 @@ import { publishDirect } from "../direct/index.ts";
 import { escapeReference } from "../escape.ts";
 import { apiRequest, CliError, printJson, publishAnswerIncomplete } from "../http.ts";
 import { movedError, refuseUncopiedReview } from "../moved.ts";
+import { manifestError } from "../publish/manifest-error.ts";
 import { GitFolderRead, inside, readRegular } from "../publish/read.ts";
 import { type PublishOptions, publishContext, resolvePublish } from "../publish/resolve.ts";
 import { upload } from "../publish/upload.ts";
@@ -46,36 +47,37 @@ export async function publishCommand(stateDir: string, args: string[], io: Io, c
   const unsafeManifest = new CliError(
     `the manifest ${escapeReference(manifestPath)} can be changed by other users; write it in a private folder`,
   );
-  let manifest: PublishManifest;
+  let input: unknown;
   try {
-    manifest = PublishManifest.parse(
-      JSON.parse(
-        (
-          await readRegular(
-            manifestPath,
-            LIMITS.publishJsonBytes,
-            inside(context.root, manifestPath) ? [context.root] : undefined,
-            undefined,
-            context.gitDirs,
-            async (info, actual) => {
-              if (!process.getuid || (context.worktree && inside(context.worktree, actual))) return;
-              const uid = process.getuid();
-              if (info.uid !== uid || (info.mode & 0o002) !== 0) throw unsafeManifest;
-              if ((info.mode & 0o020) !== 0) {
-                const folder = await lstat(dirname(actual)).catch(() => {
-                  throw unsafeManifest;
-                });
-                if (!folder.isDirectory() || folder.uid !== uid || (folder.mode & 0o077) !== 0) throw unsafeManifest;
-              }
-            },
-          )
-        ).toString(),
-      ),
+    input = JSON.parse(
+      (
+        await readRegular(
+          manifestPath,
+          LIMITS.publishJsonBytes,
+          inside(context.root, manifestPath) ? [context.root] : undefined,
+          undefined,
+          context.gitDirs,
+          async (info, actual) => {
+            if (!process.getuid || (context.worktree && inside(context.worktree, actual))) return;
+            const uid = process.getuid();
+            if (info.uid !== uid || (info.mode & 0o002) !== 0) throw unsafeManifest;
+            if ((info.mode & 0o020) !== 0) {
+              const folder = await lstat(dirname(actual)).catch(() => {
+                throw unsafeManifest;
+              });
+              if (!folder.isDirectory() || folder.uid !== uid || (folder.mode & 0o077) !== 0) throw unsafeManifest;
+            }
+          },
+        )
+      ).toString(),
     );
   } catch (error) {
     if (error instanceof GitFolderRead || error === unsafeManifest) throw error;
     throw new CliError("invalid publish manifest");
   }
+  const parsed = PublishManifest.safeParse(input, { reportInput: true });
+  if (!parsed.success) throw new CliError(manifestError(parsed.error.issues));
+  const manifest = parsed.data;
   if (!manifest.base && !options.key && !options.review) throw new CliError("pass --review or --key");
   // Resolve all paths and unchanged-file checks before creating any server state.
   const warnings: string[] = [];
@@ -137,4 +139,6 @@ export async function publishCommand(stateDir: string, args: string[], io: Io, c
   for (const warning of warnings) io.stderr(warning);
   for (const path of result.data.unrendered) io.stderr(`emend: could not render ${escapeReference(path)}\n`);
   io.stderr(`emend: published revision ${result.data.revision}: ${escapeReference(result.data.url)}\n`);
+  if (target.via === "direct")
+    io.stderr("emend: emend is not running; the review opens once it runs (emend serve, or emend service install)\n");
 }

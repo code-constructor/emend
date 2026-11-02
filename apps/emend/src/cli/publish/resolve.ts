@@ -10,7 +10,7 @@ import { CliError } from "../http.ts";
 import { collectAssets } from "./assets.ts";
 import { collectChanges } from "./collect.ts";
 import { docsKey, normalizeRemote, reviewKey } from "./key.ts";
-import { outsideGitSegments, readRegular, sourcePath } from "./read.ts";
+import { NotRegularFile, outsideGitSegments, readRegular, sourcePath } from "./read.ts";
 import { gitFolders, worktreeRoot } from "./root.ts";
 import { readSide } from "./sides.ts";
 
@@ -145,9 +145,17 @@ export async function resolvePublish(
       continue;
     }
     const original = resolve(root, file.source ?? file.path);
+    const docError = (error: unknown): never => {
+      if (
+        error instanceof NotRegularFile ||
+        ["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")
+      )
+        throw new CliError(`doc not found: ${escapeReference(file.source ?? file.path)}`);
+      throw error;
+    };
     // Check the written alias here; sourcePath also checks its resolved target.
     outsideGitSegments(original, root);
-    const source = await sourcePath(original, roots, gitDirs);
+    const source = await sourcePath(original, roots, gitDirs).catch(docError);
     const html = /\.html?$/i.test(file.path);
     if (!html && !/\.(md|markdown)$/i.test(file.path))
       throw new CliError("doc path must end in .md, .markdown, .html or .htm");
@@ -158,9 +166,11 @@ export async function resolvePublish(
     if (file.source !== undefined) checkExtension(file.source);
     checkExtension(source);
     const readResolvedDoc = (actual: string) =>
-      readRegular(actual, html ? LIMITS.htmlDocBytes : LIMITS.markdownDocBytes, roots, undefined, gitDirs);
+      readRegular(actual, html ? LIMITS.htmlDocBytes : LIMITS.markdownDocBytes, roots, undefined, gitDirs).catch(
+        docError,
+      );
     const readDoc = async () => {
-      const actual = await sourcePath(original, roots, gitDirs);
+      const actual = await sourcePath(original, roots, gitDirs).catch(docError);
       checkExtension(actual);
       return readResolvedDoc(actual);
     };

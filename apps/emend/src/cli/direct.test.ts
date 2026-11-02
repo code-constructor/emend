@@ -28,7 +28,10 @@ test("publish without a server never spawns, renders documents, and is visible t
   const out = await f.publish();
   expect(spawn).not.toHaveBeenCalled();
   expect(out.stdout).toEqual([`${JSON.stringify(out.result)}\n`]);
-  expect(out.stderr).toEqual([`emend: published revision 1: ${out.result.url}\n`]);
+  expect(out.stderr).toEqual([
+    `emend: published revision 1: ${out.result.url}\n`,
+    "emend: emend is not running; the review opens once it runs (emend serve, or emend service install)\n",
+  ]);
   expect(out.result.unrendered).toEqual([]);
   expect(out.result.url).toBe(`http://127.0.0.1:3636/r/${out.result.reviewId}`);
   expect((await stat(f.stateDir)).mode & 0o777).toBe(0o700);
@@ -53,7 +56,7 @@ test("publish against a discovered server uses the API without opening a databas
   const open = vi.spyOn(client, "openDb");
   const out = await f.publish();
   expect(out.stdout).toEqual(first.stdout);
-  expect(out.stderr).toEqual(first.stderr);
+  expect(out.stderr).toEqual([`emend: published revision 1: ${out.result.url}\n`]);
   expect(open).not.toHaveBeenCalled();
   expect(fetcher.mock.calls.some(([url]) => String(url).endsWith("/publish"))).toBe(true);
 });

@@ -10,3 +10,7 @@ test.each([
   expect(FilePath.safeParse(path).success).toBe(false);
   expect(escapeReference(path)).toBe(`a\\u{${code.toString(16)}}.txt`);
 });
+
+test.each([0x2028, 0x2029])("stderr escapes Unicode separator U+%s", (code) => {
+  expect(escapeReference(`a${String.fromCodePoint(code)}.txt`)).toBe(`a\\u{${code.toString(16)}}.txt`);
+});
