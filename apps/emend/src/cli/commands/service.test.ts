@@ -1,7 +1,22 @@
-import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import {
+  chmod,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  stat,
+  symlink,
+  unlink,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { dirname, join, relative, sep } from "node:path";
+import { LIMITS } from "@emend/contract";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { type Io, run } from "../../main.ts";
+import * as stateFiles from "../../state/files.ts";
 import type { ServiceOptions, ServiceResult, ServiceRunner } from "../service/common.ts";
 import { writeService } from "../service/common.ts";
 
@@ -11,8 +26,9 @@ vi.mock("../service/common.ts", async (original) => {
 });
 vi.mock("node:fs/promises", async (original) => {
   const actual = await original<typeof import("node:fs/promises")>();
-  return { ...actual, lstat: vi.fn(actual.lstat) };
+  return { ...actual, lstat: vi.fn(actual.lstat), unlink: vi.fn(actual.unlink) };
 });
+vi.mock("../../state/files.ts", async (original) => ({ ...(await original<typeof import("../../state/files.ts")>()) }));
 
 const ok: ServiceResult = { code: 0, stdout: "", stderr: "" };
 const failed: ServiceResult = { code: 1, stdout: "", stderr: "first failure\nmore detail\n" };
@@ -34,6 +50,7 @@ let sleep: ReturnType<typeof vi.fn<(ms: number) => Promise<void>>>;
 beforeEach(async () => {
   root = await realpath(await mkdtemp(join(process.env.EMEND_HOME as string, "service-")));
   const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  vi.mocked(unlink).mockImplementation(actual.unlink);
   // Only synthetic repositories belong to this fixture, including on hosts with a .git above it.
   vi.mocked(lstat).mockImplementation(async (...args) => {
     const entry = String(args[0]);
@@ -45,7 +62,7 @@ beforeEach(async () => {
   state = join(home, "state");
   bin = join(root, "bin");
   await mkdir(home);
-  await mkdir(state);
+  await mkdir(state, { mode: 0o700 });
   await mkdir(bin);
   for (const tool of ["systemctl", "loginctl", "launchctl"]) {
     // These are only resolved, never executed: every call goes to the recorded runner.
@@ -53,7 +70,7 @@ beforeEach(async () => {
   }
   stdout = [];
   stderr = [];
-  recorded = vi.fn(async () => ok);
+  recorded = vi.fn(async (_file, args) => (args[0] === "print" ? failed : ok));
   elapsed = 0;
   sleep = vi.fn(async (ms) => {
     elapsed += ms;
@@ -91,6 +108,9 @@ function plistPath() {
 }
 function pendingPath() {
   return join(state, "service.pending");
+}
+function optionsPath() {
+  return join(state, "service.json");
 }
 async function put(path: string, content: string) {
   await mkdir(dirname(path), { recursive: true });
@@ -133,8 +153,108 @@ Restart=on-failure
 [Install]
 WantedBy=default.target
 `);
-  expect(calls()).toEqual([systemctl("daemon-reload"), systemctl("enable", "--now", "emend"), loginctl()]);
+  expect(calls()).toEqual([
+    systemctl("daemon-reload"),
+    systemctl("enable", "emend"),
+    systemctl("restart", "emend"),
+    loginctl(),
+  ]);
   expect(stderr).toEqual([]);
+});
+
+test.each(["deleted unit", "failed uninstall"])(
+  "Linux replaces a running public-host service after a %s",
+  async (cause) => {
+    let running = "";
+    recorded.mockImplementation(async (_file, args) => {
+      if (args.includes("disable")) return failed;
+      // systemd start leaves an active process alone; restart always uses the current unit.
+      if (args.includes("restart") || (args.includes("enable") && args.includes("--now") && !running))
+        running = await readFile(unitPath(), "utf8");
+      return ok;
+    });
+    expect(await invoke("install", "--host", "0.0.0.0")).toBe(0);
+    expect(running).toContain("--host 0.0.0.0");
+    if (cause === "deleted unit") await unlink(unitPath());
+    else {
+      expect(await invoke("uninstall")).toBe(0);
+      expect(stderr).toHaveLength(1);
+    }
+    await expect(lstat(unitPath())).rejects.toMatchObject({ code: "ENOENT" });
+    expect(running).toContain("--host 0.0.0.0");
+    resetOutput();
+    expect(await invoke("install")).toBe(0);
+    expect(calls()).toEqual([
+      systemctl("daemon-reload"),
+      systemctl("enable", "emend"),
+      systemctl("restart", "emend"),
+      loginctl(),
+    ]);
+    expect(running).toBe(await readFile(unitPath(), "utf8"));
+    expect(running).not.toContain("--host");
+    expect(stdout).toEqual(["emend: service installed\n"]);
+  },
+);
+
+test("Linux reloads an unchanged unit with no pending record after an interrupted uninstall", async () => {
+  let loaded = "";
+  let running = "";
+  recorded.mockImplementation(async (_file, args) => {
+    if (args.includes("disable")) return failed;
+    if (args.includes("daemon-reload")) loaded = await readFile(unitPath(), "utf8");
+    if (args.includes("restart")) running = loaded;
+    return ok;
+  });
+  expect(await invoke("install", "--host", "0.0.0.0")).toBe(0);
+  expect(running).toContain("--host 0.0.0.0");
+  const writer = stateFiles.writeSecretFile;
+  const spy = vi.spyOn(stateFiles, "writeSecretFile").mockImplementation((file, ...args) => {
+    if (file === optionsPath()) throw new Error("synthetic interruption after unit rename");
+    return writer(file, ...args);
+  });
+  try {
+    expect(await invoke("install", "--port", "3636")).toBe(1);
+  } finally {
+    spy.mockRestore();
+  }
+  const content = await readFile(unitPath(), "utf8");
+  expect(content).toContain("serve --port 3636");
+  expect(content).not.toContain("--host");
+  expect(loaded).toContain("--host 0.0.0.0");
+  await expect(lstat(pendingPath())).resolves.toBeDefined();
+
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  vi.mocked(unlink).mockImplementation(async (file) => {
+    if (file === unitPath()) throw new Error("synthetic interruption before unit removal");
+    return actual.unlink(file);
+  });
+  resetOutput();
+  try {
+    expect(await invoke("uninstall")).toBe(1);
+  } finally {
+    vi.mocked(unlink).mockImplementation(actual.unlink);
+  }
+  expect(calls()).toEqual([systemctl("disable", "--now", "emend")]);
+  await expect(lstat(optionsPath())).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(lstat(pendingPath())).rejects.toMatchObject({ code: "ENOENT" });
+  expect(await readFile(unitPath(), "utf8")).toBe(content);
+  expect(loaded).toContain("--host 0.0.0.0");
+
+  resetOutput();
+  vi.mocked(writeService).mockClear();
+  expect(await invoke("install", "--port", "3636")).toBe(0);
+  expect(writeService).not.toHaveBeenCalled();
+  expect(calls()).toEqual([
+    systemctl("daemon-reload"),
+    systemctl("enable", "emend"),
+    systemctl("restart", "emend"),
+    loginctl(),
+  ]);
+  expect(loaded).toBe(content);
+  expect(running).toBe(content);
+  expect(stdout).toEqual(["emend: service installed\n"]);
+  expect(stderr).toEqual([]);
+  await expect(lstat(pendingPath())).rejects.toMatchObject({ code: "ENOENT" });
 });
 
 test("macOS writes the exact plist with port 4000 and XML-escaped paths", async () => {
@@ -200,7 +320,7 @@ describe.each(["linux", "darwin"])("%s service lifecycle", (platform) => {
     options.platform = platform;
   });
 
-  test("identical install preserves bytes and mtime while ensuring the service is enabled", async () => {
+  test("identical install preserves bytes and mtime while restarting the service", async () => {
     expect(await invoke("install", "--port", "4000")).toBe(0);
     const content = await readFile(path());
     await utimes(path(), 1000, 1000);
@@ -211,8 +331,12 @@ describe.each(["linux", "darwin"])("%s service lifecycle", (platform) => {
     expect((await stat(path())).mtimeMs).toBe(before.mtimeMs);
     expect(calls()).toEqual(
       platform === "linux"
-        ? [systemctl("enable", "--now", "emend"), loginctl()]
-        : [launchctl("print", "gui/501/dev.emend.server")],
+        ? [systemctl("daemon-reload"), systemctl("enable", "emend"), systemctl("restart", "emend"), loginctl()]
+        : [
+            launchctl("bootout", "gui/501/dev.emend.server"),
+            launchctl("print", "gui/501/dev.emend.server"),
+            launchctl("bootstrap", "gui/501", path()),
+          ],
     );
   });
 
@@ -242,6 +366,7 @@ describe.each(["linux", "darwin"])("%s service lifecycle", (platform) => {
     if (stopFails) recorded.mockResolvedValueOnce(failed);
     expect(await invoke("uninstall")).toBe(0);
     await expect(lstat(path())).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(lstat(optionsPath())).rejects.toMatchObject({ code: "ENOENT" });
     expect(calls()).toEqual(
       platform === "linux"
         ? [systemctl("disable", "--now", "emend"), systemctl("daemon-reload")]
@@ -256,10 +381,12 @@ describe.each(["linux", "darwin"])("%s service lifecycle", (platform) => {
   });
 
   test("uninstall of an absent service succeeds without running a command", async () => {
+    await writeFile(optionsPath(), "invalid stale options");
     expect(await invoke("uninstall")).toBe(0);
     expect(stdout).toEqual(["emend: the service is not installed.\n"]);
     expect(stderr).toEqual([]);
     expect(calls()).toEqual([]);
+    await expect(lstat(optionsPath())).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   test.each(["install", "uninstall"])("%s leaves a foreign file byte for byte unchanged", async (command) => {
@@ -340,6 +467,7 @@ test("an identical but unloaded launch agent is bootstrapped without rewriting",
   expect(await invoke("install")).toBe(0);
   expect((await stat(plistPath())).mtimeMs).toBe(1000000);
   expect(calls()).toEqual([
+    launchctl("bootout", "gui/501/dev.emend.server"),
     launchctl("print", "gui/501/dev.emend.server"),
     launchctl("bootstrap", "gui/501", plistPath()),
   ]);
@@ -400,7 +528,12 @@ test("a fake systemctl in a relative PATH entry is never run", async () => {
   await writeFile(join(home, "relative/systemctl"), "synthetic relative executable\n", { mode: 0o755 });
   io.env.PATH = `${relative(process.cwd(), join(home, "relative"))}::${bin}`;
   expect(await invoke("install")).toBe(0);
-  expect(calls()).toEqual([systemctl("daemon-reload"), systemctl("enable", "--now", "emend"), loginctl()]);
+  expect(calls()).toEqual([
+    systemctl("daemon-reload"),
+    systemctl("enable", "emend"),
+    systemctl("restart", "emend"),
+    loginctl(),
+  ]);
   expect(recorded.mock.calls[0]).toEqual([
     join(bin, "systemctl"),
     ["--user", "daemon-reload"],
@@ -444,7 +577,7 @@ describe.each(["linux", "darwin"])("%s pending installs", (platform) => {
   for (const previous of ["absent", "changed"]) {
     const steps =
       platform === "linux"
-        ? ["write", "daemon-reload", "enable", ...(previous === "changed" ? ["restart"] : [])]
+        ? ["write", "daemon-reload", "enable", "restart"]
         : ["write", ...(previous === "changed" ? ["wait"] : []), "bootstrap"];
     test.each(steps)(`a failed ${previous} install at %s is finished by a retry`, async (step) => {
       if (previous === "changed") expect(await invoke("install")).toBe(0);
@@ -478,12 +611,16 @@ describe.each(["linux", "darwin"])("%s pending installs", (platform) => {
       }
       await expect(lstat(pendingPath())).rejects.toMatchObject({ code: "ENOENT" });
       resetOutput();
-      recorded.mockResolvedValue(ok);
+      recorded.mockImplementation(async (_file, args) => (args[0] === "print" ? failed : ok));
       expect(await invoke("install", "--port", "4000")).toBe(0);
       expect(calls()).toEqual(
         platform === "linux"
-          ? [systemctl("enable", "--now", "emend"), loginctl()]
-          : [launchctl("print", "gui/501/dev.emend.server")],
+          ? [systemctl("daemon-reload"), systemctl("enable", "emend"), systemctl("restart", "emend"), loginctl()]
+          : [
+              launchctl("bootout", "gui/501/dev.emend.server"),
+              launchctl("print", "gui/501/dev.emend.server"),
+              launchctl("bootstrap", "gui/501", path()),
+            ],
       );
     });
   }
@@ -528,6 +665,7 @@ test("launchd stops waiting at ten seconds, keeps the marker, and never bootstra
   options.platform = "darwin";
   expect(await invoke("install")).toBe(0);
   resetOutput();
+  recorded.mockResolvedValue(ok);
   expect(await invoke("install", "--port", "4000")).toBe(1);
   expect(elapsed).toBe(10000);
   expect(sleep.mock.calls).toEqual(Array.from({ length: 50 }, () => [200]));
@@ -638,7 +776,7 @@ describe.each(["linux", "darwin"])("%s install boundaries", (platform) => {
       expect((await lstat(path())).isFile()).toBe(true);
       expect(calls()).toEqual(
         platform === "linux"
-          ? [systemctl("daemon-reload"), systemctl("enable", "--now", "emend"), loginctl()]
+          ? [systemctl("daemon-reload"), systemctl("enable", "emend"), systemctl("restart", "emend"), loginctl()]
           : [launchctl("bootstrap", "gui/501", plistPath())],
       );
     });
@@ -668,7 +806,7 @@ describe.each(["linux", "darwin"])("%s install boundaries", (platform) => {
     expect((await lstat(path())).isFile()).toBe(true);
     expect(calls()).toEqual(
       platform === "linux"
-        ? [systemctl("daemon-reload"), systemctl("enable", "--now", "emend"), loginctl()]
+        ? [systemctl("daemon-reload"), systemctl("enable", "emend"), systemctl("restart", "emend"), loginctl()]
         : [launchctl("bootstrap", "gui/501", plistPath())],
     );
   });
@@ -732,4 +870,491 @@ test("launchd installs a fixed trusted PATH including both Homebrew locations", 
     "<key>PATH</key>\n    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>",
   );
   expect(content).not.toContain("node_modules");
+});
+
+describe.each(["linux", "darwin"])("%s saved service options", (platform) => {
+  const path = () => (platform === "linux" ? unitPath() : plistPath());
+  const saved = async () => JSON.parse(await readFile(optionsPath(), "utf8"));
+  const invalid = "emend: invalid saved service options; run emend service install with your options\n";
+  const defaults = "emend: no saved service options; the service now uses the defaults\n";
+  beforeEach(() => {
+    options.platform = platform;
+  });
+
+  test.each([{ flags: ["--tailscale"] }, { flags: ["--port", "4000", "--host", "192.0.2.1"] }])(
+    "a bare reinstall keeps $flags in order and announces them first",
+    async ({ flags }) => {
+      expect(await invoke("install", ...flags)).toBe(0);
+      expect(stdout).toEqual(["emend: service installed\n"]);
+      expect(await saved()).toEqual(flags);
+      expect((await stat(optionsPath())).mode & 0o777).toBe(0o600);
+      const content = await readFile(path(), "utf8");
+      resetOutput();
+      expect(await invoke("install")).toBe(0);
+      expect(stdout).toEqual([`emend: keeping the service options ${flags.join(" ")}\n`, "emend: service installed\n"]);
+      expect(await readFile(path(), "utf8")).toBe(content);
+      expect(await saved()).toEqual(flags);
+      expect(calls()).toContainEqual(
+        platform === "linux" ? systemctl("restart", "emend") : launchctl("bootstrap", "gui/501", path()),
+      );
+    },
+  );
+
+  test("empty saved options never print a keep line", async () => {
+    for (let i = 0; i < 2; i++) {
+      resetOutput();
+      expect(await invoke("install")).toBe(0);
+      expect(await saved()).toEqual([]);
+      expect(stdout).toEqual(["emend: service installed\n"]);
+    }
+  });
+
+  test("given options replace the whole saved list, including tailscale", async () => {
+    expect(await invoke("install", "--tailscale", "--port", "4000")).toBe(0);
+    resetOutput();
+    expect(await invoke("install", "--port", "3636")).toBe(0);
+    expect(await saved()).toEqual(["--port", "3636"]);
+    expect(await readFile(path(), "utf8")).not.toContain("--tailscale");
+    expect(stdout).toEqual(["emend: service installed\n"]);
+  });
+
+  test.each([false, true])("an older install announces defaults once (legacy pending marker: %s)", async (pending) => {
+    expect(await invoke("install", "--tailscale")).toBe(0);
+    await unlink(optionsPath());
+    if (pending) await writeFile(pendingPath(), "");
+    resetOutput();
+    expect(await invoke("install")).toBe(0);
+    expect(await saved()).toEqual([]);
+    expect(await readFile(path(), "utf8")).not.toContain("--tailscale");
+    expect(stdout).toEqual([defaults, "emend: service installed\n"]);
+    await expect(lstat(pendingPath())).rejects.toMatchObject({ code: "ENOENT" });
+    resetOutput();
+    expect(await invoke("install")).toBe(0);
+    expect(stdout).toEqual(["emend: service installed\n"]);
+  });
+
+  test("an older install already using defaults prints no defaults notice", async () => {
+    expect(await invoke("install")).toBe(0);
+    const content = await readFile(path(), "utf8");
+    await unlink(optionsPath());
+    resetOutput();
+    expect(await invoke("install")).toBe(0);
+    expect(await readFile(path(), "utf8")).toBe(content);
+    expect(await saved()).toEqual([]);
+    expect(stdout).toEqual(["emend: service installed\n"]);
+  });
+
+  test("an older install announces defaults before a failed restart or bootstrap", async () => {
+    expect(await invoke("install", "--tailscale")).toBe(0);
+    await unlink(optionsPath());
+    const start = platform === "linux" ? "restart" : "bootstrap";
+    let outputAtStart: string[] | undefined;
+    recorded.mockImplementation(async (_file, args) => {
+      if (args.includes(start)) {
+        outputAtStart = [...stdout];
+        return failed;
+      }
+      return args[0] === "print" ? failed : ok;
+    });
+    resetOutput();
+    expect(await invoke("install")).toBe(1);
+    expect(outputAtStart).toEqual([defaults]);
+    expect(stdout).toEqual([defaults]);
+    expect(stderr).toHaveLength(1);
+    expect(stderr[0]).toContain(start);
+    expect(await saved()).toEqual([]);
+    expect(await readFile(path(), "utf8")).not.toContain("--tailscale");
+    await expect(lstat(pendingPath())).resolves.toBeDefined();
+  });
+
+  test("explicit options on an older install print no defaults notice", async () => {
+    expect(await invoke("install", "--tailscale")).toBe(0);
+    await unlink(optionsPath());
+    resetOutput();
+    expect(await invoke("install", "--port", "3636")).toBe(0);
+    expect(await saved()).toEqual(["--port", "3636"]);
+    expect(stdout).toEqual(["emend: service installed\n"]);
+  });
+
+  test("saved empty options print no defaults notice when the runtime changes", async () => {
+    expect(await invoke("install")).toBe(0);
+    options.entry = join(home, "updated-emend.mjs");
+    await writeFile(options.entry, "synthetic updated entry");
+    resetOutput();
+    expect(await invoke("install")).toBe(0);
+    expect(await readFile(path(), "utf8")).toContain("updated-emend.mjs");
+    expect(stdout).toEqual(["emend: service installed\n"]);
+  });
+
+  test.each([false, true])("a deleted unit discards a saved host (pending record: %s)", async (pending) => {
+    const flags = ["--host", "0.0.0.0"];
+    expect(await invoke("install", ...flags)).toBe(0);
+    const content = await readFile(path(), "utf8");
+    if (pending)
+      await writeFile(
+        pendingPath(),
+        JSON.stringify({ flags, hash: createHash("sha256").update(content).digest("hex") }),
+      );
+    await unlink(path());
+    resetOutput();
+    expect(await invoke("install")).toBe(0);
+    expect(await saved()).toEqual([]);
+    expect(await readFile(path(), "utf8")).not.toContain("--host");
+    expect(stdout).toEqual(["emend: service installed\n"]);
+    await expect(lstat(pendingPath())).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  test.each(["invalid", "symlink"])("a first install ignores orphaned %s saved options", async (kind) => {
+    const target = join(root, "orphaned-options");
+    if (kind === "symlink") {
+      await writeFile(target, '["--host","0.0.0.0"]');
+      await symlink(target, optionsPath());
+    } else await writeFile(optionsPath(), "invalid stale options");
+    expect(await invoke("install")).toBe(0);
+    expect(await saved()).toEqual([]);
+    expect(await readFile(path(), "utf8")).not.toContain("--host");
+    expect(stdout).toEqual(["emend: service installed\n"]);
+    if (kind === "symlink") expect(await readFile(target, "utf8")).toBe('["--host","0.0.0.0"]');
+  });
+
+  test.each(["not valid JSON", '{"flags":[],"content":"x"}'])(
+    "a first install ignores a broken orphaned pending record (case %#)",
+    async (pending) => {
+      await writeFile(pendingPath(), pending);
+      await writeFile(optionsPath(), '["--host","0.0.0.0"]');
+      expect(await invoke("install")).toBe(0);
+      expect(await saved()).toEqual([]);
+      expect(await readFile(path(), "utf8")).not.toContain("--host");
+      expect(stdout).toEqual(["emend: service installed\n"]);
+      expect(stderr).toEqual([]);
+      await expect(lstat(pendingPath())).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
+  test("an owned unit with a round-0 pending record refuses a bare install and accepts explicit flags", async () => {
+    expect(await invoke("install", "--tailscale")).toBe(0);
+    const content = await readFile(path(), "utf8");
+    const pending = JSON.stringify({ flags: ["--tailscale"], content });
+    await writeFile(pendingPath(), pending);
+    resetOutput();
+    expect(await invoke("install")).toBe(1);
+    expect(stderr).toEqual([invalid]);
+    expect(stdout).toEqual([]);
+    expect(calls()).toEqual([]);
+    expect(await readFile(path(), "utf8")).toBe(content);
+    expect(await readFile(pendingPath(), "utf8")).toBe(pending);
+    resetOutput();
+    expect(await invoke("install", "--port", "3636")).toBe(0);
+    expect(await saved()).toEqual(["--port", "3636"]);
+    expect(await readFile(path(), "utf8")).not.toContain("--tailscale");
+    expect(stdout).toEqual(["emend: service installed\n"]);
+    await expect(lstat(pendingPath())).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  test.each([false, true])("an interrupted uninstall leaves defaults (pending record: %s)", async (pending) => {
+    const flags = ["--host", "0.0.0.0"];
+    expect(await invoke("install", ...flags)).toBe(0);
+    const content = await readFile(path(), "utf8");
+    if (pending)
+      await writeFile(
+        pendingPath(),
+        JSON.stringify({ flags, hash: createHash("sha256").update(content).digest("hex") }),
+      );
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    vi.mocked(unlink).mockImplementation(async (file) => {
+      if (file === path()) {
+        await expect(lstat(optionsPath())).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(lstat(pendingPath())).rejects.toMatchObject({ code: "ENOENT" });
+        throw new Error("synthetic interruption before unit removal");
+      }
+      return actual.unlink(file);
+    });
+    resetOutput();
+    try {
+      expect(await invoke("uninstall")).toBe(1);
+    } finally {
+      vi.mocked(unlink).mockImplementation(actual.unlink);
+    }
+    expect(await readFile(path(), "utf8")).toBe(content);
+    await expect(lstat(optionsPath())).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(lstat(pendingPath())).rejects.toMatchObject({ code: "ENOENT" });
+    resetOutput();
+    expect(await invoke("install")).toBe(0);
+    expect(await saved()).toEqual([]);
+    expect(await readFile(path(), "utf8")).not.toContain("--host");
+    expect(stdout).toEqual([defaults, "emend: service installed\n"]);
+  });
+
+  test.each(["options", "pending", "unit"])(
+    "an interrupted uninstall after removing %s never restores a stale public host",
+    async (step) => {
+      expect(await invoke("install", "--host", "0.0.0.0")).toBe(0);
+      const writer = stateFiles.writeSecretFile;
+      const spy = vi.spyOn(stateFiles, "writeSecretFile").mockImplementation((file, ...args) => {
+        if (file === optionsPath()) throw new Error("synthetic interruption after unit rename");
+        return writer(file, ...args);
+      });
+      try {
+        expect(await invoke("install", "--port", "3636")).toBe(1);
+      } finally {
+        spy.mockRestore();
+      }
+      expect(await saved()).toEqual(["--host", "0.0.0.0"]);
+      const content = await readFile(path(), "utf8");
+      expect(content).not.toContain("--host");
+      expect(content).toContain("3636");
+      const pending = await readFile(pendingPath(), "utf8");
+      expect(JSON.parse(pending)).toEqual({
+        flags: ["--port", "3636"],
+        hash: createHash("sha256").update(content).digest("hex"),
+      });
+
+      const order = [optionsPath(), pendingPath(), path()];
+      const count = step === "options" ? 1 : step === "pending" ? 2 : 3;
+      const removed: string[] = [];
+      const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+      vi.mocked(unlink).mockImplementation(async (file) => {
+        await actual.unlink(file);
+        removed.push(String(file));
+        if (file === order[count - 1]) throw new Error("synthetic interruption after uninstall step");
+      });
+      resetOutput();
+      try {
+        expect(await invoke("uninstall")).toBe(1);
+      } finally {
+        vi.mocked(unlink).mockImplementation(actual.unlink);
+      }
+      expect(removed).toEqual(order.slice(0, count));
+      await expect(lstat(optionsPath())).rejects.toMatchObject({ code: "ENOENT" });
+      if (step === "options") expect(await readFile(pendingPath(), "utf8")).toBe(pending);
+      else await expect(lstat(pendingPath())).rejects.toMatchObject({ code: "ENOENT" });
+      if (step === "unit") await expect(lstat(path())).rejects.toMatchObject({ code: "ENOENT" });
+      else expect(await readFile(path(), "utf8")).toBe(content);
+
+      resetOutput();
+      expect(await invoke("install")).toBe(0);
+      expect(await saved()).toEqual(step === "options" ? ["--port", "3636"] : []);
+      expect(await readFile(path(), "utf8")).not.toContain("--host");
+      expect(stdout).toEqual([
+        ...(step === "options"
+          ? ["emend: keeping the service options --port 3636\n"]
+          : step === "pending"
+            ? [defaults]
+            : []),
+        "emend: service installed\n",
+      ]);
+      await expect(lstat(pendingPath())).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
+  test("a state folder with mode 0755 keeps the precise chmod hint", async () => {
+    await chmod(state, 0o755);
+    expect(await invoke("install")).toBe(1);
+    expect(stderr).toEqual([
+      `State directory ${state} has group or other permissions; fix it with chmod 700 '${state}'\n`,
+    ]);
+    expect(stdout).toEqual([]);
+    expect(calls()).toEqual([]);
+    await expect(lstat(path())).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(lstat(pendingPath())).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  test("a state-folder write error keeps its precise diagnostic", async () => {
+    const spy = vi.spyOn(stateFiles, "writeSecretFile").mockImplementationOnce(() => {
+      throw new stateFiles.StateFolderWriteError(state);
+    });
+    try {
+      expect(await invoke("install")).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(stderr).toEqual([`emend cannot write its state folder ${state}.\n`]);
+    expect(stdout).toEqual([]);
+    expect(calls()).toEqual([]);
+    await expect(lstat(path())).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  test("long paths install successfully and recover through a small hashed pending record", async () => {
+    home = join(root, ...Array.from({ length: 8 }, () => "long-path-".repeat(18)));
+    state = join(home, "state");
+    options.home = home;
+    options.node = join(home, "node");
+    options.entry = join(home, "emend.mjs");
+    io.env.HOME = home;
+    io.env.EMEND_HOME = state;
+    await mkdir(state, { recursive: true, mode: 0o700 });
+    await writeFile(options.node, "synthetic node");
+    await writeFile(options.entry, "synthetic entry");
+    expect(await invoke("install", "--tailscale")).toBe(0);
+    expect(Buffer.byteLength(await readFile(path(), "utf8"))).toBeGreaterThan(LIMITS.publicJsonBytes);
+    const writer = stateFiles.writeSecretFile;
+    const spy = vi.spyOn(stateFiles, "writeSecretFile").mockImplementation((file, ...args) => {
+      if (file === optionsPath()) throw new Error("synthetic interruption after unit rename");
+      return writer(file, ...args);
+    });
+    try {
+      expect(await invoke("install", "--port", "4000")).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
+    const content = await readFile(path(), "utf8");
+    const pending = await readFile(pendingPath(), "utf8");
+    expect(Buffer.byteLength(content)).toBeGreaterThan(LIMITS.publicJsonBytes);
+    expect(Buffer.byteLength(pending)).toBeLessThan(LIMITS.publicJsonBytes);
+    expect(JSON.parse(pending)).toEqual({
+      flags: ["--port", "4000"],
+      hash: createHash("sha256").update(content).digest("hex"),
+    });
+    expect(await saved()).toEqual(["--tailscale"]);
+    resetOutput();
+    expect(await invoke("install")).toBe(0);
+    expect(await saved()).toEqual(["--port", "4000"]);
+    expect(await readFile(path(), "utf8")).toBe(content);
+    expect(stdout).toEqual(["emend: keeping the service options --port 4000\n", "emend: service installed\n"]);
+    await expect(lstat(pendingPath())).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  test.each([
+    "{",
+    "null",
+    "{}",
+    '"--tailscale"',
+    "[1]",
+    '["--unknown"]',
+    '["--port"]',
+    '["--port","65536"]',
+    '["--tailscale","--tailscale"]',
+    '["--tailscale","--host","0.0.0.0"]',
+    JSON.stringify(["--host", "bad\n\u001b[31m\u202e"]),
+    JSON.stringify(["--host", "a".repeat(LIMITS.publicJsonBytes)]),
+  ])(
+    "invalid saved options refuse without changing the unit, and explicit flags repair them (case %#)",
+    async (bad) => {
+      expect(await invoke("install", "--tailscale")).toBe(0);
+      const content = await readFile(path(), "utf8");
+      await writeFile(optionsPath(), bad);
+      resetOutput();
+      expect(await invoke("install")).toBe(1);
+      expect(stderr).toEqual([invalid]);
+      expect(stdout).toEqual([]);
+      expect(calls()).toEqual([]);
+      expect(await readFile(path(), "utf8")).toBe(content);
+      expect(await readFile(optionsPath(), "utf8")).toBe(bad);
+      await expect(lstat(pendingPath())).rejects.toMatchObject({ code: "ENOENT" });
+      resetOutput();
+      expect(await invoke("install", "--port", "3636")).toBe(0);
+      expect(await saved()).toEqual(["--port", "3636"]);
+      expect(stdout).toEqual(["emend: service installed\n"]);
+    },
+  );
+
+  test.each([false, true])("a saved-options symlink is invalid even if dangling: %s", async (dangling) => {
+    expect(await invoke("install")).toBe(0);
+    const content = await readFile(path(), "utf8");
+    await unlink(optionsPath());
+    const target = join(root, "synthetic-options");
+    if (!dangling) await writeFile(target, '["--tailscale"]');
+    await symlink(target, optionsPath());
+    resetOutput();
+    expect(await invoke("install")).toBe(1);
+    expect(stderr).toEqual([invalid]);
+    expect(calls()).toEqual([]);
+    expect(await readFile(path(), "utf8")).toBe(content);
+    resetOutput();
+    expect(await invoke("install", "--port", "3636")).toBe(0);
+    expect((await lstat(optionsPath())).isSymbolicLink()).toBe(false);
+    expect(await saved()).toEqual(["--port", "3636"]);
+    if (!dangling) expect(await readFile(target, "utf8")).toBe('["--tailscale"]');
+    else await expect(lstat(target)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  test.skipIf(process.getuid?.() === 0)(
+    "unreadable saved options refuse, and explicit flags replace the file",
+    async () => {
+      expect(await invoke("install", "--tailscale")).toBe(0);
+      const content = await readFile(path(), "utf8");
+      await chmod(optionsPath(), 0o000);
+      try {
+        resetOutput();
+        expect(await invoke("install")).toBe(1);
+        expect(stderr).toEqual([invalid]);
+        expect(stdout).toEqual([]);
+        expect(calls()).toEqual([]);
+        expect(await readFile(path(), "utf8")).toBe(content);
+        resetOutput();
+        expect(await invoke("install", "--port", "3636")).toBe(0);
+        expect(await saved()).toEqual(["--port", "3636"]);
+        expect((await stat(optionsPath())).mode & 0o777).toBe(0o600);
+      } finally {
+        await chmod(optionsPath(), 0o600);
+      }
+    },
+  );
+
+  for (const installed of [false, true]) {
+    test.each(["pending", "unit", "options", "restart"])(
+      `a failed ${installed ? "repeat" : "first"} install at %s recovers the options for the unit on disk`,
+      async (step) => {
+        if (installed) expect(await invoke("install", "--tailscale")).toBe(0);
+        resetOutput();
+        const writer = stateFiles.writeSecretFile;
+        const spy = vi.spyOn(stateFiles, "writeSecretFile").mockImplementation((file, ...args) => {
+          if (file === (step === "options" ? optionsPath() : step === "pending" ? pendingPath() : ""))
+            throw new Error("synthetic state write failure");
+          return writer(file, ...args);
+        });
+        if (step === "unit") vi.mocked(writeService).mockRejectedValueOnce(new Error("synthetic unit write failure"));
+        if (step === "restart") {
+          recorded.mockImplementation(async (_file, args) =>
+            args[0] === "print" || args.includes(platform === "linux" ? "enable" : "bootstrap") ? failed : ok,
+          );
+        }
+        try {
+          expect(await invoke("install", "--port", "4000")).toBe(1);
+        } finally {
+          spy.mockRestore();
+        }
+        const renamed = step === "options" || step === "restart";
+        const expected = renamed ? ["--port", "4000"] : installed ? ["--tailscale"] : [];
+        if (renamed) expect(await readFile(path(), "utf8")).toContain("4000");
+        if (step !== "pending") expect((await stat(pendingPath())).mode & 0o777).toBe(0o600);
+        resetOutput();
+        recorded.mockImplementation(async (_file, args) => (args[0] === "print" ? failed : ok));
+        expect(await invoke("install")).toBe(0);
+        expect(await saved()).toEqual(expected);
+        expect(stdout).toEqual([
+          ...(expected.length ? [`emend: keeping the service options ${expected.join(" ")}\n`] : []),
+          "emend: service installed\n",
+        ]);
+        const content = await readFile(path(), "utf8");
+        expect(content.includes("4000")).toBe(renamed);
+        expect(content.includes("--tailscale")).toBe(!renamed && installed);
+        await expect(lstat(pendingPath())).rejects.toMatchObject({ code: "ENOENT" });
+      },
+    );
+  }
+
+  test("a second failed explicit update cannot discard an earlier pending options recovery", async () => {
+    expect(await invoke("install", "--tailscale")).toBe(0);
+    const writer = stateFiles.writeSecretFile;
+    const spy = vi.spyOn(stateFiles, "writeSecretFile").mockImplementation((file, ...args) => {
+      if (file === optionsPath()) throw new Error("synthetic options write failure");
+      return writer(file, ...args);
+    });
+    try {
+      expect(await invoke("install", "--port", "4000")).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await saved()).toEqual(["--tailscale"]);
+    expect(await readFile(path(), "utf8")).toContain("4000");
+    vi.mocked(writeService).mockRejectedValueOnce(new Error("synthetic unit write failure"));
+    expect(await invoke("install", "--port", "5000")).toBe(1);
+    expect(await saved()).toEqual(["--port", "4000"]);
+    resetOutput();
+    expect(await invoke("install")).toBe(0);
+    expect(await saved()).toEqual(["--port", "4000"]);
+    expect(await readFile(path(), "utf8")).toContain("4000");
+    expect(stdout[0]).toBe("emend: keeping the service options --port 4000\n");
+  });
 });

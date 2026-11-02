@@ -4,17 +4,16 @@ import { isAbsolute, join } from "node:path";
 import { CliError } from "../http.ts";
 import {
   clearServicePending,
-  markServicePending,
   readOwnedService,
   type ServiceAction,
   type ServiceContext,
   serviceFile,
-  servicePending,
   serviceStatus,
   unsupportedService,
   validatePaths,
   writeService,
 } from "./common.ts";
+import { markServicePending, removeServiceOptions, saveServiceOptions, serviceInstallOptions } from "./options.ts";
 
 export function systemdWord(word: string, execStart: boolean): string {
   let escaped = word.replaceAll("%", "%%");
@@ -61,28 +60,31 @@ export async function systemdService(action: ServiceAction, context: ServiceCont
   const previous = await readOwnedService(path, "# written by emend\n");
   if (action === "uninstall") {
     if (previous === undefined) {
+      await removeServiceOptions(stateDir);
       await clearServicePending(stateDir);
       io.stdout("emend: the service is not installed.\n");
       return;
     }
     await systemctl(["--user", "disable", "--now", "emend"], "report");
-    await unlink(path);
+    await removeServiceOptions(stateDir);
     await clearServicePending(stateDir);
+    await unlink(path);
     await systemctl(["--user", "daemon-reload"]);
     io.stdout("emend: service uninstalled\n");
     return;
   }
-  const content = unit(context);
-  const pending = await servicePending(stateDir);
+  const { flags, resetToDefaults } = await serviceInstallOptions(context, previous);
+  const content = unit({ ...context, flags });
+  markServicePending(stateDir, flags, content);
   if (previous !== content) {
-    await markServicePending(stateDir);
     await writeService(path, content);
   }
-  if (previous !== content || pending) await systemctl(["--user", "daemon-reload"]);
-  if ((previous !== undefined && previous !== content) || pending) {
-    await systemctl(["--user", "enable", "emend"]);
-    await systemctl(["--user", "restart", "emend"]);
-  } else await systemctl(["--user", "enable", "--now", "emend"]);
+  saveServiceOptions(stateDir, flags);
+  if (resetToDefaults && previous !== content)
+    io.stdout("emend: no saved service options; the service now uses the defaults\n");
+  await systemctl(["--user", "daemon-reload"]);
+  await systemctl(["--user", "enable", "emend"]);
+  await systemctl(["--user", "restart", "emend"]);
   await clearServicePending(stateDir);
   io.stdout("emend: service installed\n");
   try {

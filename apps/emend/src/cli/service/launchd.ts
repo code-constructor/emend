@@ -3,7 +3,6 @@ import { join } from "node:path";
 import { CliError } from "../http.ts";
 import {
   clearServicePending,
-  markServicePending,
   readOwnedService,
   type ServiceAction,
   type ServiceContext,
@@ -15,6 +14,7 @@ import {
   validatePaths,
   writeService,
 } from "./common.ts";
+import { markServicePending, removeServiceOptions, saveServiceOptions, serviceInstallOptions } from "./options.ts";
 
 const declaration = '<?xml version="1.0" encoding="UTF-8"?>';
 function xml(value: string): string {
@@ -84,32 +84,31 @@ export async function launchdService(action: ServiceAction, context: ServiceCont
   const previous = await readOwnedService(path, `${declaration}\n<!-- written by emend -->\n`);
   if (action === "uninstall") {
     if (previous === undefined) {
+      await removeServiceOptions(stateDir);
       await clearServicePending(stateDir);
       io.stdout("emend: the service is not installed.\n");
       return;
     }
     await launchctl(["bootout", target], "report");
-    await unlink(path);
+    await removeServiceOptions(stateDir);
     await clearServicePending(stateDir);
+    await unlink(path);
     io.stdout("emend: service uninstalled\n");
     return;
   }
-  const content = plist(context);
+  const { flags, resetToDefaults } = await serviceInstallOptions(context, previous);
+  const content = plist({ ...context, flags });
   const pending = await servicePending(stateDir);
-  if (previous === content && !pending) {
-    if ((await launchctl(["print", target], "ignore")).code !== 0) {
-      await mkdir(join(home, "Library/Logs"), { recursive: true });
-      await launchctl(["bootstrap", domain, path]);
-    }
-  } else {
-    if (previous !== content) await markServicePending(stateDir);
-    const stop = previous !== undefined || pending;
-    if (stop) await launchctl(["bootout", target], "ignore");
-    await mkdir(join(home, "Library/Logs"), { recursive: true });
-    if (previous !== content) await writeService(path, content);
-    if (stop) await waitForBootout(launchctl, target, context);
-    await launchctl(["bootstrap", domain, path]);
-  }
+  markServicePending(stateDir, flags, content);
+  const stop = previous !== undefined || pending;
+  if (stop) await launchctl(["bootout", target], "ignore");
+  await mkdir(join(home, "Library/Logs"), { recursive: true });
+  if (previous !== content) await writeService(path, content);
+  saveServiceOptions(stateDir, flags);
+  if (resetToDefaults && previous !== content)
+    io.stdout("emend: no saved service options; the service now uses the defaults\n");
+  if (stop) await waitForBootout(launchctl, target, context);
+  await launchctl(["bootstrap", domain, path]);
   await clearServicePending(stateDir);
   io.stdout("emend: service installed\n");
 }

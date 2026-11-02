@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { setTimeout } from "node:timers/promises";
 import type { Io } from "../../main.ts";
+import { StateDirModeError, StateFolderWriteError } from "../../state/files.ts";
 import { CliError, CliUsageError } from "../http.ts";
 import { cliRuntime } from "../runtime.ts";
 import {
@@ -50,7 +51,8 @@ export async function serviceCommand(stateDir: string, args: string[], io: Io) {
     }
   } catch (error) {
     if (error instanceof UsageError) throw new CliUsageError(error.message);
-    if (error instanceof CliError) throw error;
+    if (error instanceof CliError || error instanceof StateDirModeError || error instanceof StateFolderWriteError)
+      throw error;
     throw new CliError("Could not manage the emend service.");
   }
 }

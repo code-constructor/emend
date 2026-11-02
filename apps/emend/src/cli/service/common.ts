@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { lstat, mkdir, open, readFile, realpath, rename, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, open, readFile, realpath, rename, unlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import type { Io } from "../../main.ts";
 import { escapeReference } from "../escape.ts";
@@ -151,15 +151,6 @@ async function removeIfPresent(path: string) {
 
 export async function servicePending(stateDir: string) {
   return (await serviceFile(join(stateDir, "service.pending"))) !== undefined;
-}
-
-export async function markServicePending(stateDir: string) {
-  await mkdir(stateDir, { recursive: true, mode: 0o700 });
-  try {
-    await writeFile(join(stateDir, "service.pending"), "", { flag: "wx", mode: 0o600 });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-  }
 }
 
 export function clearServicePending(stateDir: string) {
