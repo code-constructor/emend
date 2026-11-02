@@ -1,0 +1,432 @@
+import * as fs from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, parse } from "node:path";
+import { LIMITS } from "@emend/contract";
+import { expect, onTestFinished, test, vi } from "vitest";
+import { type Io, run } from "../../main.ts";
+import * as stateFiles from "../../state/files.ts";
+import { readConfig } from "../config.ts";
+import { escapeReference } from "../escape.ts";
+
+vi.mock("node:fs/promises", async (original) => ({ ...(await original<typeof import("node:fs/promises")>()) }));
+
+async function fixture() {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "emend-config-command-")));
+  const home = join(root, "home");
+  const stateDir = join(root, "state");
+  const path = join(stateDir, "config.json");
+  const docs = join(root, "docs");
+  await mkdir(docs);
+  await mkdir(home);
+  vi.stubEnv("HOME", home);
+  vi.stubEnv("USERPROFILE", home);
+  vi.spyOn(process, "cwd").mockReturnValue(root);
+  const fetcher = vi.fn(() => {
+    throw new Error("config must not contact a server");
+  });
+  vi.stubGlobal("fetch", fetcher);
+  onTestFinished(async () => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    await rm(root, { recursive: true, force: true });
+  });
+  return {
+    root,
+    home,
+    stateDir,
+    path,
+    docs,
+    async seed(data: string) {
+      await mkdir(stateDir, { mode: 0o700, recursive: true });
+      await writeFile(path, data);
+    },
+    async run(args: string[] = [], state = stateDir) {
+      const stdout: string[] = [];
+      const stderr: string[] = [];
+      const io: Io = {
+        env: { EMEND_HOME: state, HOME: home, USERPROFILE: home },
+        stdout: (line) => {
+          stdout.push(line);
+        },
+        stderr: (line) => {
+          stderr.push(line);
+        },
+      };
+      const code = await run(["config", ...args], io);
+      expect(fetcher).not.toHaveBeenCalled();
+      return { code, stdout, stderr };
+    },
+  };
+}
+
+const success = (line: string) => ({ code: 0, stdout: [`${line}\n`], stderr: [] });
+const failure = (message: string) => ({ code: 1, stdout: [], stderr: [`emend: ${message}\n`] });
+
+test.each([{ args: [] }, { args: ["list"] }])(
+  "config $args lists defaults without creating state",
+  async ({ args }) => {
+    const f = await fixture();
+    expect(await f.run(args)).toEqual(success('{"docRoots":[],"openBrowser":false}'));
+    await expect(stat(f.stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+  },
+);
+
+test.each([{}, { openBrowser: true }, { docRoots: ["/synthetic/docs"], future: { enabled: true } }])(
+  "list always prints exactly the two settings: %j",
+  async (document) => {
+    const f = await fixture();
+    const original = JSON.stringify(document);
+    await f.seed(original);
+    expect(await f.run(["list"])).toEqual(
+      success(JSON.stringify({ docRoots: document.docRoots ?? [], openBrowser: document.openBrowser ?? false })),
+    );
+    expect(await readFile(f.path, "utf8")).toBe(original);
+  },
+);
+
+test("add succeeds when the home folder does not exist", async () => {
+  const f = await fixture();
+  const missing = join(f.root, "nonexistent", "home");
+  vi.stubEnv("HOME", missing);
+  vi.stubEnv("USERPROFILE", missing);
+  expect(await f.run(["add", "docRoots", f.docs])).toEqual(success(`emend: added ${f.docs} to docRoots`));
+  expect(await readConfig(f.stateDir)).toEqual({ docRoots: [f.docs], openBrowser: false });
+});
+
+test("add resolves relative paths, creates private state and writes readable settings without a server", async () => {
+  const f = await fixture();
+  expect(await f.run(["add", "docRoots", "./docs"])).toEqual(success(`emend: added ${f.docs} to docRoots`));
+  expect(await readConfig(f.stateDir)).toEqual({ docRoots: [f.docs], openBrowser: false });
+  expect(await readdir(f.stateDir)).toEqual(["config.json"]);
+  expect((await stat(f.stateDir)).mode & 0o777).toBe(0o700);
+  expect((await stat(f.path)).mode & 0o777).toBe(0o600);
+});
+
+test("add stores a symlink's real path and duplicates through either spelling leave the file unchanged", async () => {
+  const f = await fixture();
+  const alias = join(f.root, "alias");
+  await symlink(f.docs, alias, "dir");
+  expect(await f.run(["add", "docRoots", alias])).toEqual(success(`emend: added ${f.docs} to docRoots`));
+  const original = await readFile(f.path, "utf8");
+  const before = await stat(f.path);
+  for (const folder of [f.docs, alias, "./docs/../alias"]) {
+    expect(await f.run(["add", "docRoots", folder])).toEqual(success(`emend: ${f.docs} is already in docRoots`));
+    expect(await readFile(f.path, "utf8")).toBe(original);
+    const after = await stat(f.path);
+    expect([after.ino, after.mtimeMs, after.ctimeMs]).toEqual([before.ino, before.mtimeMs, before.ctimeMs]);
+  }
+  expect(await readConfig(f.stateDir)).toEqual({ docRoots: [f.docs], openBrowser: false });
+});
+
+test.each(["relative", "symlink", "deleted"])("remove matches a %s folder", async (kind) => {
+  const f = await fixture();
+  const other = join(f.root, "other");
+  await f.seed(JSON.stringify({ docRoots: [f.docs, other], openBrowser: true }));
+  let path = "./docs";
+  if (kind === "symlink") {
+    path = join(f.root, "alias");
+    await symlink(f.docs, path, "dir");
+  } else if (kind === "deleted") await rm(f.docs, { recursive: true });
+  expect(await f.run(["remove", "docRoots", path])).toEqual(success(`emend: removed ${f.docs} from docRoots`));
+  expect(await readConfig(f.stateDir)).toEqual({ docRoots: [other], openBrowser: true });
+});
+
+test("remove matches a listed absolute alias even after its target was deleted", async () => {
+  const f = await fixture();
+  const alias = join(f.root, "alias");
+  await symlink(f.docs, alias, "dir");
+  await f.seed(JSON.stringify({ docRoots: [alias] }));
+  await rm(f.docs, { recursive: true });
+  expect(await f.run(["remove", "docRoots", "./alias"])).toEqual(success(`emend: removed ${alias} from docRoots`));
+  expect(await readConfig(f.stateDir)).toEqual({ docRoots: [], openBrowser: false });
+});
+
+test("set accepts both boolean values and each invocation reads the latest file", async () => {
+  const f = await fixture();
+  for (const value of ["true", "false"]) {
+    expect(await f.run(["set", "openBrowser", value])).toEqual(success(`emend: openBrowser is now ${value}`));
+    expect(await readConfig(f.stateDir)).toEqual({ docRoots: [], openBrowser: value === "true" });
+    expect(await f.run()).toEqual(success(`{"docRoots":[],"openBrowser":${value}}`));
+  }
+});
+
+test.each(["add", "remove", "set"])(
+  "%s preserves unknown keys and replaces a permissive file with mode 0600",
+  async (action) => {
+    const f = await fixture();
+    const future = { enabled: true, list: [1, null, "synthetic"] };
+    await f.seed(
+      JSON.stringify({ docRoots: action === "remove" ? [f.docs] : [], future, ["__proto__"]: { enabled: false } }),
+    );
+    await chmod(f.path, 0o644);
+    const args = action === "set" ? ["set", "openBrowser", "true"] : [action, "docRoots", f.docs];
+    expect((await f.run(args)).code).toBe(0);
+    const document = JSON.parse(await readFile(f.path, "utf8"));
+    expect(document.future).toEqual(future);
+    expect(Object.hasOwn(document, "__proto__")).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(document, "__proto__")?.value).toEqual({ enabled: false });
+    expect((await stat(f.path)).mode & 0o777).toBe(0o600);
+    expect(await readdir(f.stateDir)).toEqual(["config.json"]);
+    expect(await readConfig(f.stateDir)).toEqual({
+      docRoots: action === "add" ? [f.docs] : [],
+      openBrowser: action === "set",
+    });
+  },
+);
+
+test.each([
+  ["list", "extra"],
+  ["get"],
+  ["add"],
+  ["add", "docRoots"],
+  ["add", "docRoots", ""],
+  ["add", "openBrowser", "docs"],
+  ["add", "docRoots", "docs", "extra"],
+  ["remove"],
+  ["remove", "docRoots"],
+  ["remove", "docRoots", ""],
+  ["remove", "other", "docs"],
+  ["remove", "docRoots", "docs", "extra"],
+  ["set"],
+  ["set", "openBrowser"],
+  ["set", "docRoots", "true"],
+  ["set", "openBrowser", "TRUE"],
+  ["set", "openBrowser", "1"],
+  ["set", "openBrowser", ""],
+  ["set", "openBrowser", "true", "extra"],
+  ["--help"],
+])("invalid arguments %j print the exact usage with exit 1 and no state", async (...args) => {
+  const f = await fixture();
+  expect(await f.run(args)).toEqual(
+    failure(
+      "Usage: emend config [list] | add docRoots <folder> | remove docRoots <folder> | set openBrowser true|false.",
+    ),
+  );
+  await expect(stat(f.stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+test.each(["missing", "file", "file-child", "root", "root-symlink"])("add refuses %s", async (kind) => {
+  const f = await fixture();
+  const file = join(f.root, "file");
+  await writeFile(file, "synthetic");
+  let path = join(f.root, "missing");
+  let message = `${path} does not exist`;
+  if (kind === "file" || kind === "file-child") {
+    path = kind === "file" ? file : join(file, "child");
+    message = `${path} is not a folder`;
+  } else if (kind === "root" || kind === "root-symlink") {
+    path = parse(f.root).root;
+    if (kind === "root-symlink") {
+      const alias = join(f.root, "alias");
+      await symlink(path, alias, "dir");
+      path = alias;
+    }
+    message = "docRoots cannot be the filesystem root";
+  }
+  expect(await f.run(["add", "docRoots", path])).toEqual(failure(message));
+  await expect(stat(f.stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+test.each(["docs", "missing"])("remove refuses an unlisted %s path without changing state", async (folder) => {
+  const f = await fixture();
+  const original = '{"docRoots":[],"future":true}\n';
+  await f.seed(original);
+  expect(await f.run(["remove", "docRoots", folder])).toEqual(failure(`${join(f.root, folder)} is not in docRoots`));
+  expect(await readFile(f.path, "utf8")).toBe(original);
+});
+
+test("user paths are escaped on success and error lines, while list remains valid JSON", async () => {
+  const f = await fixture();
+  const docs = join(f.root, "docs\n\u001b[31m\u202e");
+  const escaped = escapeReference(docs);
+  await mkdir(docs);
+  expect(await f.run(["add", "docRoots", docs])).toEqual(success(`emend: added ${escaped} to docRoots`));
+  expect(await f.run(["add", "docRoots", docs])).toEqual(success(`emend: ${escaped} is already in docRoots`));
+  const listed = await f.run();
+  expect(listed).toEqual(success(`{"docRoots":["${f.root}/docs\\u000a\\u001b[31m\\u202e"],"openBrowser":false}`));
+  expect(JSON.parse(listed.stdout.join(""))).toEqual({ docRoots: [docs], openBrowser: false });
+  expect(await f.run(["remove", "docRoots", docs])).toEqual(success(`emend: removed ${escaped} from docRoots`));
+  expect(await f.run(["remove", "docRoots", docs])).toEqual(failure(`${escaped} is not in docRoots`));
+  await rm(docs, { recursive: true });
+  expect(await f.run(["add", "docRoots", docs])).toEqual(failure(`${escaped} does not exist`));
+  await writeFile(docs, "synthetic");
+  expect(await f.run(["add", "docRoots", docs])).toEqual(failure(`${escaped} is not a folder`));
+});
+
+test.each([
+  "null",
+  "[]",
+  "true",
+  "42",
+  '"config"',
+  "{",
+  '{"docRoots":null}',
+  '{"docRoots":"docs"}',
+  '{"docRoots":[42]}',
+  '{"docRoots":["relative"]}',
+  '{"openBrowser":null}',
+  '{"openBrowser":"true"}',
+  '{"openBrowser":1}',
+  '{"openBrowser":[]}',
+  '{"openBrowser":{}}',
+  "{}".padEnd(LIMITS.publicJsonBytes + 1, " "),
+])("invalid configuration is never listed or overwritten (case %#)", async (original) => {
+  const f = await fixture();
+  await f.seed(original);
+  for (const args of [
+    [],
+    ["list"],
+    ["add", "docRoots", f.docs],
+    ["remove", "docRoots", f.docs],
+    ["set", "openBrowser", "true"],
+  ]) {
+    expect(await f.run(args)).toEqual(failure("invalid emend configuration"));
+    expect(await readFile(f.path, "utf8")).toBe(original);
+  }
+});
+
+test.each(["symlink", "directory"])("a %s config is refused without replacement", async (kind) => {
+  const f = await fixture();
+  await mkdir(f.stateDir, { mode: 0o700 });
+  if (kind === "symlink") {
+    const source = join(f.root, "source.json");
+    await writeFile(source, "{}");
+    await symlink(source, f.path);
+  } else await mkdir(f.path);
+  expect(await f.run(["set", "openBrowser", "true"])).toEqual(failure("invalid emend configuration"));
+  expect(await readdir(f.stateDir)).toEqual(["config.json"]);
+  if (kind === "symlink") expect(await readFile(join(f.root, "source.json"), "utf8")).toBe("{}");
+  else expect((await stat(f.path)).isDirectory()).toBe(true);
+});
+
+test("an update cannot grow the configuration beyond readConfig's size limit", async () => {
+  const f = await fixture();
+  const base = JSON.stringify({ docRoots: [], openBrowser: false, future: "" });
+  const original = base.replace('"future":""', `"future":"${"x".repeat(LIMITS.publicJsonBytes - base.length)}"`);
+  await f.seed(original);
+  expect(await readConfig(f.stateDir)).toEqual({ docRoots: [], openBrowser: false });
+  expect(await f.run(["add", "docRoots", f.docs])).toEqual(failure("emend configuration would exceed its size limit"));
+  expect(await readFile(f.path, "utf8")).toBe(original);
+});
+
+test.skipIf(process.getuid?.() === 0)(
+  "an unwritable state folder fails without a sandbox exemption or partial write",
+  async () => {
+    const f = await fixture();
+    const original = '{"openBrowser":false}';
+    await f.seed(original);
+    await chmod(f.stateDir, 0o500);
+    try {
+      expect(await f.run(["set", "openBrowser", "true"])).toEqual({
+        code: 1,
+        stdout: [],
+        stderr: [`emend cannot write its state folder ${f.stateDir}.\n`],
+      });
+      expect(await readFile(f.path, "utf8")).toBe(original);
+      expect(await readdir(f.stateDir)).toEqual(["config.json"]);
+    } finally {
+      await chmod(f.stateDir, 0o700);
+    }
+  },
+);
+
+test.each(["EACCES", "EPERM", "EROFS"])("a %s state write uses the existing sandbox error path", async (code) => {
+  const f = await fixture();
+  vi.spyOn(stateFiles, "writeSecretFile").mockImplementationOnce(() => {
+    throw Object.assign(new Error("synthetic denial"), { code, path: f.path });
+  });
+  expect(await f.run(["set", "openBrowser", "true"])).toEqual({
+    code: 1,
+    stdout: [],
+    stderr: [`emend cannot write its state folder ${f.stateDir}.\n`],
+  });
+});
+
+test.each(["home", "home-parent", "home-symlink"])("add refuses %s before writing", async (kind) => {
+  const f = await fixture();
+  let folder = kind === "home-parent" ? f.root : f.home;
+  if (kind === "home-symlink") {
+    folder = join(f.root, "home-alias");
+    await symlink(f.home, folder, "dir");
+  }
+  expect(await f.run(["add", "docRoots", folder])).toEqual(failure("docRoots cannot be the home folder or hold it"));
+  await expect(stat(f.stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+test.each(["state", "state-child", "state-symlink", "custom-existing", "custom-missing"])(
+  "add refuses %s before writing",
+  async (kind) => {
+    const f = await fixture();
+    const state = kind.startsWith("custom-") ? join(f.docs, "state") : f.stateDir;
+    if (kind !== "custom-missing") await mkdir(state, { mode: 0o700 });
+    let folder = kind.startsWith("custom-") ? f.docs : state;
+    if (kind === "state-child") {
+      folder = join(state, "nested");
+      await mkdir(folder);
+    } else if (kind === "state-symlink") {
+      folder = join(f.root, "state-alias");
+      await symlink(state, folder, "dir");
+    }
+    expect(await f.run(["add", "docRoots", folder], state)).toEqual(
+      failure("docRoots cannot hold or sit inside emend's state folder"),
+    );
+    await expect(stat(join(state, "config.json"))).rejects.toMatchObject({ code: "ENOENT" });
+  },
+);
+
+test("add permits a docs folder inside the temporary home", async () => {
+  const f = await fixture();
+  const docs = join(f.home, "docs");
+  await mkdir(docs);
+  expect(await f.run(["add", "docRoots", docs])).toEqual(success(`emend: added ${docs} to docRoots`));
+  expect(await readConfig(f.stateDir)).toEqual({ docRoots: [docs], openBrowser: false });
+});
+
+test.each(["EACCES", "ELOOP", "EPERM", "EIO"])("folder %s failures identify an escaped path", async (code) => {
+  const f = await fixture();
+  const path = join(f.root, "unreadable\n\u001b[31m");
+  const actualFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  await mkdir(path);
+  for (const { action, operation } of [
+    { action: "add", operation: "realpath" },
+    { action: "add", operation: "stat" },
+    { action: "remove", operation: "realpath" },
+  ] as const) {
+    const spy = vi.spyOn(fs, operation).mockImplementation(async (...args: unknown[]) => {
+      if (args[0] === path) throw Object.assign(new Error("synthetic read failure"), { code, path });
+      return Reflect.apply(actualFs[operation], undefined, args);
+    });
+    try {
+      expect(await f.run([action, "docRoots", path])).toEqual(failure(`${escapeReference(path)} cannot be read`));
+      await expect(stat(f.stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      spy.mockRestore();
+    }
+  }
+});
+
+test("add and remove report an actual symlink loop as unreadable", async () => {
+  const f = await fixture();
+  const path = join(f.root, "loop");
+  await symlink(path, path);
+  for (const action of ["add", "remove"]) {
+    expect(await f.run([action, "docRoots", path])).toEqual(failure(`${path} cannot be read`));
+  }
+});
+
+test("a public state folder with terminal controls produces one safe diagnostic and no write", async () => {
+  const f = await fixture();
+  const state = join(f.root, "state\n\u001b[31m");
+  await mkdir(state);
+  await chmod(state, 0o755);
+  const escaped = escapeReference(state);
+  expect(await f.run(["set", "openBrowser", "true"], state)).toEqual({
+    code: 1,
+    stdout: [],
+    stderr: [`State directory ${escaped} has group or other permissions; fix it with chmod 700 '${escaped}'\n`],
+  });
+  expect(await readdir(state)).toEqual([]);
+  expect((await stat(state)).mode & 0o777).toBe(0o755);
+});

@@ -27,8 +27,10 @@ Node >=24.18.0; SQLite warning behavior has been verified on Node 24.18.0 and 26
 ## One machine
 
 The default `emend` command starts a server if needed and prints a one-time sign-in link; it opens
-the browser only when the state folder's `config.json` sets `"openBrowser": true`. Outside a
-terminal it prints no link or pairing code. This keeps links out of agent output; it does not stop a
+the browser only when the state folder's `config.json` sets `"openBrowser": true`. `emend config`
+lists and changes this file's `docRoots` and `openBrowser` settings; each publish or bare `emend`
+call reads them again, so no server or restart is needed. Outside a terminal it prints no link or
+pairing code. This keeps links out of agent output; it does not stop a
 process that can open a terminal, read the state folder, or, with `openBrowser` on, choose the
 opener.
 `emend serve` runs without opening a browser; `emend service install` installs a systemd

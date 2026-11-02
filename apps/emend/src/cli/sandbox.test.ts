@@ -171,7 +171,7 @@ test.each(["EIO", "ENOSPC", "ENOENT"])("a %s probe failure produces no sandbox h
   );
 });
 
-test.each(["attach", "detach", "pair", "devices", "service", "skills", "serve", "open", "mcp"])(
+test.each(["attach", "detach", "pair", "devices", "service", "skills", "config", "serve", "open", "mcp"])(
   "%s state and hub errors do not carry a sandbox hint",
   async (command) => {
     const f = await commandFixture();

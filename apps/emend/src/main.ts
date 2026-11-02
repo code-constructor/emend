@@ -32,6 +32,7 @@ export async function run(argv: string[], io: Io): Promise<number> {
   emend mcp
   emend service install [serve options] | uninstall | status
   emend skills install [--dir <path>] [--dry-run]
+  emend config [list] | add docRoots <folder> | remove docRoots <folder> | set openBrowser true|false
   emend --version
 `);
     return 0;
@@ -41,7 +42,7 @@ export async function run(argv: string[], io: Io): Promise<number> {
     return 0;
   }
   if (
-    ["wait", "feedback", "reply", "mcp", "service", "skills", "pair", "devices", "attach", "detach"].includes(
+    ["wait", "feedback", "reply", "mcp", "service", "skills", "config", "pair", "devices", "attach", "detach"].includes(
       argv[0] ?? "",
     )
   ) {
@@ -58,6 +59,7 @@ export async function run(argv: string[], io: Io): Promise<number> {
         mcp: () => import("./cli/commands/mcp.ts").then((m) => m.mcpCommand),
         service: () => import("./cli/commands/service.ts").then((m) => m.serviceCommand),
         skills: () => import("./cli/commands/skills.ts").then((m) => m.skillsCommand),
+        config: () => import("./cli/commands/config.ts").then((m) => m.configCommand),
       };
       const command = await commands[argv[0] as keyof typeof commands]();
       await command(defaultStateDir(io.env), argv.slice(1), io);
