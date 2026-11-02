@@ -9,19 +9,20 @@ import { discover } from "./server-client.ts";
 import type { Target } from "./target.ts";
 
 export class CliSignalExit extends Error {
-  constructor(readonly exitCode: number) {
+  readonly exitCode: number;
+  constructor(exitCode: number) {
     super("Interrupted");
+    this.exitCode = exitCode;
   }
 }
 export const sandboxHint =
   "If an agent sandbox runs emend, let emend run outside it: https://github.com/shllg/emend#use-with-sandboxed-agents";
 
 export class CliError extends Error {
-  constructor(
-    message: string,
-    readonly sandboxStateDir?: string,
-  ) {
+  readonly sandboxStateDir?: string;
+  constructor(message: string, sandboxStateDir?: string) {
     super(message);
+    this.sandboxStateDir = sandboxStateDir;
   }
 }
 export class CliUsageError extends CliError {}
@@ -53,7 +54,12 @@ export function errorLine(error: unknown, command?: string): string {
       : "";
   if (error instanceof StateFolderWriteError)
     return `emend cannot write its state folder ${escapeReference(error.dir)}.${hint}\n`;
-  if (error instanceof NewerDatabaseError || error instanceof StateDirModeError) return `${error.message}\n`;
+  if (error instanceof StateDirModeError) {
+    const dir = escapeReference(error.dir);
+    const quoted = `'${dir.replaceAll("'", "'\\''")}'`;
+    return `State directory ${dir} has group or other permissions; fix it with chmod 700 ${quoted}\n`;
+  }
+  if (error instanceof NewerDatabaseError) return `${error.message}\n`;
   return `emend: ${error instanceof CliApiError ? error.code : error instanceof CliError ? error.message : "The emend request failed."}${hint}\n`;
 }
 export const jsonLine = (value: unknown): string => `${JSON.stringify(value)}\n`;
@@ -67,11 +73,10 @@ export async function printJson(io: Io, value: unknown): Promise<void> {
 }
 export const publishAnswerIncomplete = "the server's answer was cut off; the revision may have been published";
 export class CliHttpError extends CliError {
-  constructor(
-    readonly status: number,
-    message: string,
-  ) {
+  readonly status: number;
+  constructor(status: number, message: string) {
     super(message);
+    this.status = status;
   }
 }
 export class CliUnansweredError extends CliHttpError {
@@ -81,13 +86,11 @@ export class CliUnansweredError extends CliHttpError {
 }
 export class CliApiError extends CliHttpError {
   readonly code: ErrorCode;
-  constructor(
-    code: ErrorCode,
-    readonly serverMessage = new ApiError(code).message,
-    status: number = ERROR_STATUS[code],
-  ) {
+  readonly serverMessage: string;
+  constructor(code: ErrorCode, serverMessage = new ApiError(code).message, status: number = ERROR_STATUS[code]) {
     super(status, new ApiError(code).message);
     this.code = code;
+    this.serverMessage = serverMessage;
   }
 }
 export async function apiRequest(

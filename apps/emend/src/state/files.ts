@@ -77,10 +77,12 @@ export function stateFolderWritable(dir: string): boolean {
 }
 
 export class StateDirModeError extends Error {
+  readonly dir: string;
   constructor(dir: string) {
     const quoted = `'${dir.replaceAll("'", "'\\''")}'`;
     super(`State directory ${dir} has group or other permissions; fix it with chmod 700 ${quoted}`);
     this.name = "StateDirModeError";
+    this.dir = dir;
   }
 }
 

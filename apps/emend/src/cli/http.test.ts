@@ -1,13 +1,50 @@
 import { rm, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
+import { NewerDatabaseError } from "../db/migrate.ts";
 import { testDb } from "../db/test-support.ts";
-import { writeSecretFile } from "../state/files.ts";
-import { apiRequest } from "./http.ts";
+import { StateDirModeError, writeSecretFile } from "../state/files.ts";
+import { apiRequest, errorLine } from "./http.ts";
 import { localTarget } from "./target.ts";
 import { provenTestServer } from "./test-support.ts";
 
 afterEach(() => vi.unstubAllGlobals());
+
+test.each([
+  "config",
+  "publish",
+  "wait",
+  "feedback",
+  "reply",
+  "mcp",
+  "service",
+  "skills",
+  "pair",
+  "devices",
+  "attach",
+  "detach",
+  "serve",
+  "open",
+])("%s mode errors escape the folder everywhere on one line", (command) => {
+  const error = new StateDirModeError("/synthetic/state\n\u001b[31m\u202e");
+  expect(errorLine(error, command)).toBe(
+    "State directory /synthetic/state\\u{a}\\u{1b}[31m\\u{202e} has group or other permissions; fix it with chmod 700 '/synthetic/state\\u{a}\\u{1b}[31m\\u{202e}'\n",
+  );
+});
+
+test("mode errors keep a pasteable chmod hint for ordinary paths with spaces and quotes", () => {
+  const dir = "/synthetic/reviewer's state";
+  expect(errorLine(new StateDirModeError(dir), "config")).toBe(
+    "State directory /synthetic/reviewer's state has group or other permissions; fix it with chmod 700 '/synthetic/reviewer'\\''s state'\n",
+  );
+});
+
+test("newer-database errors contain no path and keep their fixed diagnostic", () => {
+  expect(errorLine(new NewerDatabaseError(), "config")).toBe(
+    "The emend database is newer than this emend. Update emend, then try again.\n",
+  );
+});
+
 test("a publish timeout reports that nothing was published", async () => {
   const fixture = await testDb();
   try {

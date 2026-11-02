@@ -20,6 +20,11 @@ vi.mock("node:fs", async (importOriginal) => {
   };
 });
 
+test("a state mode error retains its original folder for safe CLI formatting", () => {
+  const dir = "/synthetic/state\n\u001b[31m";
+  expect(new StateDirModeError(dir).dir).toBe(dir);
+});
+
 test("secret writes create private parents, replace files and tighten existing permissions", async () => {
   const dir = await mkdtemp(join(tmpdir(), "emend-files-"));
   const parent = join(dir, "state", "nested");
