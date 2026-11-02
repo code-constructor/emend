@@ -18,7 +18,7 @@ import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
 import { type TestContext, test } from "node:test";
 import { installLocal, type Runner, runCommand } from "./install-local.ts";
-import { cleanPackageDocs, preparePackageDocs } from "./package-docs.ts";
+import { cleanPackageDocs, preparePackageDocs, requirePnpmPacking } from "./package-docs.ts";
 
 interface FixtureOptions {
   mise?: boolean;
@@ -513,6 +513,19 @@ test("runCommand rejects a program that does not exist", async (t) => {
     code: "ENOENT",
   });
 });
+
+test("prepack accepts a pnpm user agent", () => {
+  assert.doesNotThrow(() => requirePnpmPacking("pnpm/11.20.0 npm/? node/v24.18.0 linux x64"));
+});
+
+for (const userAgent of ["npm/11.0.0 node/v24.18.0 linux x64", "", undefined]) {
+  test(`prepack refuses a non-pnpm user agent (${JSON.stringify(userAgent)})`, () => {
+    assert.throws(() => requirePnpmPacking(userAgent), {
+      message:
+        "package-docs: pack @shllg/emend with pnpm (pnpm pack or pnpm publish); npm would publish its private workspace devDependencies.",
+    });
+  });
+}
 
 test("package documents can be prepared again after a failed pack", (t) => {
   const f = fixture(t);

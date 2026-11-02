@@ -40,12 +40,23 @@ export function preparePackageDocs(root: string): void {
   }
 }
 
-// Both pnpm pack and npm publish run prepack/postpack. These copies are never committed.
+export function requirePnpmPacking(userAgent: string | undefined): void {
+  if (!userAgent?.startsWith("pnpm/")) {
+    throw new Error(
+      "package-docs: pack @shllg/emend with pnpm (pnpm pack or pnpm publish); npm would publish its private workspace devDependencies.",
+    );
+  }
+}
+
+// Only pnpm packs this package: its root pnpmfile strips devDependencies.
+// These prepack/postpack document copies are never committed.
 if (import.meta.main) {
   const root = fileURLToPath(new URL("..", import.meta.url));
   try {
-    if (process.argv[2] === "prepare") preparePackageDocs(root);
-    else if (process.argv[2] === "clean") cleanPackageDocs(root);
+    if (process.argv[2] === "prepare") {
+      requirePnpmPacking(process.env.npm_config_user_agent);
+      preparePackageDocs(root);
+    } else if (process.argv[2] === "clean") cleanPackageDocs(root);
     else throw new Error("Usage: node scripts/package-docs.ts prepare|clean");
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));

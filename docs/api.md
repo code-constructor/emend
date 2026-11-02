@@ -1,7 +1,8 @@
 # API v1
 
 The versioned API lives under `/api/v1`. `@emend/contract` exports its zod schemas and inferred
-TypeScript types under the same names, with `CONTRACT_VERSION = 1`. All API timestamps are
+TypeScript types under the same names, with `CONTRACT_VERSION = 1`. It is a workspace package in
+this repository and is not published to npm: never install an `@emend/*` package from the registry. All API timestamps are
 ISO 8601 UTC strings (for example `2026-01-01T00:10:00.000Z`). Object schemas strip unknown
 keys at every level. Additive fields stay in v1; breaking changes require `/api/v2`.
 

@@ -75,9 +75,13 @@ try {
   }
 
   check = "read packed manifest";
-  const manifest = JSON.parse(readFileSync(join(extracted, "package/package.json"), "utf8"));
+  const manifestText = readFileSync(join(extracted, "package/package.json"), "utf8");
+  const manifest = JSON.parse(manifestText);
+  check = "packed manifest has no @emend/ references";
+  assert(!manifestText.includes("@emend/"));
   for (const field of [
     "dependencies",
+    "devDependencies",
     "optionalDependencies",
     "peerDependencies",
     "bundleDependencies",
