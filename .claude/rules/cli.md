@@ -2,7 +2,6 @@
 paths:
   - "apps/emend/src/cli/**"
   - "apps/emend/bin/**"
-  - "install.sh"
 ---
 
 # The emend CLI

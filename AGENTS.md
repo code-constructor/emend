@@ -30,7 +30,7 @@ The work queue is `tasks/`. When asked "what now?", "what's next?" or similar, f
 
 ## Commands
 
-- `pnpm verify`: the completion gate: `lint`, `typecheck`, `test`, `build`, `check:budget`,
+- `pnpm verify`: the completion gate: `lint`, `typecheck`, `test`, `build`, `check:package`, `check:budget`,
   `check:sync` and `test:harness`, in that order.
 - `pnpm lint`: Biome checks formatting and lint. `pnpm typecheck`: TypeScript project references.
 - `pnpm test`: Vitest (Node for packages and CLI, happy-dom for the web app), with temporary state.
@@ -113,7 +113,7 @@ Codex reads only this file. Open the matching rule file before you edit these pa
 | `packages/core/src/render/`, `apps/web/src/`, `apps/web/public/`, the content path, headers | `.claude/rules/content-isolation.md` |
 | `apps/emend/src/server/`, `packages/contract/`, `docs/api.md` | `.claude/rules/api-and-auth.md` |
 | `apps/emend/src/db/`, `apps/emend/drizzle/`, `apps/emend/drizzle.config.ts` | `.claude/rules/db.md` |
-| `apps/emend/src/cli/`, `apps/emend/bin/`, `install.sh` | `.claude/rules/cli.md` |
+| `apps/emend/src/cli/`, `apps/emend/bin/` | `.claude/rules/cli.md` |
 | `sync/`, a path in `sync/manifest.json`, review wording, topics, modes, outcomes | "Sync with hunk-review-skill" below |
 
 ## Sync with hunk-review-skill

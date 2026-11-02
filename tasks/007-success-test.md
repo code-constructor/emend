@@ -14,9 +14,9 @@ attached and a phone as a client.
 
 ## Steps
 
-- [ ] Hub: clone, `./install.sh`, `emend service install --tailscale`, `emend pair`.
+- [ ] Hub: install emend as the README's Install section says, `emend service install --tailscale`, `emend pair`.
 - [ ] Phone: open the hub, add it to the home screen, pair the installed app with a code.
-- [ ] Laptop: `./install.sh`, `emend attach <link>`, pair the browser with a code.
+- [ ] Laptop: install emend as the README's Install section says, `emend attach <link>`, pair the browser with a code.
 - [ ] Run the success test's nine steps on a real branch. Record pass or fail per step in the
       plan's build log, without client text.
 - [ ] `emend-security-reviewer` over the whole slice, then `emend-reviewer` and a Codex review.

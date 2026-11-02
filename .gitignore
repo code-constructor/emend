@@ -17,3 +17,7 @@ spikes/
 
 # A pnpm store inside the checkout (sandboxed sessions cannot write the global one)
 .pnpm-store/
+
+# Temporary package documents, copied by prepack and removed by postpack.
+/apps/emend/README.md
+/apps/emend/LICENSE

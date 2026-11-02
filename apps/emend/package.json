@@ -3,6 +3,18 @@
   "version": "0.1.0",
   "description": "Local-first review for work done by coding agents: plans, docs and code.",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shllg/emend.git",
+    "directory": "apps/emend"
+  },
+  "homepage": "https://github.com/shllg/emend#readme",
+  "bugs": {
+    "url": "https://github.com/shllg/emend/issues"
+  },
   "type": "module",
   "bin": {
     "emend": "bin/emend"
@@ -16,6 +28,8 @@
   },
   "scripts": {
     "build": "node build.ts",
+    "prepack": "node ../../scripts/package-docs.ts prepare",
+    "postpack": "node ../../scripts/package-docs.ts clean",
     "db:generate": "drizzle-kit generate",
     "db:embed": "node embed-migrations.ts"
   },

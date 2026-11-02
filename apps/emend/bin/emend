@@ -20,7 +20,7 @@ while :; do
 done
 
 if [ ! -f "$directory/../dist/emend.mjs" ]; then
-  printf 'emend: not built; run install.sh in the emend checkout\n' >&2
+  printf 'emend: not built; run pnpm build in the emend checkout\n' >&2
   exit 1
 fi
 
