@@ -33,7 +33,7 @@ export function Panes({
               data-testid="reading-pane"
               data-reading-scroll
               tabIndex={-1}
-              className="min-w-0 flex-1 overflow-y-auto"
+              className="relative min-w-0 flex-1 overflow-y-auto"
             >
               {reading}
             </section>
@@ -43,7 +43,7 @@ export function Panes({
               aria-label="Diff"
               data-testid="diff-pane"
               data-diff-scroll
-              className="min-w-0 flex-1 overflow-y-auto border-line-1 md:border-l"
+              className="relative min-w-0 flex-1 overflow-y-auto border-line-1 md:border-l"
             >
               {diff}
             </section>

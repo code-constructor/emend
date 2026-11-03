@@ -207,6 +207,7 @@ test("the scrolling main stays outside the centred devices content column", asyn
   const main = screen.getByRole("main");
   const column = main.firstElementChild;
   expect(main.className).toContain("overflow-y-auto");
+  expect(main.classList.contains("relative")).toBe(true);
   expect(main.className).not.toMatch(/max-w-|mx-auto/);
   expect(column?.contains(heading)).toBe(true);
   expect(column?.className).toContain("max-w-[760px]");

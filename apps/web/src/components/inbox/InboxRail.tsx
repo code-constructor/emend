@@ -15,7 +15,7 @@ export function InboxRail({ onShow }: { onShow: () => void }) {
       className="flex w-(--inbox-w-collapsed) shrink-0 flex-col items-center gap-2 border-r border-line-1 bg-app py-2"
     >
       <IconButton label="Show inbox" icon={PanelLeftOpen} onClick={onShow} />
-      <div className="min-h-0 w-full flex-1 overflow-y-auto">
+      <div className="relative min-h-0 w-full flex-1 overflow-y-auto">
         <ul className="flex flex-col items-center gap-0.5">
           {query.data?.items
             .filter((review) => !review.movedTo)

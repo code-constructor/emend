@@ -29,7 +29,7 @@ function DiagramFrame({ source }: { source: string }) {
     return () => window.removeEventListener("message", receive);
   }, []);
   return (
-    <div className="space-y-2 overflow-auto rounded-md bg-sunken p-3.5">
+    <div className="relative space-y-2 overflow-auto rounded-md bg-sunken p-3.5">
       <iframe
         ref={frame}
         title="Diagram"

@@ -85,7 +85,7 @@ export function Inbox({
           />
         )}
       </div>
-      <div className={compact ? "min-h-0 flex-1 overflow-y-auto px-1.5 pt-1 pb-3" : "py-1"}>
+      <div className={compact ? "relative min-h-0 flex-1 overflow-y-auto px-1.5 pt-1 pb-3" : "py-1"}>
         {query.isPending && (
           <p role="status" className="p-4">
             Loading reviews…
@@ -126,7 +126,7 @@ export function Inbox({
 export function InboxPage() {
   return (
     <AppFrame>
-      <main className="min-h-0 flex-1 overflow-y-auto">
+      <main className="relative min-h-0 flex-1 overflow-y-auto">
         <Inbox />
       </main>
     </AppFrame>

@@ -97,6 +97,29 @@ function mount(path = "/") {
   const result = render(<App queryClient={client} history={history} />);
   return { ...result, history };
 }
+
+test.each([
+  { path: "/", size: 1280, count: 1 },
+  { path: `/r/${id}`, size: 1280, count: 3 },
+  { path: `/r/${id}`, size: 900, count: 3 },
+])("scroll panes contain absolutely positioned labels at $path ($size px)", async ({ path, size, count }) => {
+  width = size;
+  const { container } = mount(path);
+  await screen.findByRole("heading", { name: path === "/" ? "Inbox" : item.title, level: 1 });
+  await waitFor(() =>
+    expect(container.querySelectorAll(".overflow-y-auto:not(textarea), .overflow-auto")).toHaveLength(count),
+  );
+  const panes = container.querySelectorAll(".overflow-y-auto:not(textarea), .overflow-auto");
+  expect(panes).toHaveLength(count);
+  for (const pane of panes) expect(pane.classList.contains("relative")).toBe(true);
+  if (size === 900) {
+    fireEvent.click(screen.getByRole("button", { name: "Show inbox" }));
+    const sheet = await screen.findByRole("dialog", { name: "Inbox" });
+    const scrollers = sheet.querySelectorAll(".overflow-y-auto, .overflow-auto");
+    expect(scrollers).toHaveLength(2);
+    for (const pane of scrollers) expect(pane.classList.contains("relative")).toBe(true);
+  }
+});
 beforeEach(() => {
   (window as unknown as Window).happyDOM.setURL(initialUrl);
   width = 1280;

@@ -32,6 +32,9 @@
     box-shadow: var(--focus-ring);
     border-radius: var(--radius-sm);
   }
+  [tabindex="-1"]:focus-visible {
+    box-shadow: none;
+  }
   ::selection {
     background: var(--ochre-200);
     color: var(--n-1000);

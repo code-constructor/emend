@@ -51,7 +51,7 @@ export function Menu({ label, trigger, align = "right", size = "md", items, defa
           sideOffset={4}
           collisionPadding={8}
           className={cn(
-            "z-[calc(var(--z-sheet)+2)] max-h-(--radix-dropdown-menu-content-available-height) min-w-52 animate-[em-fade_var(--dur-1)_var(--ease-out)] overflow-y-auto rounded-lg border border-line-1 bg-raised p-1 shadow-3",
+            "relative z-[calc(var(--z-sheet)+2)] max-h-(--radix-dropdown-menu-content-available-height) min-w-52 animate-[em-fade_var(--dur-1)_var(--ease-out)] overflow-y-auto rounded-lg border border-line-1 bg-raised p-1 shadow-3",
             items.some((item) => "radioGroup" in item) && "min-w-60",
           )}
         >

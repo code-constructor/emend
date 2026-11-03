@@ -10,6 +10,7 @@ import { plural } from "../../lib/count.ts";
 import { Composer } from "../threads/Composer.tsx";
 import { ThreadCard } from "../threads/ThreadCard.tsx";
 import { Button } from "../ui/Button.tsx";
+import { annotationExpansions } from "./annotation-expansion.ts";
 import { FileHeader } from "./FileHeader.tsx";
 import { LineComposer } from "./LineComposer.tsx";
 import { linesTarget } from "./linesTarget.ts";
@@ -46,11 +47,31 @@ export function DiffView({
   selected: SelectedLineRange | null;
   onSlots?: (slots: SlotState) => void;
 }) {
+  const expansionState = useRef<{
+    instance: Parameters<NonNullable<FileDiffOptions<ReactElement, undefined>["onPostRender"]>>[1];
+    diff: ParsedDiff;
+    counts: Map<string, number>;
+  } | null>(null);
   const onPostRender = useCallback<NonNullable<FileDiffOptions<ReactElement, undefined>["onPostRender"]>>(
-    (node, _instance, phase) => {
+    (node, instance, phase) => {
+      if (phase === "unmount") expansionState.current = null;
       // The initial mount callback can precede async rendering. Once code exists,
       // Pierre has committed its annotation slots in the same render as the lines.
       const rendered = phase !== "unmount" && !!node.shadowRoot?.querySelector("[data-line]");
+      if (rendered) {
+        if (expansionState.current?.instance !== instance || expansionState.current.diff !== fileDiff)
+          expansionState.current = { instance, diff: fileDiff, counts: new Map() };
+        const counts = expansionState.current.counts;
+        const pending = [];
+        for (const [key, expansion] of annotationExpansions(fileDiff, annotations)) {
+          const previous = counts.get(key) ?? 0;
+          if (expansion.count <= previous) continue;
+          // Record before expanding: an unmanaged instance can render synchronously.
+          counts.set(key, expansion.count);
+          pending.push({ ...expansion, count: expansion.count - previous });
+        }
+        for (const { index, direction, count } of pending) instance.expandHunk(index, direction, count);
+      }
       onSlots?.({
         rendered,
         names: new Set(
@@ -60,7 +81,7 @@ export function DiffView({
         ),
       });
     },
-    [onSlots],
+    [onSlots, fileDiff, annotations],
   );
   return (
     <div className="em-diff-code">
@@ -77,8 +98,7 @@ export function DiffView({
           overflow: "wrap",
           disableFileHeader: true,
           enableLineSelection: true,
-          // Placed comments must also be visible in otherwise collapsed context.
-          expandUnchanged: annotations.length > 0,
+          expandUnchanged: false,
           onLineSelectionEnd: onSelect,
           onPostRender,
         }}
@@ -189,7 +209,7 @@ export function FileDiff({
   const slotPending = (side: "old" | "new", end: number) => {
     if (file.flag || (lockfile && !expanded) || bodyState.blocked || slotState.rendered) return false;
     const diff = bodyState.diff;
-    // The parser uses complete file contents; expandUnchanged exposes their context.
+    // The parser uses complete contents; per-region expansion exposes annotations.
     // Identical files (no hunks) and out-of-range lines have permanent fallbacks.
     return (
       !diff ||
@@ -238,15 +258,17 @@ export function FileDiff({
             </div>
           ))}
       </div>
-      {selected && (
-        <LineComposer
-          reviewId={context.reviewId}
-          revision={context.revision}
-          target={selected}
-          topics={context.topics}
-          onSaved={close}
-          onCancel={close}
-        />
+      {selected && !slots.has(`annotation-${selected.side === "old" ? "deletions" : "additions"}-${selected.end}`) && (
+        <div data-slot-pending={slotPending(selected.side, selected.end) || undefined}>
+          <LineComposer
+            reviewId={context.reviewId}
+            revision={context.revision}
+            target={selected}
+            topics={context.topics}
+            onSaved={close}
+            onCancel={close}
+          />
+        </div>
       )}
       {!collapsed && !topicCollapsed && (
         <div className="em-diff-body">
@@ -378,13 +400,38 @@ function FileBody({
     group.threads.push(thread);
     grouped.set(key, group);
   }
+  const selectedKey = selected
+    ? `annotation-${selected.side === "old" ? "deletions" : "additions"}-${selected.end}`
+    : null;
+  if (selected && selectedKey && !grouped.has(selectedKey))
+    grouped.set(selectedKey, {
+      side: selected.side === "old" ? "deletions" : "additions",
+      lineNumber: selected.end,
+      threads: [],
+    });
   const annotations: Annotation[] = [...grouped].map(([key, group]) => ({
     side: group.side,
     lineNumber: group.lineNumber,
     metadata: (
-      <div>
-        {slots.has(key) &&
-          group.threads.map((thread) => <ThreadCard surface="diff" key={thread.id} {...context} thread={thread} />)}
+      <div className="em-diff-annotation">
+        {slots.has(key) && (
+          <>
+            {group.threads.map((thread) => (
+              <ThreadCard surface="diff" key={thread.id} {...context} thread={thread} />
+            ))}
+            {selected && key === selectedKey && (
+              <Composer
+                surface="diff"
+                reviewId={context.reviewId}
+                revision={context.revision}
+                target={selected}
+                topics={context.topics}
+                onSaved={() => context.onActive(null)}
+                onCancel={() => context.onActive(null)}
+              />
+            )}
+          </>
+        )}
       </div>
     ),
   }));

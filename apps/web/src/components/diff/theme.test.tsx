@@ -25,6 +25,33 @@ const overrides = {
 };
 
 afterEach(cleanup);
+test("annotation content cannot size the split columns and its controls wrap", () => {
+  const annotation = stylesheet.match(/\.em-diff-annotation\s*\{([^}]+)\}/)?.[1];
+  expect(annotation).toMatch(/contain:\s*inline-size;/);
+  expect(annotation).toMatch(/min-width:\s*0;/);
+  expect(stylesheet).toMatch(/\.em-diff-annotation \.em-thread > footer,[\s\S]*?flex-wrap:\s*wrap;/);
+  expect(stylesheet).toMatch(/\.em-diff-annotation \.em-composer__foot\s*\{\s*flex-wrap:\s*wrap;/);
+  expect(stylesheet).toMatch(/\.em-diff-annotation \.em-composer__target > span\s*\{[^}]*text-overflow:\s*ellipsis;/);
+});
+
+test("script-focused headings suppress only their ring; keyboard buttons retain the global rule", () => {
+  const css = readFileSync(resolve(import.meta.dirname, "../../styles/base.css"), "utf8");
+  const focus = css.match(/:focus-visible\s*\{([^}]+)\}/);
+  const suppressed = css.match(/(\[tabindex="-1"\]):focus-visible\s*\{([^}]+)\}/);
+  expect(focus?.[1]).toContain("box-shadow: var(--focus-ring)");
+  expect(suppressed?.[2]).toContain("box-shadow: none");
+  expect(suppressed?.index).toBeGreaterThan(focus?.index ?? 0);
+  const view = render(
+    <>
+      <h1 tabIndex={-1}>Review</h1>
+      <button type="button">Keyboard control</button>
+    </>,
+  );
+  const selector = suppressed?.[1] ?? "missing";
+  expect(view.getByRole("heading").matches(selector)).toBe(true);
+  expect(view.getByRole("button").matches(selector)).toBe(false);
+});
+
 test.each(["light", "dark"])("real diff host uses the verified token overrides in %s scheme", async (theme) => {
   const style = document.createElement("style");
   const tokens = Object.fromEntries(

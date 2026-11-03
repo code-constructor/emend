@@ -70,6 +70,20 @@
   .em-diff-discussion > * {
     margin: 8px 12px;
   }
+  .em-diff-annotation {
+    contain: inline-size;
+    min-width: 0;
+  }
+  .em-diff-annotation .em-thread__head,
+  .em-diff-annotation .em-thread > footer,
+  .em-diff-annotation .em-composer__foot {
+    flex-wrap: wrap;
+  }
+  .em-diff-annotation .em-composer__target > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   .em-diff-summary {
     display: flex;
     flex-wrap: wrap;

@@ -46,7 +46,7 @@ export function DevicesPage() {
   });
   return (
     <AppFrame>
-      <main className="min-h-0 flex-1 overflow-y-auto">
+      <main className="relative min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-[760px] px-5 pt-8 pb-20">
           <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
             <div className="min-w-0 flex-1 basis-80">

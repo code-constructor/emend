@@ -1,19 +1,29 @@
 import type { FileView, RevisionView, Target, ThreadView } from "@emend/contract";
+import type { FileDiffProps } from "@pierre/diffs/react";
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from "@tanstack/react-router";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import type { ReactNode } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { DiffPane } from "./DiffPane.tsx";
 import { parsePair } from "./parse.worker.ts";
 import type { DiffParser } from "./parse-client.ts";
 
 // Keep the actual renderer. Worker transport is exercised separately against the built worker.
-vi.mock("@pierre/diffs/react", async (original) => ({
-  ...(await original<object>()),
-  WorkerPoolContextProvider: ({ children }: { children: ReactNode }) => children,
-}));
+const renderer = vi.hoisted(() => ({ props: undefined as FileDiffProps<ReactElement, undefined> | undefined }));
+vi.mock("@pierre/diffs/react", async (original) => {
+  const actual = await original<typeof import("@pierre/diffs/react")>();
+  return {
+    ...actual,
+    WorkerPoolContextProvider: ({ children }: { children: ReactNode }) => children,
+    FileDiff: (props: FileDiffProps<ReactElement, undefined>) => {
+      renderer.props = props;
+      return <actual.FileDiff {...props} />;
+    },
+  };
+});
 const reviewId = "11111111-1111-4111-8111-111111111111";
+const hostileComment = "<script>alert(1)</script><img src=x onerror=alert(1)><svg onload=alert(1)>javascript:alert(1)";
 const file = (values: Partial<FileView> = {}): FileView => ({
   id: crypto.randomUUID(),
   path: "new.txt",
@@ -63,7 +73,7 @@ let client: QueryClient;
 let callbacks: Map<Element, (entries: Partial<IntersectionObserverEntry>[]) => void>;
 let fetchMock: ReturnType<typeof vi.fn>;
 function Pane({ parser = parsePair }: { parser?: DiffParser }) {
-  const { data } = useQuery<RevisionView>({ queryKey: ["test-revision"], staleTime: Infinity });
+  const { data } = useQuery<RevisionView>({ queryKey: ["test-revision"], staleTime: Infinity, enabled: false });
   return data && <DiffPane reviewId={reviewId} revision={data} parser={parser} />;
 }
 async function mount(value: RevisionView, parser?: DiffParser) {
@@ -84,6 +94,7 @@ function near(path: string, value = true) {
   act(() => callbacks.get(section)?.([{ isIntersecting: value, target: section }]));
 }
 beforeEach(() => {
+  renderer.props = undefined;
   localStorage.clear();
   window.dispatchEvent(new StorageEvent("storage", { key: null, storageArea: localStorage }));
   callbacks = new Map();
@@ -103,6 +114,78 @@ beforeEach(() => {
   );
   fetchMock = vi.fn(async () => new Response("one\ntwo\n"));
   vi.stubGlobal("fetch", fetchMock);
+});
+
+test.each(["deletions", "additions"] as const)(
+  "the %s composer shares its end-line slot with saved threads, focuses, and closes on save or cancel",
+  async (side) => {
+    vi.stubGlobal("matchMedia", () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+    fetchMock.mockImplementation(async (path: string, init?: RequestInit) =>
+      init?.method === "POST"
+        ? Response.json({}, { status: 201 })
+        : new Response(path.endsWith("/old") ? "one\nold\nthree\n" : "one\ntwo\nthree\n"),
+    );
+    const location: Target = {
+      ...target,
+      path: side === "deletions" ? "old.txt" : "new.txt",
+      side: side === "deletions" ? "old" : "new",
+    };
+    await mount(revision([file()], [thread("Saved first", location), thread(hostileComment, location)]));
+    near("new.txt");
+    await waitFor(() => expect(screen.getByText("Saved first").closest("diffs-container")).toBeTruthy());
+    const select = () => act(() => renderer.props?.options?.onLineSelectionEnd?.({ side, start: 1, end: 2 }));
+    select();
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: "Comment" }).closest(".em-diff-annotation")).toBeTruthy(),
+    );
+    const input = screen.getByRole("textbox", { name: "Comment" });
+    const annotation = input.closest(".em-diff-annotation");
+    expect(annotation?.closest("[slot]")?.getAttribute("slot")).toBe(`annotation-${side}-2`);
+    expect(annotation?.querySelectorAll("[data-thread-card]")).toHaveLength(2);
+    expect(annotation?.textContent).toContain(hostileComment);
+    expect(
+      screen.getByText(hostileComment).querySelector("script,img,svg,[onerror],[onload],[href^='javascript:']"),
+    ).toBeNull();
+    expect(annotation?.lastElementChild).toBe(input.closest("form"));
+    expect(document.querySelectorAll(`[slot="annotation-${side}-2"]`)).toHaveLength(1);
+    expect(screen.queryByRole("region", { name: "Line comment" })).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(input));
+    fireEvent.change(input, { target: { value: "New inline comment" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save comment" }));
+    await waitFor(() => expect(screen.queryByRole("textbox", { name: "Comment" })).toBeNull());
+    expect(screen.getByText("Saved first").closest(".em-diff-annotation")).toBe(annotation);
+    select();
+    await screen.findByRole("textbox", { name: "Comment" });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("textbox", { name: "Comment" })).toBeNull());
+  },
+);
+
+test("a selection without a saved thread creates its own annotation and receives focus", async () => {
+  vi.stubGlobal("matchMedia", () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+  fetchMock.mockImplementation(
+    async (path: string) => new Response(path.endsWith("/old") ? "one\nold\n" : "one\ntwo\n"),
+  );
+  await mount(revision([file()], []));
+  near("new.txt");
+  await waitFor(() => expect(renderer.props).toBeDefined());
+  act(() => renderer.props?.options?.onLineSelectionEnd?.({ side: "additions", start: 2, end: 2 }));
+  await waitFor(() =>
+    expect(screen.getByRole("textbox", { name: "Comment" }).closest('[slot="annotation-additions-2"]')).toBeTruthy(),
+  );
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Comment" })));
+});
+
+test("a selection in an identical file keeps a focused fallback above the diff body", async () => {
+  vi.stubGlobal("matchMedia", () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+  await mount(revision([file()], []));
+  near("new.txt");
+  await waitFor(() => expect(renderer.props).toBeDefined());
+  act(() => renderer.props?.options?.onLineSelectionEnd?.({ side: "additions", start: 1, end: 2 }));
+  const fallback = await screen.findByRole("region", { name: "Line comment" });
+  expect(fallback.parentElement?.nextElementSibling?.className).toBe("em-diff-body");
+  expect(fallback.closest("[data-slot-pending]")).toBeNull();
+  await waitFor(() => expect(document.activeElement).toBe(within(fallback).getByRole("textbox", { name: "Comment" })));
 });
 afterEach(() => {
   cleanup();

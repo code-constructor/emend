@@ -83,7 +83,7 @@ export function Sheet({
               <IconButton label="Close" icon={X} size={side === "bottom" ? "lg" : "md"} tooltip={false} />
             </Dialog.Close>
           </header>
-          <div className="min-h-0 flex-1 space-y-4 overflow-auto p-4">
+          <div className="relative min-h-0 flex-1 space-y-4 overflow-auto p-4">
             {description && (
               <Dialog.Description className="m-0 font-sans text-14 font-normal leading-(--lh-body) text-fg-2">
                 {description}

@@ -962,5 +962,6 @@ test.each([false, true])("long menus use available height and scroll vertically 
   const menu = screen.getByRole("menu");
   expect(menu.classList.contains("max-h-(--radix-dropdown-menu-content-available-height)")).toBe(true);
   expect(menu.classList.contains("overflow-y-auto")).toBe(true);
+  expect(menu.classList.contains("relative")).toBe(true);
   expect(within(menu).getAllByRole(radio ? "menuitemradio" : "menuitem")).toHaveLength(150);
 });
