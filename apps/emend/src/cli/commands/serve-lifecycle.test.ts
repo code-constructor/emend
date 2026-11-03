@@ -80,8 +80,8 @@ fi
   if (failure === "setup-timeout") {
     const tailscale = await import("../tailscale.ts");
     const ensure = tailscale.ensureTailscaleServe;
-    vi.spyOn(tailscale, "ensureTailscaleServe").mockImplementation((port, env, name, onSetup) =>
-      ensure(port, env, name, onSetup, { deadlineMs: 1_000 }),
+    vi.spyOn(tailscale, "ensureTailscaleServe").mockImplementation((port, env, name, onSetup, options) =>
+      ensure(port, env, name, onSetup, { ...options, deadlineMs: 1_000 }),
     );
   }
   const stdout: string[] = [];
@@ -131,6 +131,12 @@ test.each(["occupied", "permission"] as const)(
     expect(await f.saved()).toEqual({ baseUrl: "http://127.0.0.1:41999" });
     await expect(stat(join(f.dir, "server.json"))).rejects.toMatchObject({ code: "ENOENT" });
     expect(await f.calls()).not.toContain("serve --https=443 off");
+    expect(f.stdout).toEqual([]);
+    expect(f.stderr).toEqual([
+      failure === "permission"
+        ? "emend: Could not configure Tailscale Serve. Use a fixed --port, run `sudo tailscale serve --bg --https=443 http://127.0.0.1:<port>` once as root with that port, then try again.\n"
+        : "emend: port 443 of Tailscale Serve already has a setup emend did not make or cannot read; inspect it with `tailscale serve status`.\n",
+    ]);
   },
 );
 test.each(["setup-after-write", "setup-timeout"] as const)(
@@ -160,9 +166,9 @@ test.each(["setup-after-write", "setup-timeout"] as const)(
 test("a failed setup without a write rechecks status and leaves the config untouched", async () => {
   const f = await fixture("tls-port", "setup");
   const before = await readFile(f.configPath, "utf8");
-  expect(await run(["serve", "--tailscale", "--port", "0"], f.io)).toBe(1);
+  expect(await run(["serve", "--tailscale", "--port", "41999"], f.io)).toBe(1);
   expect(f.stderr).toEqual([
-    "emend: Could not configure Tailscale Serve. Run `sudo tailscale set --operator=$USER` once, then try again.\n",
+    "emend: Could not configure Tailscale Serve. Run `sudo tailscale serve --bg --https=443 http://127.0.0.1:41999` once as root, then try again. emend uses that route and never removes it.\n",
   ]);
   expect(await f.calls()).toEqual([
     "status --json",
@@ -174,16 +180,24 @@ test("a failed setup without a write rechecks status and leaves the config untou
   expect(await f.saved()).toEqual({ baseUrl: "http://127.0.0.1:41999" });
 });
 test.each(["empty", "same"] as const)(
-  "a stop after %s setup removes emend's background Serve handler",
+  "a stop after %s setup removes only a Serve route created by this process",
   async (initial) => {
     const f = await fixture(initial);
+    const before = await readFile(f.configPath, "utf8");
     const result = run(["serve", "--tailscale", "--port", "0"], f.io);
     await vi.waitFor(() => expect(f.stdout).toEqual([`emend: serving https://${name}\n`]));
     expect(await f.saved()).toEqual({ baseUrl: `https://${name}` });
     process.emit(initial === "empty" ? "SIGINT" : "SIGTERM");
     expect(await result).toBe(0);
-    expect(await f.calls()).toContain("serve --https=443 off");
-    expect(JSON.parse(await readFile(f.configPath, "utf8"))).toEqual({});
+    expect(await f.calls()).toEqual([
+      "status --json",
+      "serve status --json",
+      ...(initial === "empty"
+        ? ["serve --bg --https=443 http://127.0.0.1:41999", "serve status --json", "serve --https=443 off"]
+        : []),
+    ]);
+    expect(await readFile(f.configPath, "utf8")).toBe(before);
+    expect(f.stderr).toEqual([]);
     expect(await f.saved()).toEqual({ baseUrl: `https://${name}` });
     await expect(stat(join(f.dir, "server.json"))).rejects.toMatchObject({ code: "ENOENT" });
   },

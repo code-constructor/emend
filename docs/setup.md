@@ -122,6 +122,17 @@ emend service install --tailscale
 emend pair
 ```
 
+With `--tailscale`, emend serves the hub on your tailnet through Tailscale Serve on port 443. If
+Tailscale refuses to let your user set that up, run this once as root, then install again:
+
+```sh
+sudo tailscale serve --bg --https=443 http://127.0.0.1:3636
+```
+
+emend uses that route and never removes a route it did not create. The route stays until you run
+`sudo tailscale serve --https=443 off`. Remove it when the machine stops being your hub: while
+emend is down, any program listening on port 3636 would receive your phone's requests.
+
 `emend pair` prints a one-time link, a code and a QR code, valid for 10 minutes. Open the link on
 your phone, or scan the QR code, and enter the code. To add another machine, run
 `emend pair --machine` on the hub, then the `emend attach <link>` command it prints on that
@@ -129,11 +140,13 @@ machine.
 
 ```text
 Rules: show me each change and wait for my yes; never read secrets or emend's state folder; if a
-dotfiles tool manages a file or link you would change, change its source and tell me how to apply it;
-never run emend pair, attach or detach yourself, give me the command instead.
+dotfiles tool manages a file or link you would change, change its source and tell me how to apply
+it; never run emend pair, attach or detach yourself, give me the command instead.
 Help me make this machine the emend hub. Check with tailscale ip -4 that Tailscale runs here
 (do not list the other devices on my tailnet). Run
-emend service install --tailscale and show me the output. Then tell me to run emend pair myself
+emend service install --tailscale and show me the output. If Tailscale refuses to set up Serve,
+give me the sudo tailscale serve command emend prints, to run once as root, then install again.
+Then tell me to run emend pair myself
 and explain how to open the link on my phone. For another machine, tell me to run emend pair
 --machine here and emend attach with the printed link there.
 ```

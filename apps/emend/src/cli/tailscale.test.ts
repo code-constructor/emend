@@ -11,7 +11,7 @@ afterEach(async () => {
   vi.unstubAllEnvs();
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
-async function fake(status: unknown, config: unknown = {}, denied = false) {
+async function fake(status: unknown, config: unknown = {}, denied: boolean | "status" = false) {
   const dir = await mkdtemp(join(tmpdir(), "emend-tailscale-"));
   dirs.push(dir);
   const log = join(dir, "calls.jsonl");
@@ -22,8 +22,10 @@ async function fake(status: unknown, config: unknown = {}, denied = false) {
 printf '%s\\n' "$*" >> ${quote(log)}
 /usr/bin/env > ${quote(join(dir, "env"))}
 if [ "$1" = status ]; then printf '%s\\n' ${quote(JSON.stringify(status))}
-elif [ "$2" = status ]; then printf '%s\\n' ${quote(JSON.stringify(config))}
-else ${denied ? "printf '%s\\n' 'Access denied: permission denied' >&2; exit 1" : "printf ok"}
+elif [ "$2" = status ]; then
+  ${denied === "status" ? "printf 'permission denied' >&2; exit 1" : ":"}
+  printf '%s\\n' ${quote(JSON.stringify(config))}
+else ${denied ? "printf '%s\\n' 'Access denied: try sudo tailscale set --operator=$USER' >&2; exit 1" : "printf ok"}
 fi
 `,
     { mode: 0o700 },
@@ -180,7 +182,12 @@ const proxy = {
 };
 test("empty config configures exact Serve argv", async () => {
   const f = await fake(running);
-  await ensureTailscaleServe(3636);
+  const onSetup = vi.fn();
+  expect(await ensureTailscaleServe(3636, process.env, undefined, onSetup)).toEqual({
+    created: true,
+    otherHttpsPorts: false,
+  });
+  expect(onSetup).toHaveBeenCalledOnce();
   expect((await f.calls()).map((c) => c.args)).toEqual([
     ["serve", "status", "--json"],
     ["serve", "--bg", "--https=443", "http://127.0.0.1:3636"],
@@ -188,7 +195,12 @@ test("empty config configures exact Serve argv", async () => {
 });
 test("matching handler leaves Serve alone", async () => {
   const f = await fake(running, proxy);
-  await ensureTailscaleServe(3636);
+  const onSetup = vi.fn();
+  expect(await ensureTailscaleServe(3636, process.env, undefined, onSetup)).toEqual({
+    created: false,
+    otherHttpsPorts: false,
+  });
+  expect(onSetup).not.toHaveBeenCalled();
   expect(await f.calls()).toHaveLength(1);
 });
 test.each([
@@ -214,11 +226,31 @@ test.each([
   );
   expect(await f.calls()).toHaveLength(1);
 });
-test("permission error includes the literal operator hint", async () => {
+test.each([3636, 41234])("permission error offers only root's route on fixed port %s", async (port) => {
   await fake(running, {}, true);
-  await expect(ensureTailscaleServe(3636)).rejects.toThrow(
-    "Run `sudo tailscale set --operator=$USER` once, then try again.",
-  );
+  await expect(ensureTailscaleServe(port)).rejects.toMatchObject({
+    message: `Could not configure Tailscale Serve. Run \`sudo tailscale serve --bg --https=443 http://127.0.0.1:${port}\` once as root, then try again. emend uses that route and never removes it.`,
+  });
+});
+test("permission error for an ephemeral port asks for a fixed --port and a literal placeholder", async () => {
+  await fake(running, {}, true);
+  await expect(
+    ensureTailscaleServe(41999, process.env, undefined, undefined, { fixedPort: false }),
+  ).rejects.toMatchObject({
+    message:
+      "Could not configure Tailscale Serve. Use a fixed --port, run `sudo tailscale serve --bg --https=443 http://127.0.0.1:<port>` once as root with that port, then try again.",
+  });
+});
+test.each(["status", "off"] as const)("Serve %s permission errors keep the operator-only hint", async (command) => {
+  const f = await fake(running, proxy, command === "status" ? "status" : true);
+  const { removeTailscaleServe } = await import("./tailscale.ts");
+  await expect(command === "status" ? ensureTailscaleServe(3636) : removeTailscaleServe(3636)).rejects.toMatchObject({
+    message: "Could not configure Tailscale Serve. Run `sudo tailscale set --operator=$USER` once, then try again.",
+  });
+  expect((await f.calls()).map((call) => call.args)).toEqual([
+    ["serve", "status", "--json"],
+    ...(command === "off" ? [["serve", "--https=443", "off"]] : []),
+  ]);
 });
 
 test("an unrelated HTTPS port is preserved while 443 is configured", async () => {
@@ -311,7 +343,10 @@ test("another HTTPS port on this SNI name is reported, unlike another name or pl
       TCP: { ...proxy.TCP, "8443": https ? { HTTPS: true } : { HTTP: true } },
       Web: { ...proxy.Web, [`${host}:8443`]: { Handlers: { "/": { Text: "synthetic" } } } },
     });
-    expect(await ensureTailscaleServe(3636, process.env, "hub.example.ts.net")).toEqual({ otherHttpsPorts: warning });
+    expect(await ensureTailscaleServe(3636, process.env, "hub.example.ts.net")).toEqual({
+      created: false,
+      otherHttpsPorts: warning,
+    });
   }
 });
 test.each([
@@ -322,7 +357,10 @@ test.each([
   await fake(running, {
     TCP: { "8443": { TCPForward: "127.0.0.1:8080", ...(terminateTLS ? { TerminateTLS: terminateTLS } : {}) } },
   });
-  expect(await ensureTailscaleServe(3636, process.env, "hub.example.ts.net")).toEqual({ otherHttpsPorts: warning });
+  expect(await ensureTailscaleServe(3636, process.env, "hub.example.ts.net")).toEqual({
+    created: true,
+    otherHttpsPorts: warning,
+  });
 });
 test("stop removes only an exactly matching handler with the exact off argv", async () => {
   const f = await fake(running, proxy);

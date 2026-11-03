@@ -78,11 +78,17 @@ export async function serveCommand(stateDir: string, options: ReturnType<typeof 
     }
     if (stopped) return;
     if (self) {
-      const result = await ensureTailscaleServe(server.port, io.env, self.dnsName, () => {
-        // A failed --bg call can still have applied the handler.
-        setup = true;
-      });
-      setup = true;
+      const result = await ensureTailscaleServe(
+        server.port,
+        io.env,
+        self.dnsName,
+        () => {
+          // A failed --bg call can still have applied the handler.
+          setup = true;
+        },
+        { fixedPort: options.port !== 0 },
+      );
+      setup = result.created;
       if (stopped) return;
       if (result.otherHttpsPorts)
         io.stderr(
@@ -105,7 +111,7 @@ export async function serveCommand(stateDir: string, options: ReturnType<typeof 
     try {
       if (server) {
         let removalError: string | undefined;
-        // Remove the proxy before releasing its loopback port to another process.
+        // Remove a proxy this process created before releasing its loopback port to another process.
         try {
           if (self && setup) await removeTailscaleServe(server.port, io.env, self.dnsName);
         } catch (error) {

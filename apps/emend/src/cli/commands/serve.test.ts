@@ -9,12 +9,16 @@ import { parseServeArgs } from "./serve.ts";
 vi.mock("../../server/serve.ts", () => ({ startServer: vi.fn() }));
 afterEach(() => vi.restoreAllMocks());
 
-test.each([false, true])("a stop request exits zero with SIGTERM cleanup (tailscale: %s)", async (tailscale) => {
+test.each([
+  { name: "loopback only", tailscale: false, created: false },
+  { name: "new Serve route", tailscale: true, created: true },
+  { name: "existing Serve route", tailscale: true, created: false },
+])("a stop request cleans up only its own route: $name", async ({ tailscale, created }) => {
   const stateDir = await mkdtemp(join(process.env.EMEND_HOME as string, "serve-stop-"));
   const actual = await vi.importActual<typeof import("../../server/serve.ts")>("../../server/serve.ts");
   const proxy = await import("../tailscale.ts");
   vi.spyOn(proxy, "tailscaleSelf").mockResolvedValue({ dnsName: "review.example.ts.net" });
-  vi.spyOn(proxy, "ensureTailscaleServe").mockResolvedValue({ otherHttpsPorts: false });
+  vi.spyOn(proxy, "ensureTailscaleServe").mockResolvedValue({ created, otherHttpsPorts: false });
   const remove = vi.spyOn(proxy, "removeTailscaleServe").mockResolvedValue(undefined);
   let server: Awaited<ReturnType<typeof startServer>> | undefined;
   let stop: (() => void) | undefined;
@@ -35,7 +39,7 @@ test.each([false, true])("a stop request exits zero with SIGTERM cleanup (tailsc
     expect(await stopLocalServer(stateDir)).toBe(server?.url);
     expect(await result).toBe(0);
     await expect(readFile(join(stateDir, "server.json"))).rejects.toMatchObject({ code: "ENOENT" });
-    expect(remove).toHaveBeenCalledTimes(tailscale ? 1 : 0);
+    expect(remove).toHaveBeenCalledTimes(tailscale && created ? 1 : 0);
     expect(stderr).not.toHaveBeenCalled();
   } finally {
     stop?.();
@@ -119,7 +123,7 @@ test("tailscale setup follows startup, uses the bound port, and prints only the 
   vi.spyOn(tailscale, "ensureTailscaleServe").mockImplementation(async (port) => {
     calls.push("serve");
     expect(port).toBe(4000);
-    return { otherHttpsPorts: false };
+    return { created: true, otherHttpsPorts: false };
   });
   const stdout: string[] = [];
   const result = run(["serve", "--port", "0", "--tailscale"], {
@@ -166,10 +170,37 @@ test("tailscale setup failure closes the started server and exits one", async ()
   ]);
 });
 
+test("a setup attempt that throws still removes its route during shutdown", async () => {
+  const tailscale = await import("../tailscale.ts");
+  const { CliError } = await import("../http.ts");
+  vi.spyOn(tailscale, "tailscaleSelf").mockResolvedValue({ dnsName: "hub.example.ts.net" });
+  vi.spyOn(tailscale, "ensureTailscaleServe").mockImplementation(async (_port, _env, _name, onSetupAttempt) => {
+    onSetupAttempt?.();
+    throw new CliError("synthetic setup failure");
+  });
+  const remove = vi.spyOn(tailscale, "removeTailscaleServe").mockResolvedValue(undefined);
+  const close = vi.fn(async () => {});
+  vi.mocked(startServer).mockResolvedValue({
+    url: "http://127.0.0.1:41999",
+    port: 41999,
+    setPublicOriginReady: vi.fn(),
+    close,
+  });
+  const stdout = vi.fn();
+  const stderr = vi.fn();
+  expect(await run(["serve", "--tailscale", "--port", "0"], { env: process.env, stdout, stderr })).toBe(1);
+  expect(remove).toHaveBeenCalledExactlyOnceWith(41999, process.env, "hub.example.ts.net");
+  expect(close).toHaveBeenCalledOnce();
+  expect(stdout).not.toHaveBeenCalled();
+  expect(stderr).toHaveBeenCalledExactlyOnceWith("emend: synthetic setup failure\n");
+});
+
 test("a stop after startServer resolves skips Tailscale setup and closes normally", async () => {
   const tailscale = await import("../tailscale.ts");
   vi.spyOn(tailscale, "tailscaleSelf").mockResolvedValue({ dnsName: "hub.example.ts.net" });
-  const setup = vi.spyOn(tailscale, "ensureTailscaleServe").mockResolvedValue({ otherHttpsPorts: false });
+  const setup = vi
+    .spyOn(tailscale, "ensureTailscaleServe")
+    .mockResolvedValue({ created: true, otherHttpsPorts: false });
   const remove = vi.spyOn(tailscale, "removeTailscaleServe").mockResolvedValue(undefined);
   const close = vi.fn(async () => {});
   const advertise = vi.fn();
@@ -244,7 +275,9 @@ test.each([
   const tailscale = await import("../tailscale.ts");
   vi.spyOn(tailscale, "removeTailscaleServe").mockResolvedValue(undefined);
   vi.spyOn(tailscale, "tailscaleSelf").mockResolvedValue({ dnsName: "hub.example.ts.net" });
-  const setup = vi.spyOn(tailscale, "ensureTailscaleServe").mockResolvedValue({ otherHttpsPorts: false });
+  const setup = vi
+    .spyOn(tailscale, "ensureTailscaleServe")
+    .mockResolvedValue({ created: true, otherHttpsPorts: false });
   vi.mocked(startServer).mockResolvedValue({
     url,
     port: bound,
@@ -260,6 +293,7 @@ test.each([
   try {
     await vi.waitFor(() => expect(stdout).toHaveLength(1));
     expect(setup.mock.calls[0]?.[0]).toBe(bound);
+    expect(setup.mock.calls[0]?.[4]).toEqual({ fixedPort: requested !== 0 });
   } finally {
     process.emit("SIGTERM");
     await result;

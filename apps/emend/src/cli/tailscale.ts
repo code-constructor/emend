@@ -14,6 +14,7 @@ interface RunOptions {
   deadlineMs?: number;
   platform?: NodeJS.Platform;
   appPath?: string;
+  fixedPort?: boolean;
 }
 const escalations = new Set<Promise<void>>();
 /** Serve keeps its signal handlers installed until every scheduled group kill has run. */
@@ -28,6 +29,7 @@ async function execute(
     deadlineMs = 10_000,
     platform = process.platform,
     appPath = "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+    fixedPort = true,
   }: RunOptions = {},
 ): Promise<string> {
   signal?.throwIfAborted();
@@ -44,9 +46,14 @@ async function execute(
   return new Promise((resolve, reject) => {
     const serve = args[0] === "serve";
     const failure = (stderr = "") => {
+      const setupHint = fixedPort
+        ? ` Run \`sudo tailscale serve --bg --https=443 ${args[3]}\` once as root, then try again. emend uses that route and never removes it.`
+        : " Use a fixed --port, run `sudo tailscale serve --bg --https=443 http://127.0.0.1:<port>` once as root with that port, then try again.";
       const hint =
         serve && /permission|access denied|not permitted|sudo tailscale|operator/i.test(stderr)
-          ? " Run `sudo tailscale set --operator=$USER` once, then try again."
+          ? args[1] === "--bg"
+            ? setupHint
+            : " Run `sudo tailscale set --operator=$USER` once, then try again."
           : "";
       return new CliError(`${serve ? "Could not configure Tailscale Serve." : tailscaleUnavailable}${hint}`);
     };
@@ -265,7 +272,7 @@ export async function ensureTailscaleServe(
   dnsName?: string,
   onSetupAttempt?: () => void,
   options?: RunOptions,
-): Promise<{ otherHttpsPorts: boolean }> {
+): Promise<{ created: boolean; otherHttpsPorts: boolean }> {
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new CliError("Invalid Tailscale Serve port.");
   const config = await serveConfig(env, options);
   const target = `http://127.0.0.1:${port}`;
@@ -275,7 +282,7 @@ export async function ensureTailscaleServe(
     onSetupAttempt?.();
     await execute(["serve", "--bg", "--https=443", target], env, undefined, options);
   }
-  return { otherHttpsPorts: otherHttpsPorts(config, dnsName) };
+  return { created: state === "empty", otherHttpsPorts: otherHttpsPorts(config, dnsName) };
 }
 export async function removeTailscaleServe(port: number, env = process.env, dnsName?: string): Promise<void> {
   const config = await serveConfig(env);
