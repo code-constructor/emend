@@ -16,6 +16,7 @@ import { commentTargetReserve, envelopeBytes, jsonBytes } from "../mailbox/paylo
 import { workerExecutor } from "../publish/executor.ts";
 import { abortable } from "../publish/lifecycle.ts";
 import { mediaType } from "../publish/media.ts";
+import { validateNoteRanges } from "../publish/notes.ts";
 import { renderRevision } from "../publish/render.ts";
 import type { Executor, Work } from "../publish/work.ts";
 import { derivedRowBytes } from "./bytes.ts";
@@ -174,6 +175,7 @@ export async function prepareImport(ownerId: string, bundle: ImportBundle, deps:
           if (total > LIMITS.htmlDocWithAssetsBytes) throw new ApiError("too_large");
         }
       }
+      await validateNoteRanges(input.files, read, execute);
       const result = await renderRevision(input, execute, read, put, signal, onRendered);
       if (!rows) throw new ApiError("invalid_request");
       if (previous) {

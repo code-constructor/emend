@@ -6,6 +6,7 @@ import { and, desc, eq, isNull } from "drizzle-orm";
 import type { Db, Queries } from "../../db/client.ts";
 import { DuplicateReviewKeyError } from "../../db/repo/reviews.ts";
 import {
+  agentNotes,
   blobs as blobRows,
   docAssets,
   files,
@@ -23,6 +24,7 @@ import { insertChangedBlocks } from "./changed.ts";
 import { WorkTimeout, workerExecutor } from "./executor.ts";
 import { abortable, checkPublishSignal, PublishAborted, publishSlots } from "./lifecycle.ts";
 import { mediaType } from "./media.ts";
+import { validateNoteRanges } from "./notes.ts";
 import { renderRevision } from "./render.ts";
 import { revisionTransition } from "./transitions.ts";
 import type { Executor, SharedSides, Work, WorkLast } from "./work.ts";
@@ -275,6 +277,7 @@ async function computePublish(
         }
         if (size > LIMITS.htmlDocWithAssetsBytes) throw new ApiError("too_large");
       }
+    if (!prepared) await validateNoteRanges(input.files, read, execute);
     prepared ??= await renderRevision(
       input,
       execute,
@@ -476,8 +479,10 @@ async function computePublish(
         let inserted = 0;
         for (const { file, ord } of ordered) {
           checkPublishSignal(deps.signal);
+          const fileId = ids.get(fileKey(file));
+          if (!fileId) throw new Error("Missing file id");
           await q.insert(files).values({
-            id: ids.get(fileKey(file)),
+            id: fileId,
             ownerId,
             revisionId: revision.id,
             path: file.path,
@@ -493,6 +498,18 @@ async function computePublish(
             parentDocId: file.parent ? ids.get(`doc:${file.parent}`) : null,
             renderedBlob: file.role === "doc" ? (docBlobs.get(file.path) ?? null) : null,
           });
+          for (const [noteOrd, note] of (file.notes ?? []).entries())
+            await q.insert(agentNotes).values({
+              ownerId,
+              fileId,
+              side: note.side,
+              startLine: note.start,
+              endLine: note.end,
+              summary: note.summary,
+              rationale: note.rationale,
+              ref: note.ref,
+              ord: noteOrd,
+            });
           if (++inserted % 100 === 0) await setImmediate();
         }
         let associations: (typeof docAssets.$inferInsert)[] = [];

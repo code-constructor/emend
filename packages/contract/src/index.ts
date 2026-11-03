@@ -1,5 +1,6 @@
 export const CONTRACT_VERSION = 1;
 
+export * from "./agent-note.ts";
 export * from "./api.ts";
 export * from "./auth.ts";
 export * from "./browser.ts";

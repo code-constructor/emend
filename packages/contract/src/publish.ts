@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { AgentNotes, validateAgentNotes } from "./agent-note.ts";
 import { LIMITS } from "./limits.ts";
 import { PublishManifest, WriteupInput } from "./manifest.ts";
 import { FileFlag, FilePath, FileRole, FileStatus, OTHER_TOPIC, TopicMeta, TopicSlug } from "./review.ts";
@@ -11,18 +12,24 @@ export const Sha256 = z
   .string()
   .length(64)
   .regex(/^[0-9a-f]{64}$/);
-export const PublishFile = z.object({
-  path: FilePath,
-  oldPath: FilePath.nullable(),
-  role: FileRole,
-  status: FileStatus.optional(),
-  topic: TopicSlug.optional(),
-  oldBlob: Sha256.nullable(),
-  newBlob: Sha256.nullable(),
-  flag: FileFlag.nullable(),
-  parent: FilePath.optional(),
-  assets: z.array(FilePath).max(LIMITS.filesPerRevision).optional(),
-});
+export const PublishFile = z
+  .object({
+    path: FilePath,
+    oldPath: FilePath.nullable(),
+    role: FileRole,
+    status: FileStatus.optional(),
+    topic: TopicSlug.optional(),
+    oldBlob: Sha256.nullable(),
+    newBlob: Sha256.nullable(),
+    flag: FileFlag.nullable(),
+    parent: FilePath.optional(),
+    assets: z.array(FilePath).max(LIMITS.filesPerRevision).optional(),
+    notes: AgentNotes.optional(),
+  })
+  .refine((file) => file.role === "diff" || file.notes === undefined, {
+    path: ["notes"],
+    message: "only diff files have agent notes",
+  });
 export type PublishFile = z.infer<typeof PublishFile>;
 export const PublishRequest = z
   .object({
@@ -39,6 +46,7 @@ export const PublishRequest = z
     files: z.array(PublishFile).max(LIMITS.filesPerRevision),
   })
   .superRefine((request, ctx) => {
+    validateAgentNotes(request.files, ctx);
     if (
       request.main !== undefined &&
       request.main !== "writeup" &&

@@ -6,11 +6,15 @@ type Expansion = { index: number; direction: "up" | "down"; count: number };
 // "up" grows from the gap's start, "down" from its end (DiffHunksRenderer).
 export function annotationExpansions(
   diff: ParsedDiff,
-  annotations: { side: "deletions" | "additions"; lineNumber: number }[],
+  annotations: { side: "deletions" | "additions"; lineNumber: number; startLine?: number }[],
 ): Map<string, Expansion> {
   const expansions = new Map<string, Expansion>();
   if (diff.isPartial || !diff.hunks.length) return expansions;
-  for (const { side, lineNumber } of annotations) {
+  for (const { side, lineNumber } of annotations.flatMap((annotation) =>
+    annotation.startLine === undefined
+      ? [annotation]
+      : [annotation, { ...annotation, lineNumber: annotation.startLine }],
+  )) {
     const length = (side === "deletions" ? diff.deletionLines : diff.additionLines).length;
     if (lineNumber < 1 || lineNumber > length) continue;
     let end = 1;

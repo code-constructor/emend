@@ -1,4 +1,29 @@
 @layer components {
+  .em-agent-note__label {
+    font: 600 12px / 1.4 var(--font-sans);
+  }
+  .em-agent-note__lines {
+    margin-left: auto;
+    color: var(--fg-2);
+    font: var(--type-path);
+  }
+  .em-agent-note__summary {
+    font: 600 14px / 1.5 var(--font-sans);
+    overflow-wrap: anywhere;
+  }
+  .em-agent-note__rationale {
+    margin-top: 6px;
+    color: var(--fg-2);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .em-note-ref {
+    font: 600 11px / 1.5 var(--font-mono);
+    background: var(--accent-tint);
+    color: var(--accent-text);
+    border-radius: 4px;
+    padding: 0 5px;
+  }
   .em-card {
     position: relative;
     border: 1px solid var(--border-1);

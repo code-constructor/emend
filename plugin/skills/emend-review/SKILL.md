@@ -74,6 +74,23 @@ and short sentences of 20 words or fewer.
   concrete before/after case; `body` gives the decisions, trade-offs and checks. Keep examples
   grounded in the actual change. A request to explain something in the writeup belongs here.
 
+## Pin a few agent notes
+
+Write a note only on a hunk carrying a decision, trade-off, risk, or something easy to get wrong.
+Never write “this adds a method”. Keep notes in single digits across a large change.
+The `summary` is one sentence of 15 words or fewer. Add a short `rationale` when it helps.
+Both fields are plain text, never Markdown or HTML. Notes are read-only and belong to the revision.
+
+Put `notes` only on a `diff` file. Take every range from the patch's `@@` headers or the file.
+Never guess a line number. Publish refuses ranges outside the stored diff side and names the file and note index.
+It also refuses a missing side or a flagged file. Fix the note and publish again; nothing is silently dropped.
+Publish and import refuse notes when the file's old and new content is identical.
+Use at most eight notes per file and 64 per revision.
+
+Give a `ref` only to notes the writeup cites: `A`, `B`, `C`… in file order, restarting per topic.
+Cite it next to the matching bullet with `<span class="ref">ref A</span>`.
+Each ref must be unique within its topic.
+
 ## Publish and offer the views
 
 Read [the manifest example](references/manifest.md) before creating the manifest. Replace the

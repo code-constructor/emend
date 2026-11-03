@@ -345,6 +345,20 @@ test.each(names)("%s has only safe frontmatter and registered commands", async (
   }
 });
 
+test.each(["plugin/skills/emend-review/SKILL.md", "plugin/skills/emend-review/references/manifest.md"])(
+  "%s teaches sparse notes with verified ranges and cited refs",
+  (path) => {
+    const text = read(path);
+    expect(text).toMatch(/single.digit/);
+    expect(text).toContain("15 words or fewer");
+    expect(text).toContain("@@");
+    expect(text).toContain("file and note index");
+    expect(text).toContain("restarting per topic");
+    expect(text).toContain('<span class="ref">ref A</span>');
+    expect(text).toContain("never Markdown or HTML");
+  },
+);
+
 test("the complete example is the synthetic manifest fixture, with no stripped or invented fields", () => {
   const blocks = [...read("plugin/skills/emend-review/references/manifest.md").matchAll(/```json\n([\s\S]*?)\n```/g)];
   expect(blocks).toHaveLength(1);

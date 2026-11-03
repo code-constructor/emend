@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { AgentNoteView } from "./agent-note.ts";
 import { LIMITS } from "./limits.ts";
 import { Placement } from "./placement.ts";
 import { PublishRequest, Sha256 } from "./publish.ts";
@@ -109,6 +110,7 @@ export const FileView = z.object({
   hasNew: z.boolean(),
   viewed: z.enum(["viewed", "stale"]).optional(),
   viewedOn: z.int().positive().optional(),
+  notes: z.array(AgentNoteView).max(LIMITS.agentNotesPerFile).optional(),
 });
 export type FileView = z.infer<typeof FileView>;
 export const ThreadView = z.object({

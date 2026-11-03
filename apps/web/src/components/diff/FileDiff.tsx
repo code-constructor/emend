@@ -1,4 +1,4 @@
-import type { FileView, RevisionView, Target, ThreadView } from "@emend/contract";
+import type { AgentNoteView, FileView, RevisionView, Target, ThreadView } from "@emend/contract";
 import type {
   DiffLineAnnotation,
   FileDiffMetadata,
@@ -26,6 +26,7 @@ import { diffLoads } from "../../lib/diff-loads.ts";
 import { Composer } from "../threads/Composer.tsx";
 import { ThreadCard } from "../threads/ThreadCard.tsx";
 import { Button } from "../ui/Button.tsx";
+import { AgentNoteCard } from "./AgentNoteCard.tsx";
 import { annotationExpansions } from "./annotation-expansion.ts";
 import { CommentLinesContext, createCommentLines } from "./comment-lines.ts";
 import { FileHeader } from "./FileHeader.tsx";
@@ -40,7 +41,7 @@ import { diffTheme } from "./theme.ts";
 
 export type ParsedDiff = FileDiffMetadata;
 export type DiffPostRender = NonNullable<FileDiffOptions<ReactElement, undefined>["onPostRender"]>;
-type Annotation = DiffLineAnnotation<ReactElement>;
+type Annotation = DiffLineAnnotation<ReactElement> & { startLine?: number };
 type BodyState = { diff?: ParsedDiff; blocked: boolean; loading?: boolean };
 type SlotState = { names: Set<string>; rendered: boolean };
 const poolOptions = { workerFactory: () => new DiffWorker(), poolSize: 2 };
@@ -192,6 +193,7 @@ export type DiffContext = {
   diffStyle: DiffStyle;
   overflow?: "scroll" | "wrap";
   counts: Map<string, DiffCounts>;
+  notes?: boolean;
   onParsed: (id: string, counts: DiffCounts) => void;
   onViewed?: (paths: string[], viewed: boolean) => void;
   collapsedFiles: Set<string>;
@@ -302,6 +304,14 @@ export function FileDiff({
         onViewed={context.onViewed}
       />
       <div className="em-diff-discussion">
+        {context.notes !== false &&
+          file.notes
+            ?.filter((note) => !slots.has(`annotation-${note.side === "old" ? "deletions" : "additions"}-${note.end}`))
+            .map((note) => (
+              <div key={note.id} data-slot-pending={slotPending(note.side, note.end) || undefined}>
+                <AgentNoteCard file={file} note={note} onComment={context.onActive} />
+              </div>
+            ))}
         {active?.kind === "file" && context.fileForTarget(active)?.id === file.id && (
           <Composer
             surface="diff"
@@ -495,14 +505,31 @@ function FileBody({
       );
     } else context.onActive(result);
   };
-  const grouped = new Map<string, { side: "deletions" | "additions"; lineNumber: number; threads: ThreadView[] }>();
+  const grouped = new Map<
+    string,
+    {
+      side: "deletions" | "additions";
+      lineNumber: number;
+      startLine?: number;
+      threads: ThreadView[];
+      notes: AgentNoteView[];
+    }
+  >();
+  for (const note of context.notes === false ? [] : (file.notes ?? [])) {
+    const side = note.side === "old" ? "deletions" : "additions";
+    const key = `annotation-${side}-${note.end}`;
+    const group = grouped.get(key) ?? { side, lineNumber: note.end, startLine: note.start, threads: [], notes: [] };
+    group.startLine = Math.min(group.startLine ?? note.start, note.start);
+    group.notes.push(note);
+    grouped.set(key, group);
+  }
   for (const thread of context.threads) {
     if (thread.placement.status !== "placed") continue;
     const location = thread.placement.location;
     if (location.kind !== "lines" || context.fileForTarget(location)?.id !== file.id) continue;
     const side = location.side === "old" ? "deletions" : "additions";
     const key = `annotation-${side}-${location.end}`;
-    const group = grouped.get(key) ?? { side, lineNumber: location.end, threads: [] };
+    const group = grouped.get(key) ?? { side, lineNumber: location.end, threads: [], notes: [] };
     group.threads.push(thread);
     grouped.set(key, group);
   }
@@ -514,14 +541,19 @@ function FileBody({
       side: selected.side === "old" ? "deletions" : "additions",
       lineNumber: selected.end,
       threads: [],
+      notes: [],
     });
   const annotations: Annotation[] = [...grouped].map(([key, group]) => ({
     side: group.side,
     lineNumber: group.lineNumber,
+    startLine: group.startLine,
     metadata: (
       <div className="em-diff-annotation">
         {slots.has(key) && (
           <>
+            {group.notes.map((note) => (
+              <AgentNoteCard key={note.id} file={file} note={note} onComment={context.onActive} />
+            ))}
             {group.threads.map((thread) => (
               <ThreadCard surface="diff" key={thread.id} {...context} thread={thread} />
             ))}

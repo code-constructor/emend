@@ -1,4 +1,4 @@
-import { ERROR_STATUS, type ErrorCode } from "@emend/contract";
+import { ERROR_STATUS, type ErrorCode, LIMITS } from "@emend/contract";
 import type { Context } from "hono";
 
 const MESSAGES: Record<ErrorCode, string> = {
@@ -38,19 +38,39 @@ const DETAILS = {
   placement_timeout: { code: "too_large", message: "The placement timed out." },
   placement_failed: { code: "invalid_request", message: "The comments could not be placed." },
 } as const;
-type Detail = keyof typeof DETAILS;
+const NOTE_REASONS = {
+  range: "the range must exist on a stored, unflagged file side.",
+  unchanged: "the file's content does not change.",
+} as const;
+type NoteDetail = { kind: "agent_note"; path: string; index: number; reason: keyof typeof NOTE_REASONS };
+type Detail = keyof typeof DETAILS | NoteDetail;
+export function agentNoteDetail(path: string, index: number, reason: NoteDetail["reason"] = "range"): NoteDetail {
+  return { kind: "agent_note", path, index, reason };
+}
+function detailMessage(code: ErrorCode, detail?: Detail): string {
+  if (typeof detail === "object" && detail.kind === "agent_note" && code === "invalid_request") {
+    const prefix = `Agent note ${detail.index} in `;
+    const suffix = `: ${NOTE_REASONS[detail.reason]}`;
+    const budget = LIMITS.errorMessageChars - prefix.length - suffix.length;
+    const half = Math.floor((budget - 1) / 2);
+    const path =
+      detail.path.length > budget ? `${detail.path.slice(0, half)}…${detail.path.slice(-half)}` : detail.path;
+    return `${prefix}${path}${suffix}`.slice(0, LIMITS.errorMessageChars);
+  }
+  return typeof detail === "string" && DETAILS[detail]?.code === code ? DETAILS[detail].message : MESSAGES[code];
+}
 export class ApiError extends Error {
   readonly code: ErrorCode;
   readonly detail?: Detail;
   constructor(code: ErrorCode, detail?: Detail) {
-    super(detail && DETAILS[detail].code === code ? DETAILS[detail].message : MESSAGES[code]);
+    super(detailMessage(code, detail));
     this.code = code;
     this.detail = detail;
   }
 }
 export function errorBody(code: ErrorCode, detail?: Detail) {
   return {
-    error: { code, message: detail && DETAILS[detail]?.code === code ? DETAILS[detail].message : MESSAGES[code] },
+    error: { code, message: detailMessage(code, detail) },
   };
 }
 export function errorResponse(c: Context, code: ErrorCode, detail?: Detail) {

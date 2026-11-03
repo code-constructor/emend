@@ -6,6 +6,7 @@ import { diffGroups } from "../../lib/diff-groups.ts";
 import { DiffNavigation, type NavigateDiff } from "../../lib/diff-navigation.ts";
 import { draftKey, type SavedDraft } from "../../lib/drafts.ts";
 import { useLayout } from "../../lib/layout.ts";
+import { layoutStore, useLayoutPreferences } from "../../lib/layout-store.ts";
 import { rankedTopics } from "../../lib/topics.ts";
 import { useViewedCollapse } from "../../lib/viewed-collapse.ts";
 import type { ReviewSearch } from "../../router.tsx";
@@ -48,6 +49,7 @@ export function DiffPane({
   const layout = useLayout();
   const [style, setStyle] = useDiffStyle();
   const [wrap, setWrap] = useDiffWrap();
+  const { notes } = useLayoutPreferences();
   const [collapsedTopics, setCollapsedTopics] = useState(new Set<string>());
   const [collapsedFiles, setCollapsedFiles] = useViewedCollapse(reviewId, revision);
   const { counts, onParsed: saveCounts } = useDiffCounts();
@@ -79,7 +81,7 @@ export function DiffPane({
   useEffect(() => {
     // The route's scroll retry relies on topic sections rendering in the same commit as this pane.
     onRendered?.();
-  }, [onRendered, collapsedTopics, collapsedFiles, revealedFile]);
+  }, [onRendered, collapsedTopics, collapsedFiles, revealedFile, notes]);
   const [active, setActive] = useState<Target | null>(null);
   const onActive = (target: Target | null) => {
     if (target) {
@@ -127,6 +129,12 @@ export function DiffPane({
     }
   }, [resume]);
   const navigateDiff: NavigateDiff = ({ elementId, element, target, commentId }) => {
+    const noteFile = revision.files.find((file) => file.notes?.some((note) => `diff-note-${note.id}` === elementId));
+    const note = noteFile?.notes?.find((note) => `diff-note-${note.id}` === elementId);
+    if (note && !notes) {
+      layoutStore.update({ notes: true });
+      return false;
+    }
     elementId ??= element?.closest("[data-thread-card]")?.id;
     const thread = revision.threads.find(
       (thread) =>
@@ -134,9 +142,9 @@ export function DiffPane({
         (commentId && thread.comments.some((comment) => comment.id === commentId)),
     );
     const location = thread ? (thread.placement.status === "placed" ? thread.placement.location : undefined) : target;
-    const file = location
-      ? fileForTarget(location)
-      : revision.files.find((file) => `diff-file-${file.id}` === elementId);
+    const file =
+      noteFile ??
+      (location ? fileForTarget(location) : revision.files.find((file) => `diff-file-${file.id}` === elementId));
     const topic =
       location?.kind === "topic"
         ? location.slug
@@ -184,6 +192,7 @@ export function DiffPane({
     counts,
     onParsed,
     onViewed,
+    notes,
     collapsedFiles,
     revealedFile,
     onContentRendered,
@@ -209,6 +218,8 @@ export function DiffPane({
             onStyle={setStyle}
             wrap={wrap}
             onWrap={setWrap}
+            notes={notes}
+            onNotes={(notes) => layoutStore.update({ notes })}
             onJump={(file) => {
               setJump(file);
             }}

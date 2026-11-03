@@ -9,6 +9,7 @@ export function importRowCount(bundle: ImportBundle): number {
     bundle.revisions.length +
     bundle.topics.length +
     bundle.files.length +
+    (bundle.agentNotes?.length ?? 0) +
     bundle.docAssets.length +
     bundle.writeups.length +
     bundle.threads.length +

@@ -81,6 +81,47 @@ test("bundle strips authority and capability fields while preserving row identit
   const { placements: _placements, changedBlocks: _changedBlocks, ...expected } = input;
   expect(result).toEqual(expected);
 });
+test("imported notes keep ids and order, count as rows and reject foreign files, duplicate refs and ordinals", () => {
+  const input = bundle();
+  const file = {
+    id: randomUUID(),
+    revisionId: input.revisions[0]?.id,
+    path: "a.ts",
+    oldPath: null,
+    role: "diff",
+    status: "added",
+    topicSlug: null,
+    ord: 0,
+    oldBlob: null,
+    newBlob: "a".repeat(64),
+    renderedBlob: null,
+    flag: null,
+    parentDocId: null,
+  };
+  const note = {
+    id: randomUUID(),
+    fileId: file.id,
+    ord: 0,
+    side: "new",
+    start: 1,
+    end: 1,
+    summary: "Decision",
+    ref: "A",
+  };
+  const plain = ImportBundle.parse({ ...input, files: [file] });
+  const withNotes = { ...plain, agentNotes: [note] };
+  expect(ImportBundle.parse(withNotes).agentNotes).toEqual([note]);
+  expect(importRowCount(ImportBundle.parse(withNotes))).toBe(importRowCount(plain) + 1);
+  for (const changed of [
+    { agentNotes: [{ ...note, fileId: randomUUID() }] },
+    { agentNotes: [{ ...note, id: file.id }] },
+    { agentNotes: [note, { ...note, id: randomUUID(), ord: 1 }] },
+    { agentNotes: [note, { ...note, id: randomUUID(), ref: "B" }] },
+    { files: [{ ...file, role: "doc" }] },
+    { agentNotes: Array.from({ length: 9 }, (_, i) => ({ ...note, id: randomUUID(), ord: i, ref: undefined })) },
+  ])
+    expect(ImportBundle.safeParse({ ...withNotes, ...changed }).success).toBe(false);
+});
 test.each(["duplicate id", "invalid id", "comment reference", "revision reference", "approval reference", "body"])(
   "bundle refuses %s",
   (kind) => {

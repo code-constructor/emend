@@ -16,6 +16,25 @@ vi.mock("node:worker_threads", async (original) => {
   };
 });
 
+test("line counts treat CRLF as one delimiter and lone CR as content, with no phantom last line", async () => {
+  const execute = workerExecutor();
+  try {
+    for (const [text, count] of [
+      ["one\r\ntwo\r\n", 2],
+      ["one\rtwo\r", 1],
+      ["one\rtwo\r\nthree", 2],
+      ["", 0],
+    ] as const) {
+      expect(await execute({ kind: "line-count", bytes: new TextEncoder().encode(text).buffer })).toEqual({
+        kind: "line-count",
+        count,
+      });
+    }
+  } finally {
+    await execute.close();
+  }
+});
+
 test("breaker: writeup source is transferred, parsed and stripped in the worker", async () => {
   const execute = workerExecutor();
   try {

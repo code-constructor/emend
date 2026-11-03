@@ -9,9 +9,12 @@ import { blockAnchor, selectionToAnchor } from "../../lib/selection.ts";
 import { Composer } from "../threads/Composer.tsx";
 import { ThreadCard } from "../threads/ThreadCard.tsx";
 import { Button } from "../ui/Button.tsx";
+import { useAgentNoteRefs } from "./agent-note-refs.ts";
 import { Block } from "./Block.tsx";
 import { BlockThreads, type ThreadJump } from "./BlockThreads.tsx";
 import { ReadingGroup } from "./ReadingGroup.tsx";
+
+const emptyFiles: RevisionView["files"] = [];
 
 export type ReaderProps = {
   reviewId: string;
@@ -53,12 +56,17 @@ export function BlockReader({
   activeThreadId,
   threadJump,
   focus = false,
+  files = emptyFiles,
+  onNote,
 }: ReaderProps & {
   groups: ReaderGroup[];
   focus?: boolean;
+  files?: RevisionView["files"];
+  onNote?: (id: string) => void;
 }) {
   const headingBase = useId();
   const root = useRef<HTMLDivElement>(null);
+  useAgentNoteRefs(root, groups, files, onNote);
   const selectionPrompt = useRef<HTMLDivElement>(null);
   const highlights = useRef<ReturnType<typeof registerCommentRanges>>(undefined);
   const opener = useRef<HTMLElement | null>(null);

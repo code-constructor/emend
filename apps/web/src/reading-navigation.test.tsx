@@ -181,6 +181,86 @@ function mount(search = "?tab=writeup&rev=1") {
   return { ...render(<App queryClient={client} history={history} />), history };
 }
 
+test.each([
+  { pixels: 1280, mode: "standard", pane: "split", key: "click", path: "seed.txt" },
+  { pixels: 1280, mode: "standard", pane: "split", key: "click", path: "pnpm-lock.yaml" },
+  { pixels: 1280, mode: "standard", pane: "tabs", key: "Enter", path: "large.txt" },
+  { pixels: 1280, mode: "focus", pane: "tabs", key: "Enter", path: "seed.txt" },
+  { pixels: 768, mode: "standard", pane: "tabs", key: " ", path: "seed.txt" },
+  { pixels: 390, mode: "standard", pane: "tabs", key: "click", path: "seed.txt" },
+] as const)(
+  "note refs navigate and mark a hidden, viewed file at $pixels px in $mode/$pane via $key",
+  async ({ pixels, mode, pane, key, path }) => {
+    width = pixels;
+    layoutStore.update({ reading: mode, pane: { desktop: pane, tablet: pane }, notes: false });
+    const note = {
+      id: crypto.randomUUID(),
+      side: "new" as const,
+      start: 1,
+      end: 2,
+      summary: "Keep the decision visible.",
+      ref: "A",
+    };
+    currentRevision.files = currentRevision.files.map((file) => ({
+      ...file,
+      flag: null,
+      hasOld: true,
+      hasNew: true,
+      viewed: "viewed",
+      viewedOn: 1,
+      notes: [note],
+      path,
+    }));
+    const block = currentRevision.writeup.sections[0]?.blocks[0];
+    if (!block) throw new Error("Missing block");
+    block.html =
+      '<p>Decision <span class="user-content-ref">ref A</span>. <span class="user-content-ref">ref Z</span> <span class="user-content-ref">ref A and more</span></p>';
+    block.text = "Decision ref A. ref Z ref A and more";
+    const large = path === "large.txt";
+    const guarded = large || path === "pnpm-lock.yaml";
+    client.setQueryData(["file", id, "old"], large ? "before\n".repeat(10001) : "before\nsecond\n");
+    client.setQueryData(["file", id, "new"], large ? "after\n".repeat(10001) : "after\nsecond\n");
+    loading.parser = vi.fn(parsePair);
+    const scroll = vi.spyOn(diffPresentation, "scrollDiffTarget");
+    const { history } = mount();
+    const chip = await screen.findByRole("button", { name: `Go to agent note A in ${path}` });
+    expect(chip.getAttribute("tabindex")).toBe("0");
+    expect(chip.getAttribute("data-agent-note-ref")).toBe(note.id);
+    for (const text of ["ref Z", "ref A and more"]) {
+      const span = screen.getByText(text);
+      expect(span.hasAttribute("role")).toBe(false);
+      expect(span.hasAttribute("tabindex")).toBe(false);
+    }
+    if (key === "click") fireEvent.click(chip);
+    else fireEvent.keyDown(chip, { key });
+    await act(async () => loaded.resolve());
+    await waitFor(() =>
+      expect(scroll.mock.calls.some(([element]) => element.id === `diff-note-${note.id}`)).toBe(true),
+    );
+    const card = document.getElementById(`diff-note-${note.id}`);
+    if (!card) throw new Error("Missing card");
+    expect(card.hasAttribute("data-jump")).toBe(true);
+    if (guarded) {
+      expect(card.closest(".em-diff-discussion")).toBeTruthy();
+      expect(card.closest("[slot], [data-slot-pending]")).toBeNull();
+      expect(loading.parser).not.toHaveBeenCalled();
+      expect(screen.getByRole("button", { name: "Show diff" })).toBeTruthy();
+    } else expect(card.closest("[slot]")?.getAttribute("slot")).toBe("annotation-additions-2");
+    expect(layoutStore.getSnapshot().notes).toBe(true);
+    expect(history.location.hash).toBe(`#diff-note-${note.id}`);
+    if (pane === "tabs") expect(new URLSearchParams(history.location.search).get("tab")).toBe("diff");
+    expect(screen.getByRole("button", { name: "Collapse file" })).toBeTruthy();
+    if (path === "pnpm-lock.yaml") {
+      fireEvent.click(screen.getByRole("button", { name: "Show diff" }));
+      await waitFor(() => expect(loading.parser).toHaveBeenCalledOnce());
+    }
+    // Like thread cards, the mark follows the current hash, including non-diff navigation.
+    act(() => history.push(`/r/${id}?tab=writeup&rev=1#topic-seed`));
+    await waitFor(() => expect(document.getElementById(`diff-note-${note.id}`)?.hasAttribute("data-jump")).toBeFalsy());
+    if (large) expect(loading.parser).not.toHaveBeenCalled();
+  },
+);
+
 test.each([1280, 768, 390])("Files in diff waits for lazy rendering and scrolls its topic at %s px", async (pixels) => {
   width = pixels;
   const scroll = vi.spyOn(diffPresentation, "scrollDiffTarget");

@@ -3,6 +3,7 @@ import { and, count, desc, eq, getTableColumns, gt, inArray, isNull, lte, max, n
 import type { Hono } from "hono";
 import type { Queries } from "../../db/client.ts";
 import {
+  agentNotes,
   agentWaiters,
   changedBlocks,
   comments,
@@ -22,6 +23,7 @@ import {
 import type { AppDeps } from "../app.ts";
 import type { AppEnv } from "../auth/principal.ts";
 import { ApiError } from "../http/errors.ts";
+import { noteView } from "../publish/notes.ts";
 
 /** Counts use one grouped query per kind, independent of the number of inbox rows. */
 async function inbox(ownerId: string, q: Queries, deps: AppDeps, reviewId?: string) {
@@ -154,6 +156,29 @@ async function revisionView(ownerId: string, q: Queries, deps: AppDeps, reviewId
     .where(and(eq(files.ownerId, ownerId), eq(files.revisionId, revisionId), ne(files.role, "asset")))
     .orderBy(files.ord, files.id)
     .all();
+  // Probe notes by this revision's file IDs, avoiding a scan of the owner's note history.
+  const noteRows = await q
+    .select({ note: agentNotes })
+    .from(agentNotes)
+    .where(
+      and(
+        eq(agentNotes.ownerId, ownerId),
+        inArray(
+          agentNotes.fileId,
+          q
+            .select({ id: files.id })
+            .from(files)
+            .where(and(eq(files.ownerId, ownerId), eq(files.revisionId, revisionId))),
+        ),
+      ),
+    )
+    .orderBy(agentNotes.fileId, agentNotes.ord);
+  const notesByFile = new Map<string, ReturnType<typeof noteView>[]>();
+  for (const { note } of noteRows) {
+    const notes = notesByFile.get(note.fileId) ?? [];
+    notes.push(noteView(note));
+    notesByFile.set(note.fileId, notes);
+  }
   const topicRows = await q
     .select()
     .from(topics)
@@ -295,6 +320,7 @@ async function revisionView(ownerId: string, q: Queries, deps: AppDeps, reviewId
         flag: file.flag,
         hasOld: file.oldBlob !== null,
         hasNew: file.newBlob !== null,
+        ...(notesByFile.has(file.id) ? { notes: notesByFile.get(file.id) } : {}),
         ...(mark
           ? {
               viewed: (

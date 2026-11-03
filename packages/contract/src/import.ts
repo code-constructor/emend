@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { AgentNoteView, validateAgentNotes } from "./agent-note.ts";
 import { indexImportBundle } from "./import-index.ts";
 import { LIMITS } from "./limits.ts";
 import { PublishRequest, Sha256 } from "./publish.ts";
@@ -60,6 +61,18 @@ const ImportRows = z.object({
     }),
   ),
   docAssets: z.array(z.object({ revisionId: id, docId: id, assetId: id })),
+  agentNotes: z
+    .array(
+      AgentNoteView.safeExtend({
+        fileId: id,
+        ord: z
+          .int()
+          .min(0)
+          .max(LIMITS.agentNotesPerFile - 1),
+      }),
+    )
+    .max(LIMITS.importRevisions * LIMITS.agentNotesPerRevision)
+    .optional(),
   writeups: z.array(z.object({ ...revisionRow, sourceBlob: Sha256, renderedBlob: Sha256 })),
   threads: z.array(z.object({ ...reviewRow, target: Target, state: ThreadState, createdRevisionId: id, ...dates })),
   comments: z.array(
@@ -107,6 +120,7 @@ export const ImportBundle = BundleRows.superRefine((bundle, ctx) => {
     ...bundle.revisions,
     ...bundle.topics,
     ...bundle.files,
+    ...(bundle.agentNotes ?? []),
     ...bundle.writeups,
     ...bundle.threads,
     ...bundle.comments,
@@ -116,6 +130,13 @@ export const ImportBundle = BundleRows.superRefine((bundle, ctx) => {
   if (new Set(all.map((r) => r.id)).size !== all.length) issue("duplicate row id");
   const index = indexImportBundle(bundle);
   const { revisions, threads, files, sends, deliveries } = index;
+  for (const note of bundle.agentNotes ?? [])
+    if (files.get(note.fileId)?.role !== "diff") issue("agent note must reference a diff file");
+  for (const [fileId, notes] of index.notesByFile) {
+    if (notes.length > LIMITS.agentNotesPerFile) issue("too many agent notes in file");
+    if (new Set(notes.map((note) => note.ord)).size !== notes.length) issue("duplicate agent note order");
+    if (!files.has(fileId)) issue("missing agent note file");
+  }
   for (const r of [...bundle.revisions, ...bundle.threads, ...bundle.comments, ...bundle.sends, ...bundle.deliveries])
     if (r.reviewId !== bundle.review.id) issue("foreign review reference");
   for (const r of [...bundle.files, ...bundle.topics, ...bundle.writeups, ...bundle.sends, ...bundle.docAssets])
@@ -173,6 +194,14 @@ export const ImportBundle = BundleRows.superRefine((bundle, ctx) => {
     if (revision.seq !== offset + 1) issue("revisions must be complete and in sequence order");
     const rows = revisions.get(revision.id);
     if (!rows) continue;
+    validateAgentNotes(
+      rows.files.map((file) => ({
+        path: file.path,
+        topic: file.topicSlug ?? undefined,
+        notes: index.notesByFile.get(file.id),
+      })),
+      ctx,
+    );
     unique(rows.files.map((f) => String(f.ord)));
     if (rows.files.length > LIMITS.filesPerRevision) issue("too many files");
     if (rows.topics.length > LIMITS.topicsPerReview + 1) issue("too many topics");
@@ -200,6 +229,7 @@ export function importPublishInput(bundle: ImportBundle, revisionId: string, wri
       ...f,
       status: f.status ?? undefined,
       topic: f.topicSlug ?? undefined,
+      notes: index.notesByFile.get(f.id)?.toSorted((a, b) => a.ord - b.ord),
       parent: f.parentDocId === null ? undefined : index.files.get(f.parentDocId)?.path,
       assets:
         f.role === "doc" && /\.html?$/i.test(f.path)

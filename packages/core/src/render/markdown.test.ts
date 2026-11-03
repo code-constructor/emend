@@ -37,6 +37,13 @@ async function render(md: string) {
 }
 
 describe("hostile author content", () => {
+  test("note refs keep only namespaced class and text, stripping author controls", async () => {
+    const blocks = await render(
+      '<span class="ref" onclick="alert(1)" data-x="forged" data-agent-note-ref="forged">ref A</span>',
+    );
+    expect(blocks[0]?.html).toContain('<span class="user-content-ref">ref A</span>');
+    expect(blocks[0]?.html).not.toMatch(/onclick|data-x|data-agent-note-ref|role=|tabindex=/);
+  });
   test("the sanitizer tag allowlist excludes active and parser-sensitive elements", () => {
     const forbidden = [
       "script",

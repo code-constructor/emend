@@ -68,7 +68,10 @@ export function workerExecutor(timeouts = { render: 10000, place: 30000 }): Work
         const buffers =
           work.kind === "doc"
             ? [work.source]
-            : work.kind === "resection" || work.kind === "placement-doc" || work.kind === "writeup-source"
+            : work.kind === "resection" ||
+                work.kind === "placement-doc" ||
+                work.kind === "writeup-source" ||
+                work.kind === "line-count"
               ? [work.bytes]
               : work.kind === "changed"
                 ? [...work.previous.map((blob) => blob.bytes), ...work.next]

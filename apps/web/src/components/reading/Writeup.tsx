@@ -20,6 +20,7 @@ export function Writeup({
   phone = false,
   visible = true,
   onCurrentTopic,
+  onNote,
   ...props
 }: ReaderProps & {
   writeup: RenderedWriteup;
@@ -29,6 +30,7 @@ export function Writeup({
   phone?: boolean;
   visible?: boolean;
   onCurrentTopic?: (slug: string | undefined) => void;
+  onNote?: (id: string) => void;
 }) {
   const root = useRef<HTMLDivElement>(null);
   const { reading } = useLayoutPreferences();
@@ -163,7 +165,7 @@ export function Writeup({
             onCurrentTopic={onCurrentTopic}
           />
         )}
-        <BlockReader {...props} topics={topics} groups={groups} focus={focus} />
+        <BlockReader {...props} topics={topics} groups={groups} focus={focus} files={files} onNote={onNote} />
       </div>
     </div>
   );

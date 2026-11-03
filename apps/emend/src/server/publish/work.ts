@@ -19,6 +19,7 @@ export type PlacementDoc = PlaceContext["docs"] extends Map<string, infer T> ? T
 /** Import caches opaque worker output; parsed content never crosses by structured clone. */
 export type EncodedPlacementDoc = { bytes: ArrayBuffer; textBytes: number; encodedBytes: number };
 export type Work =
+  | { kind: "line-count"; bytes: ArrayBuffer }
   | { kind: "writeup-source"; bytes: ArrayBuffer }
   | { kind: "placement-doc"; format: "html" | "markdown" | "writeup"; bytes: ArrayBuffer }
   | { kind: "writeup"; source: WriteupInput; topics: TopicMeta[] }
@@ -43,6 +44,7 @@ export type Work =
       }[];
     };
 export type WorkResult =
+  | { kind: "line-count"; count: number }
   | { kind: "writeup-source"; source: WriteupInput }
   | ({ kind: "placement-doc" } & EncodedPlacementDoc)
   | ({ kind: "writeup" | "doc" } & RenderedBytes)
@@ -64,6 +66,13 @@ export function serializeRendered(value: RenderedWriteup | Block[]): RenderedByt
 }
 export type Executor = (work: Work) => Promise<WorkResult>;
 export const executeWork: Executor = async (work) => {
+  if (work.kind === "line-count") {
+    // Count LF only (including CRLF): lone CR must not invent selectable lines beyond the diff's LF-based lines.
+    const bytes = new Uint8Array(work.bytes);
+    let count = bytes.length && bytes.at(-1) !== 10 ? 1 : 0;
+    for (const byte of bytes) if (byte === 10) count++;
+    return { kind: "line-count", count };
+  }
   if (work.kind === "writeup-source")
     return { kind: "writeup-source", source: WriteupInput.parse(JSON.parse(decode(work.bytes))) };
   if (work.kind === "placement-doc") {

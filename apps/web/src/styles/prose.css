@@ -1,4 +1,16 @@
 @layer components {
+  .em-prose span[data-agent-note-ref] {
+    font: 600 11px / 1.5 var(--font-mono);
+    background: var(--accent-tint);
+    color: var(--accent-text);
+    border-radius: 4px;
+    padding: 0 5px;
+    cursor: pointer;
+  }
+  .em-prose span[data-agent-note-ref]:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
   .em-prose {
     font: var(--type-prose);
     color: var(--fg-1);

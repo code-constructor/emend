@@ -46,6 +46,8 @@ test("exports the v1 API, limits, file vocabulary and reserved fallback", () => 
     blocksPerRevision: 100000,
     renderedBytesPerRevision: 268435456,
     filesPerRevision: 10000,
+    agentNotesPerFile: 8,
+    agentNotesPerRevision: 64,
     pathChars: 4096,
     pathSegmentChars: 255,
     topicsPerReview: 200,

@@ -158,6 +158,19 @@ Use these constraints when writing the manifest:
 - `importance` is 0 to 99. The reserved Other changes topic uses 100.
 
 Spell every key exactly as in the example, because unknown keys are dropped silently.
+Only `diff` files accept `notes`. Use single-digit notes on a large change, at most eight per file and 64 per revision.
+Each note earns its place with a decision, trade-off, risk, or something easy to get wrong.
+Never write “this adds a method”. Write `summary` as one sentence of 15 words or fewer, at most 160 characters.
+It must fit on one line. Optional `rationale` has at most 1200 characters. Both fields are plain text, never Markdown or HTML.
+Set `side` to `old` or `new`. Take `start` and `end` from the patch's `@@` headers or the file; never guess.
+They are positive integers, with `end` at least `start`.
+Publish refuses a range outside the stored diff side, a missing side, or a flagged file, naming the file and note index.
+Unchanged stored lines are valid in a file with changed content.
+Publish and import refuse notes when the file's old and new content is identical.
+Notes are read-only revision content, carried by export and import.
+Use `ref` only when a writeup bullet cites the note with `<span class="ref">ref A</span>`.
+Assign `A`, `B`, `C`… in file order, restarting per topic. Refs must be unique within the topic.
+
 For an invalid manifest, the CLI names the failing fields.
 If it says the manifest is not found, check the path. If it says the manifest is not valid JSON,
 fix the syntax at the line it names, if any; with no line, check for an empty or cut-off file.
@@ -182,7 +195,21 @@ Fix those fields and publish again.
     }
   ],
   "files": [
-    { "path": "src/retry.ts", "role": "diff", "topic": "retry-budget" },
+    {
+      "path": "src/retry.ts",
+      "role": "diff",
+      "topic": "retry-budget",
+      "notes": [
+        {
+          "side": "new",
+          "start": 38,
+          "end": 44,
+          "summary": "The first call consumes one attempt, keeping the retry budget finite.",
+          "rationale": "Counting only retries would allow a fourth call.",
+          "ref": "A"
+        }
+      ]
+    },
     { "path": "docs/retry-prd.md", "role": "diff", "topic": "retry-budget" },
     { "path": "docs/retry-prd.md", "role": "doc", "topic": "retry-budget" }
   ],
@@ -195,7 +222,7 @@ Fix those fields and publish again.
       "retry-budget": {
         "why": "**What it is:** The request loop retries temporary failures.\n\n**Problem:** Repeated failures kept the loop running.\n\n**Fix:** The loop stops after three attempts.",
         "example": "A request fails on every attempt.\n\n| Input | Before | After |\n| --- | --- | --- |\n| Repeated temporary failure | Retries continue | Stops after attempt three |",
-        "body": "- The first call counts as attempt one.\n- A successful attempt ends the loop immediately.\n- Check that the third attempt can still succeed."
+        "body": "- The first call counts as attempt one. <span class=\"ref\">ref A</span>\n- A successful attempt ends the loop immediately.\n- Check that the third attempt can still succeed."
       }
     }
   }

@@ -15,6 +15,8 @@ export function DiffToolbar({
   onStyle,
   wrap,
   onWrap,
+  notes,
+  onNotes,
   onJump,
 }: {
   groups: { topic: TopicMeta; files: FileView[] }[];
@@ -25,6 +27,8 @@ export function DiffToolbar({
   onStyle: (style: DiffStyle) => void;
   wrap: boolean;
   onWrap: (wrap: boolean) => void;
+  notes: boolean;
+  onNotes: (notes: boolean) => void;
   onJump: (file: FileView) => void;
 }) {
   const topics = groups.filter(({ topic }) => topic.slug !== OTHER_TOPIC.slug).length;
@@ -58,6 +62,9 @@ export function DiffToolbar({
         items={items}
       />
       <div className="flex items-center gap-2">
+        <Button size="sm" variant="ghost" aria-pressed={notes} onClick={() => onNotes(!notes)}>
+          Agent notes
+        </Button>
         <SegmentedControl
           label="Diff layout"
           size="sm"

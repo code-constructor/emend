@@ -53,6 +53,7 @@ function buildIndex(bundle: ImportBundle) {
     commentsBySend: group(bundle.comments, (c) => c.sendId),
     sendsByDelivery: group(bundle.sends, (s) => s.deliveryId),
     assetsByDoc: group(bundle.docAssets, (a) => a.docId),
+    notesByFile: group(bundle.agentNotes ?? [], (note) => note.fileId),
   };
 }
 export type ImportIndex = ReturnType<typeof buildIndex>;

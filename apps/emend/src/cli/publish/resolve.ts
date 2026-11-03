@@ -121,6 +121,7 @@ export async function resolvePublish(
         status: change.status,
         role: "diff",
         topic: file.topic,
+        notes: manifest.files.find((entry) => entry.role === "diff" && entry.path === file.path)?.notes,
         flag: null,
         oldBlob: null,
         newBlob: null,

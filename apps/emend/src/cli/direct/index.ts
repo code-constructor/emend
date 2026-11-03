@@ -50,7 +50,7 @@ async function operateWithState<T>(stateDir: string, operation: (state: State, p
     const db: State["db"] = { ...state.db, transaction: (fn) => state.db.transaction(fn, { offThread: true }) };
     return await operation({ ...state, db }, localPrincipal(state));
   } catch (error) {
-    if (error instanceof ApiError) throw new CliApiError(error.code);
+    if (error instanceof ApiError) throw new CliApiError(error.code, error.message);
     throw error;
   } finally {
     await state.db.close();

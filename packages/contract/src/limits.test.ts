@@ -1,5 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
+  AgentNote,
+  AgentNotes,
   BlockId,
   Capabilities,
   ErrorBody,
@@ -14,6 +16,42 @@ import {
 } from "./index.ts";
 
 const emptyWriteup = { overview: "", tldr: "", decisions: null, topics: {} };
+const note = { side: "new", start: 1, end: 2, summary: "A decision." };
+test("agent notes enforce field, file and revision ceilings", () => {
+  for (const [count, accepted] of [
+    [8, true],
+    [9, false],
+  ] as const)
+    expect(AgentNotes.safeParse(Array.from({ length: count }, () => note)).success).toBe(accepted);
+  for (const [count, accepted] of [
+    [64, true],
+    [65, false],
+  ] as const) {
+    const files = Array.from({ length: Math.ceil(count / 8) }, (_, i) => ({
+      path: `file-${i}.ts`,
+      role: "diff",
+      notes: Array.from({ length: Math.min(8, count - i * 8) }, () => note),
+    }));
+    expect(PublishManifest.safeParse({ ...manifest, files }).success).toBe(accepted);
+  }
+  expect(AgentNote.safeParse({ ...note, summary: "x".repeat(160), rationale: "x".repeat(1200) }).success).toBe(true);
+  for (const patch of [
+    { summary: "" },
+    { summary: "x".repeat(161) },
+    { rationale: "x".repeat(1201) },
+    { summary: "two\nlines" },
+    { summary: "ends with newline\n" },
+    { ref: "A\n" },
+    { summary: "two\r lines" },
+    { summary: "two\u2028lines" },
+    { start: 0 },
+    { start: 1.5 },
+    { start: 3 },
+    { ref: "AA" },
+    { ref: "a" },
+  ])
+    expect(AgentNote.safeParse({ ...note, ...patch }).success).toBe(false);
+});
 const topic = { slug: "routing", title: "Routing", importance: 20, summary: "A sample router." };
 const manifest = { version: 1, title: "Sample router", topics: [], files: [], writeup: emptyWriteup };
 const lineTarget = {

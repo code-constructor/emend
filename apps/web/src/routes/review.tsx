@@ -49,6 +49,7 @@ function Reading({
   targeted,
   onOpenDoc,
   onCurrentTopic,
+  onNote,
   visible,
 }: {
   reviewId: string;
@@ -66,6 +67,7 @@ function Reading({
   targeted: boolean;
   onOpenDoc: (path: string) => void;
   onCurrentTopic?: (slug: string | undefined) => void;
+  onNote: (id: string) => void;
   visible: boolean;
 }) {
   const props = {
@@ -102,6 +104,7 @@ function Reading({
       visible={visible}
       resumedBlockId={resumedBlockId}
       onCurrentTopic={onCurrentTopic}
+      onNote={onNote}
     />
   );
 }
@@ -172,7 +175,7 @@ function LoadedReview({
 }) {
   // Read search and hash from one location: route matches can lag during navigation.
   const location = useLocation();
-  const search = validateReviewSearch(location.search);
+  const search = useMemo(() => validateReviewSearch(location.search), [location.search]);
   const hash = location.hash;
   const [initialRevision] = useState(review.newestRevision);
   const seq = search.rev ?? initialRevision;
@@ -249,11 +252,22 @@ function LoadedReview({
     threadId?: string;
     requested: typeof requested;
   } | null>(null);
-  const navigateReading = (next: ReviewSearch, nextHash = "") => {
-    // A repeated Resume or link click is a new intent even when the URL is unchanged.
-    setRequested({ ...readingIntent(next, nextHash, next.rev ?? initialRevision), token: {}, jumpThread: true });
-    void navigate({ search: next, hash: nextHash });
-  };
+  const navigateReading = useCallback(
+    (next: ReviewSearch, nextHash = "") => {
+      // A repeated Resume or link click is a new intent even when the URL is unchanged.
+      setRequested({ ...readingIntent(next, nextHash, next.rev ?? initialRevision), token: {}, jumpThread: true });
+      void navigate({ search: next, hash: nextHash });
+    },
+    [initialRevision, navigate],
+  );
+  const onNote = useCallback(
+    (id: string) =>
+      navigateReading(
+        { ...search, tab: paneMode === "tabs" || layout === "phone" ? "diff" : "writeup", thread: undefined },
+        `diff-note-${id}`,
+      ),
+    [navigateReading, search, paneMode, layout],
+  );
   const followReadingLink = (event: MouseEvent) => {
     if (
       event.defaultPrevented ||
@@ -559,6 +573,7 @@ function LoadedReview({
                         composingPath={resumed?.target?.kind === "html-span" ? resumed.target.path : undefined}
                         resumedBlockId={resumedBlockId}
                         onCurrentTopic={layout !== "phone" && hasDiff ? setCurrentTopic : undefined}
+                        onNote={onNote}
                       />
                     )}
                   </ReadingFoldContext>

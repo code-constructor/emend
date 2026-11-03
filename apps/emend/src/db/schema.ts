@@ -228,6 +228,30 @@ export const files = sqliteTable(
   ],
 );
 
+export const agentNotes = sqliteTable(
+  "agent_notes",
+  {
+    id: id(),
+    ownerId: ownerId(),
+    fileId: text("file_id").notNull(),
+    side: text("side", { enum: ["old", "new"] }).notNull(),
+    startLine: integer("start_line").notNull(),
+    endLine: integer("end_line").notNull(),
+    summary: text("summary").notNull(),
+    rationale: text("rationale"),
+    ref: text("ref"),
+    ord: integer("ord").notNull(),
+  },
+  (t) => [
+    ...owned("agent_notes", t),
+    unique("agent_notes_owner_file_ord_unique").on(t.ownerId, t.fileId, t.ord),
+    foreignKey({ columns: [t.ownerId, t.fileId], foreignColumns: [files.ownerId, files.id] }),
+    enumCheck("agent_notes_side_check", t.side, ["old", "new"]),
+    check("agent_notes_range_check", sql`${t.startLine} >= 1 and ${t.endLine} >= ${t.startLine}`),
+    check("agent_notes_ord_check", sql`${t.ord} between 0 and 7`),
+  ],
+);
+
 export const viewedFiles = sqliteTable(
   "viewed_files",
   {

@@ -60,6 +60,13 @@ export function errorLine(error: unknown, command?: string): string {
     return `State directory ${dir} has group or other permissions; fix it with chmod 700 ${quoted}\n`;
   }
   if (error instanceof NewerDatabaseError) return `${error.message}\n`;
+  if (
+    command === "publish" &&
+    error instanceof CliApiError &&
+    error.code === "invalid_request" &&
+    error.serverMessage.startsWith("Agent note ")
+  )
+    return `emend: invalid_request: ${escapeReference(error.serverMessage)}\n`;
   return `emend: ${error instanceof CliApiError ? error.code : error instanceof CliError ? error.message : "The emend request failed."}${hint}\n`;
 }
 export const jsonLine = (value: unknown): string => `${JSON.stringify(value)}\n`;

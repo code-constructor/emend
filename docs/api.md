@@ -196,7 +196,9 @@ these fields read as `main: null`, `writeupEmpty: false` and keep opening on Wri
 Without an explicit visible `tab` in the URL, the app opens the main page when set; otherwise
 it opens Writeup if it has text, the first doc in manifest order, Diff if any file has role
 `diff`, or Writeup when there is nothing. A main doc opens Docs scrolled to that document.
-`FileView = { id, path, oldPath, role, status, topic, order, mediaType, flag, hasOld, hasNew, viewed?, viewedOn? }`.
+`FileView = { id, path, oldPath, role, status, topic, order, mediaType, flag, hasOld, hasNew, viewed?, viewedOn?, notes? }`.
+`notes` is present only for files with agent notes. Each `AgentNoteView` adds a UUID `id` to
+`AgentNote` below. Notes are read-only revision content, separate from reviewer comments.
 `oldPath`, `status`, `topic` and `flag` are nullable. Files are in their stored order; assets
 are omitted. `hasOld` and `hasNew` indicate stored sides, without exposing blob hashes.
 For tracked diff files, `viewed` is `"viewed"` when the marked old/new blob pair and rename
@@ -407,7 +409,7 @@ oversized bodies first with `413 too_large`. These bound one atomic import, not 
 lifetimes, which remain unbounded; histories exceeding these import ceilings cannot be attached
 through this endpoint and stay local (part B reports this). There is no pagination or truncation of reviewer history.
 `importRows` (50000) bounds all inserted rows, including the review, any repo and generated blob
-metadata, revisions, topics, files, doc assets, writeups, threads, hub-computed placements and
+metadata, revisions, topics, files, agent notes, doc assets, writeups, threads, hub-computed placements and
 changed blocks, comments, Sends and retained deliveries. Potential repo/blob inserts are counted
 conservatively even when already present. An excess is `400 invalid_request` before the writer
 transaction starts. `importRenderedBytes` (1073741824, 1 GiB) bounds cumulative rendered writeup
@@ -443,7 +445,8 @@ builds the job's JSON or parses its content on the main thread. Raw buffers are 
 separately. Each addition checks the remaining budget first; excess stops with `413 too_large`
 and no database rows.
 
-Bundle fields are required arrays (empty where appropriate), with UUID row ids kept. All dates
+Bundle fields are required arrays (empty where appropriate), except the additive `agentNotes`
+array, which may be omitted by older exports. UUID row ids are kept. All dates
 are ISO UTC strings; nullable fields are explicitly null. Arrays preserve durable insertion order
 for comments, threads and Sends; revisions are complete and ordered by sequence starting at 1.
 Unknown keys, including owner ids, moved-to URLs, content keys, media types, `placements` and
@@ -456,6 +459,7 @@ Unknown keys, including owner ids, moved-to URLs, content keys, media types, `pl
 | `topics` | `id, revisionId` plus `TopicMeta` (optional door and blastRadius) |
 | `files` | `id, revisionId, path, oldPath, role, status, topicSlug, ord, oldBlob, newBlob, renderedBlob, flag, parentDocId`; nullable sides, status, topic, flag, parent |
 | `docAssets` | `revisionId, docId, assetId` |
+| `agentNotes` | `id, fileId, ord` plus `AgentNote`; optional array, ordered per file, at most 8 per file and 64 per revision |
 | `writeups` | `id, revisionId, sourceBlob, renderedBlob` |
 | `threads` | `id, reviewId, target, state, createdRevisionId, createdAt, updatedAt` |
 | `comments` | `id, reviewId, threadId, author, body, outcome, sendId, createdAt, updatedAt`; user outcome is null; agent outcome is required and sendId null |
@@ -521,7 +525,7 @@ The keys are lowercase 64-character SHA-256 hex; `reviewId` is a UUID. Repo name
 There are at most `topicsPerReview` declared topics plus the optional generated Other changes
 topic (importance 100, last); at most `filesPerRevision` files. Base and head are null together.
 `PublishFile = { path, oldPath: FilePath | null, role, status?, topic?, oldBlob: sha256 | null,
-newBlob: sha256 | null, flag: FileFlag | null, parent?: FilePath, assets?: FilePath[] }`. Paths and topic slugs are
+newBlob: sha256 | null, flag: FileFlag | null, parent?: FilePath, assets?: FilePath[], notes?: AgentNote[] }`. Paths and topic slugs are
 unique within their namespaces (diffs; docs and assets); file and writeup topics must be declared.
 `assets` is required for HTML docs (including an empty array) and must be absent on all other files.
 Assets name a declared HTML doc in `parent`, stay inside its folder and have no hidden or dot
@@ -562,10 +566,31 @@ manifest with `role: "doc"`; otherwise validation issues `["main"]` with the mes
 `main is not a doc of this revision`. `"writeup"` opens Writeup even if its Markdown is empty.
 `base` and `head` appear together or neither appears. Commits are fully resolved lowercase hex
 object ids (40 characters for SHA-1 or 64 for SHA-256); `head` also accepts `"worktree"`.
-Docs-only reviews can omit both. Manifest files are `{ path, role: "diff" | "doc", topic?, source? }`;
+Docs-only reviews can omit both. Manifest files are `{ path, role: "diff" | "doc", topic?, source?, notes?: AgentNote[] }`;
 `source` is a non-empty local filename from which the CLI reads a doc, separate from its published
 path. It may be absolute or relative, has at most `pathChars` characters, must be well-formed UTF-16,
 and cannot contain NUL, C0 controls or DEL.
+
+Only a `diff` entry accepts `notes`; docs and assets reject the field, even an empty array.
+`AgentNote = { side: "old" | "new", start, end, summary, rationale?, ref? }` uses positive integer
+line numbers, with `end >= start`. `summary` is 1–160 characters on one line; `rationale` is at
+most 1200 characters. Neither summary nor a present rationale may be blank (whitespace only).
+Both are plain text, never rendered as Markdown or HTML. `ref` is one
+capital ASCII letter (`A`–`Z`), unique within the file's topic in that revision, including Other
+changes. There are at most `agentNotesPerFile` (8) per file and `agentNotesPerRevision` (64) per
+revision. The CLI carries notes unchanged into publish.
+
+Publish and import check every note against the stored side: every line in `start..end` must
+exist, from 1 through that side's line count. Unchanged lines within a file with changed content
+are valid and the diff opens collapsed context around notes. Equal old and new blobs (a pure
+rename or mode-only change) refuse notes with "the file's content does not change" and the file
+and zero-based note index. A missing side, a flagged file (binary or oversized), or an
+out-of-bounds range is refused with `400 invalid_request`, naming the file and zero-based note
+index. Notes are never silently dropped. They are immutable revision content: publishing again
+adds new rows, and export/import carry them with their ids and order. There is no note-edit API.
+A topic writeup may cite a note with `<span class="ref">ref A</span>`; matching refs navigate to
+the note in that topic, while unmatched refs remain text. Chips are offered only for notes on
+files with a topic; refs remain unique among files without a topic (shown as "Other files").
 
 The CLI resolves `source` with `realpath` and reads it only when the resolved result is a regular
 file inside the repository's worktree root or inside a folder the reviewer listed in their own
@@ -840,6 +865,8 @@ limit with `413 too_large` before parsing. Upload content also has the role's by
 | `blocksPerRevision` | 100000 rendered blocks across every path, including the writeup |
 | `renderedBytesPerRevision` | 268435456 rendered JSON bytes across every path, including the writeup |
 | `filesPerRevision` | 10000 files |
+| `agentNotesPerFile` | 8 notes |
+| `agentNotesPerRevision` | 64 notes |
 | `pathChars` | 4096 characters per path or source; also per publish URL or block id |
 | `pathSegmentChars` | 255 characters per published path segment |
 | `topicsPerReview` | 200 declared topics or writeup topic keys |
@@ -898,6 +925,10 @@ All errors use `ErrorBody`, with no stack traces or another owner's ids:
 ```
 
 `ERROR_STATUS` is the single exported code-to-status map; `ErrorCode` is derived from its keys.
+Publish and import may return `invalid_request` with a message naming the file and zero-based
+agent note index when a note is refused. These catalogue-built messages are bounded by
+`errorMessageChars`; long file names may be abbreviated. The CLI prints the message as one
+escaped line on stderr.
 
 | Error code | HTTP status | When |
 | --- | ---: | --- |

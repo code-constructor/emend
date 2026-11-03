@@ -162,5 +162,16 @@ export const MIGRATIONS: readonly { tag: string; when: number; hash: string; sta
       "CREATE UNIQUE INDEX `viewed_files_owner_review_path_unique` ON `viewed_files` (`owner_id`,`review_id`,`path`);",
       "CREATE INDEX `files_owner_revision_path_idx` ON `files` (`owner_id`,`revision_id`,`path`);"
     ]
+  },
+  {
+    "tag": "0010_late_terrax",
+    "when": 1793696088486,
+    "hash": "5a6942336f1eb70063b009a982c47a01eac827279102e818cfcfd74d771715a4",
+    "statements": [
+      "CREATE TABLE `agent_notes` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`owner_id` text NOT NULL,\n\t`file_id` text NOT NULL,\n\t`side` text NOT NULL,\n\t`start_line` integer NOT NULL,\n\t`end_line` integer NOT NULL,\n\t`summary` text NOT NULL,\n\t`rationale` text,\n\t`ref` text,\n\t`ord` integer NOT NULL,\n\tFOREIGN KEY (`owner_id`) REFERENCES `owners`(`id`) ON UPDATE no action ON DELETE no action,\n\tFOREIGN KEY (`owner_id`,`file_id`) REFERENCES `files`(`owner_id`,`id`) ON UPDATE no action ON DELETE no action,\n\tCONSTRAINT \"agent_notes_side_check\" CHECK(\"agent_notes\".\"side\" in ('old', 'new')),\n\tCONSTRAINT \"agent_notes_range_check\" CHECK(\"agent_notes\".\"start_line\" >= 1 and \"agent_notes\".\"end_line\" >= \"agent_notes\".\"start_line\"),\n\tCONSTRAINT \"agent_notes_ord_check\" CHECK(\"agent_notes\".\"ord\" between 0 and 7)\n);",
+      "CREATE INDEX `agent_notes_owner_idx` ON `agent_notes` (`owner_id`);",
+      "CREATE UNIQUE INDEX `agent_notes_owner_id_unique` ON `agent_notes` (`owner_id`,`id`);",
+      "CREATE UNIQUE INDEX `agent_notes_owner_file_ord_unique` ON `agent_notes` (`owner_id`,`file_id`,`ord`);"
+    ]
   }
 ];

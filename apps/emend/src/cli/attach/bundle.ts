@@ -2,6 +2,7 @@ import { ImportBundle, importRowCount, LIMITS } from "@emend/contract";
 import { and, asc, eq, gt, inArray, isNull, sql } from "drizzle-orm";
 import type { Queries } from "../../db/client.ts";
 import {
+  agentNotes,
   comments,
   deliveries,
   docAssets,
@@ -14,6 +15,7 @@ import {
   topics,
   writeups,
 } from "../../db/schema.ts";
+import { noteView } from "../../server/publish/notes.ts";
 import { CliError } from "../http.ts";
 
 const iso = (time: number) => new Date(time).toISOString();
@@ -93,6 +95,23 @@ export async function snapshot(
     .from(files)
     .where(and(eq(files.ownerId, ownerId), inArray(files.revisionId, revisionIds)))
     .orderBy(sql`${files}.rowid`);
+  // Export every revision of this review, probing notes only for those revisions' file IDs.
+  const noteRows = await q
+    .select({ note: agentNotes })
+    .from(agentNotes)
+    .where(
+      and(
+        eq(agentNotes.ownerId, ownerId),
+        inArray(
+          agentNotes.fileId,
+          q
+            .select({ id: files.id })
+            .from(files)
+            .where(and(eq(files.ownerId, ownerId), inArray(files.revisionId, revisionIds))),
+        ),
+      ),
+    )
+    .orderBy(agentNotes.fileId, agentNotes.ord);
   const assetRows = await q
     .select()
     .from(docAssets)
@@ -134,6 +153,7 @@ export async function snapshot(
         t.blastScope === null || t.blastNote === null ? undefined : { scope: t.blastScope, note: t.blastNote },
     })),
     files: fileRows,
+    agentNotes: noteRows.map(({ note }) => ({ ...noteView(note), fileId: note.fileId, ord: note.ord })),
     docAssets: assetRows,
     writeups: writeupRows,
     threads: threadRows.map(dates),

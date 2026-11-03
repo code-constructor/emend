@@ -23,7 +23,7 @@ test.each([false, true])(
           await q.exec(
             "CREATE TABLE __emend_migrations (hash text primary key, tag text not null, applied_at integer not null)",
           );
-          for (const migration of MIGRATIONS.slice(0, -1)) {
+          for (const migration of MIGRATIONS.filter((m) => m.tag < "0009")) {
             for (const statement of migration.statements) await q.exec(statement);
             await q.run(sql`INSERT INTO __emend_migrations VALUES (${migration.hash}, ${migration.tag}, 0)`);
           }
@@ -36,7 +36,7 @@ test.each([false, true])(
       const before = await db.read((q) =>
         q.values(sql`SELECT name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY name`),
       );
-      expect(await migrate(db)).toBe(previous ? 1 : MIGRATIONS.length);
+      expect(await migrate(db)).toBe(previous ? MIGRATIONS.filter((m) => m.tag >= "0009").length : MIGRATIONS.length);
       expect(await migrate(db)).toBe(0);
       expect(await db.read((q) => q.select().from(viewedFiles).where(sql`${viewedFiles.ownerId} = ${owner}`))).toEqual(
         [],
@@ -48,7 +48,7 @@ test.each([false, true])(
         expect(
           await db.read((q) =>
             q.values(
-              sql`SELECT name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' AND name NOT LIKE 'viewed_files%' AND name != 'files_owner_revision_path_idx' ORDER BY name`,
+              sql`SELECT name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' AND name NOT LIKE 'agent_notes%' AND name NOT LIKE 'viewed_files%' AND name != 'files_owner_revision_path_idx' ORDER BY name`,
             ),
           ),
         ).toEqual(before);

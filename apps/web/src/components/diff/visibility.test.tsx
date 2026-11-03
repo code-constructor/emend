@@ -5,6 +5,7 @@ import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } fr
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement, ReactNode } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { createLayoutStore } from "../../lib/layout-store.ts";
 import { DiffPane } from "./DiffPane.tsx";
 import { parsePair } from "./parse.worker.ts";
 import type { DiffParser } from "./parse-client.ts";
@@ -23,6 +24,85 @@ vi.mock("@pierre/diffs/react", async (original) => {
   };
 });
 const reviewId = "11111111-1111-4111-8111-111111111111";
+test.each(["old", "new"] as const)(
+  "agent notes use the %s end-line slot before threads, render as text and compose the same range",
+  async (side) => {
+    vi.stubGlobal("matchMedia", () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+    fetchMock.mockImplementation(async (path: string, init?: RequestInit) =>
+      init?.method === "POST"
+        ? Response.json({}, { status: 201 })
+        : new Response(path.endsWith("/old") ? "one\nold\nthree\n" : "one\nnew\nthree\n"),
+    );
+    const note = {
+      id: crypto.randomUUID(),
+      side,
+      start: 1,
+      end: 2,
+      summary: "<script>alert(1)</script>",
+      rationale: hostileComment,
+      ref: "A",
+    };
+    const location: Target = { ...target, path: side === "old" ? "old.txt" : "new.txt", side };
+    const value = file({ notes: [note] });
+    await mount(revision([value], [thread("Reviewer thread", location)]));
+    near("new.txt");
+    const slot = `annotation-${side === "old" ? "deletions" : "additions"}-2`;
+    await waitFor(() =>
+      expect(document.getElementById(`diff-note-${note.id}`)?.closest("[slot]")?.getAttribute("slot")).toBe(slot),
+    );
+    const card = document.getElementById(`diff-note-${note.id}`);
+    if (!card) throw new Error("Missing card");
+    const annotation = card.closest(".em-diff-annotation");
+    if (!annotation) throw new Error("Missing annotation");
+    expect(annotation.firstElementChild).toBe(card);
+    expect(within(card).getByText(note.summary)).toBeTruthy();
+    expect(within(card).getByText(note.rationale)).toBeTruthy();
+    expect(card.querySelector(".em-card__body")?.querySelector("script,img,svg,[onerror],[onload]")).toBeNull();
+    expect(within(card).queryByRole("button", { name: /Reply|Resolve/ })).toBeNull();
+    fireEvent.click(within(card).getByRole("button", { name: "Comment on these lines" }));
+    const input = await screen.findByRole("textbox", { name: "Comment" });
+    expect(input.closest("[slot]")?.getAttribute("slot")).toBe(slot);
+    fireEvent.change(input, { target: { value: "Inspect this decision" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save comment" }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([, init]) => init?.method === "POST")).toBe(true));
+    const sent = fetchMock.mock.calls.find(([, init]) => init?.method === "POST")?.[1];
+    expect(JSON.parse(String(sent?.body)).target).toMatchObject({ side, start: 1, end: 2, path: location.path });
+    fireEvent.click(screen.getByRole("button", { name: "Agent notes" }));
+    expect(document.getElementById(`diff-note-${note.id}`)).toBeNull();
+    expect(createLayoutStore().getSnapshot().notes).toBe(false);
+    expect(screen.getByText("Reviewer thread")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Agent notes" }));
+    await waitFor(() =>
+      expect(document.getElementById(`diff-note-${note.id}`)?.closest("[slot]")?.getAttribute("slot")).toBe(slot),
+    );
+  },
+);
+
+test("a note on unchanged lines expands collapsed context on both ends of its range", async () => {
+  vi.stubGlobal("matchMedia", () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+  const lines = Array.from({ length: 100 }, (_, i) => `line ${i + 1}`);
+  fetchMock.mockImplementation(
+    async (path: string) =>
+      new Response(lines.map((line, i) => (path.endsWith("/new") && i === 94 ? "changed" : line)).join("\n")),
+  );
+  const note = {
+    id: crypto.randomUUID(),
+    side: "new" as const,
+    start: 40,
+    end: 45,
+    summary: "Context carries the decision.",
+  };
+  await mount(revision([file({ notes: [note] })], []));
+  near("new.txt");
+  await waitFor(() =>
+    expect(document.getElementById(`diff-note-${note.id}`)?.closest("[slot]")?.getAttribute("slot")).toBe(
+      "annotation-additions-45",
+    ),
+  );
+  const shadow = document.querySelector("diffs-container")?.shadowRoot;
+  expect(shadow?.querySelector('slot[name="annotation-additions-45"]')).toBeTruthy();
+  expect(shadow?.textContent).toContain("line 40");
+});
 const hostileComment = "<script>alert(1)</script><img src=x onerror=alert(1)><svg onload=alert(1)>javascript:alert(1)";
 const file = (values: Partial<FileView> = {}): FileView => ({
   id: crypto.randomUUID(),
@@ -38,7 +118,7 @@ const file = (values: Partial<FileView> = {}): FileView => ({
   hasNew: true,
   ...values,
 });
-const target: Target = {
+const target: Extract<Target, { kind: "lines" }> = {
   kind: "lines",
   path: "new.txt",
   side: "new",

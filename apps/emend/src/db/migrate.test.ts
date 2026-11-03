@@ -61,6 +61,7 @@ test("migrations apply to an empty file and a second run applies nothing", async
     );
     expect(tables.flat()).toEqual([
       "__emend_migrations",
+      "agent_notes",
       "agent_waiters",
       "blobs",
       "changed_blocks",

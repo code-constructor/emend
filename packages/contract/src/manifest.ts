@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { AgentNotes, validateAgentNotes } from "./agent-note.ts";
 import { LIMITS } from "./limits.ts";
 import { FilePath, OTHER_TOPIC, TopicMeta, TopicSlug } from "./review.ts";
 
@@ -55,17 +56,24 @@ export const PublishManifest = z
     topics: z.array(TopicMeta).max(LIMITS.topicsPerReview),
     files: z
       .array(
-        z.object({
-          path: FilePath,
-          role: z.enum(["diff", "doc"]),
-          topic: TopicSlug.optional(),
-          source: source.optional(),
-        }),
+        z
+          .object({
+            path: FilePath,
+            role: z.enum(["diff", "doc"]),
+            topic: TopicSlug.optional(),
+            source: source.optional(),
+            notes: AgentNotes.optional(),
+          })
+          .refine((file) => file.role === "diff" || file.notes === undefined, {
+            path: ["notes"],
+            message: "only diff files have agent notes",
+          }),
       )
       .max(LIMITS.filesPerRevision),
     writeup: WriteupInput,
   })
   .superRefine((manifest, ctx) => {
+    validateAgentNotes(manifest.files, ctx);
     if (
       manifest.main !== undefined &&
       manifest.main !== "writeup" &&

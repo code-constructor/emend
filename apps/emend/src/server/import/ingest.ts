@@ -18,6 +18,7 @@ const idTables = [
   t.revisions,
   t.topics,
   t.files,
+  t.agentNotes,
   t.writeups,
   t.changedBlocks,
   t.threads,
@@ -72,6 +73,7 @@ async function checkIds(ownerId: string, q: Queries, bundle: ImportBundle, signa
     ...bundle.revisions,
     ...bundle.topics,
     ...bundle.files,
+    ...(bundle.agentNotes ?? []),
     ...bundle.writeups,
     ...bundle.threads,
     ...bundle.comments,
@@ -186,6 +188,15 @@ export async function importReview(principal: Principal, bundle: ImportBundle, d
               renderedBlob:
                 r.role === "doc" ? (prepared.rendered.get(r.revisionId)?.docBlobs.get(r.path) ?? null) : null,
             })),
+        );
+        await insert(
+          t.agentNotes,
+          (bundle.agentNotes ?? []).map((note) => ({
+            ...note,
+            ownerId,
+            startLine: note.start,
+            endLine: note.end,
+          })),
         );
         await insert(
           t.docAssets,
