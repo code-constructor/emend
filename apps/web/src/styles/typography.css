@@ -17,7 +17,7 @@
   --lh-tight: 1.2;
   --lh-snug: 1.35;
   --lh-body: 1.55;
-  --lh-prose: 1.65;
+  --lh-prose: 1.7;
   --weight-regular: 400;
   --weight-medium: 500;
   --weight-semibold: 600;
@@ -31,7 +31,7 @@
   --type-h2: 600 var(--text-18) / var(--lh-snug) var(--font-sans);
   --type-h3: 600 var(--text-15) / var(--lh-snug) var(--font-sans);
   --type-body: 400 var(--text-14) / var(--lh-body) var(--font-sans);
-  --type-prose: 400 var(--text-15) / var(--lh-prose) var(--font-sans);
+  --type-prose: 400 var(--text-16) / var(--lh-prose) var(--font-sans);
   --type-ui: 500 var(--text-13) / var(--lh-snug) var(--font-sans);
   --type-meta: 400 var(--text-12) / var(--lh-snug) var(--font-sans);
   --type-label: 500 var(--text-11) / var(--lh-snug) var(--font-mono);

@@ -195,7 +195,8 @@ test("publishing at the block cap over a cap-sized previous revision keeps beare
     );
     const counts = new Map<string, number>();
     for (const row of changed) counts.set(row.revision, (counts.get(row.revision) ?? 0) + 1);
-    expect([...counts.values()]).toEqual([LIMITS.blocksPerRevision, LIMITS.blocksPerRevision]);
+    expect(counts.has(previous.id)).toBe(false);
+    expect([...counts.values()]).toEqual([LIMITS.blocksPerRevision]);
     for (const phase of [
       "snapshot",
       "writeup",

@@ -176,20 +176,20 @@ export async function prepareImport(ownerId: string, bundle: ImportBundle, deps:
       }
       const result = await renderRevision(input, execute, read, put, signal, onRendered);
       if (!rows) throw new ApiError("invalid_request");
-      const previousBlobs: Extract<Work, { kind: "changed" }>["previous"] = [];
       if (previous) {
+        const previousBlobs: Extract<Work, { kind: "changed" }>["previous"] = [];
         previousBlobs.push({ format: "writeup", bytes: await read(previous.renderedBlob) });
         for (const hash of previous.docBlobs.values()) previousBlobs.push({ format: "doc", bytes: await read(hash) });
-      }
-      const changed = await execute({ kind: "changed", previous: previousBlobs, next: result.ids });
-      if (changed.kind !== "changed") throw new ApiError("invalid_request");
-      const packed = Buffer.from(changed.bytes).toString("utf8");
-      for (const line of packed ? packed.split("\n") : []) {
-        addRows(1);
-        const blockId = JSON.parse(line) as string;
-        const row = { id: randomUUID(), ownerId, revisionId: revision.id, blockId };
-        addDerivedBytes(derivedRowBytes(changedTable, row));
-        changedBlocks.push(row);
+        const changed = await execute({ kind: "changed", previous: previousBlobs, next: result.ids });
+        if (changed.kind !== "changed") throw new ApiError("invalid_request");
+        const packed = Buffer.from(changed.bytes).toString("utf8");
+        for (const line of packed ? packed.split("\n") : []) {
+          addRows(1);
+          const blockId = JSON.parse(line) as string;
+          const row = { id: randomUUID(), ownerId, revisionId: revision.id, blockId };
+          addDerivedBytes(derivedRowBytes(changedTable, row));
+          changedBlocks.push(row);
+        }
       }
       previous = { renderedBlob: result.renderedBlob, docBlobs: result.docBlobs };
       for (const placement of await place(rows, result, read, execute, signal)) {

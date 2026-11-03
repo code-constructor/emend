@@ -1,4 +1,14 @@
 @layer components {
+  .em-reading-column {
+    font: var(--type-prose);
+    width: 100%;
+    max-width: calc(68ch + 2 * var(--space-4));
+    margin-inline: auto;
+    padding-inline: var(--space-4);
+  }
+  .em-reading-group + .em-reading-group {
+    margin-top: 36px;
+  }
   .em-doc-path {
     font: var(--type-path);
   }
@@ -16,6 +26,12 @@
     scroll-margin-top: var(--doc-bar-height);
   }
   @media (min-width: 768px) {
+    .em-reading-column {
+      max-width: calc(68ch + 112px);
+      padding-left: 56px;
+      /* Preserve the narrow pane's padding; match the gutter when the measure fits. */
+      padding-right: clamp(var(--space-8), calc(100% - 68ch - 56px), 56px);
+    }
     /* Reading tabs: 40px controls and their bottom border. */
     .em-doc-bar {
       top: calc(var(--space-10) + var(--space-px));
@@ -27,8 +43,27 @@
       scroll-margin-top: calc(var(--space-10) + var(--space-px) + var(--doc-bar-height));
     }
   }
+  .em-reading-block {
+    --reading-block-gap: var(--space-3);
+  }
+  .em-reading-block:has(> .em-prose > h2) {
+    --reading-block-gap: 36px;
+  }
+  .em-reading-block:has(> .em-prose > :is(h3, h4)) {
+    --reading-block-gap: var(--space-6);
+  }
   .em-reading-block + .em-reading-block {
-    margin-top: var(--space-3);
+    margin-top: var(--reading-block-gap);
+  }
+  .em-reading-block__change {
+    top: 0;
+    bottom: 0;
+  }
+  .em-reading-block[data-change-continuation] > .em-reading-block__change {
+    top: calc(-1 * var(--reading-block-gap));
+  }
+  .em-reading-block:has(> .em-reading-block__marker) > .em-prose > :is(h2, h3, h4):first-child {
+    margin-top: var(--space-2);
   }
   .em-reading-block[data-commenting] {
     background: var(--accent-tint);
@@ -52,6 +87,9 @@
     .em-reading-block:focus-within .em-reading-block__comment,
     .em-reading-block[data-commenting] .em-reading-block__comment {
       opacity: 1;
+    }
+    .em-reading-block:has(> .em-reading-block__marker) > .em-reading-block__comment {
+      top: calc(2px + var(--space-5) + var(--space-1-5));
     }
   }
 }

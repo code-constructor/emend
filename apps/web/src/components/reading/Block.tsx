@@ -9,24 +9,32 @@ import { BlockView } from "./BlockView.tsx";
 export function Block({
   block,
   changedIn,
+  continuesChange,
   commenting,
   onComment,
   children,
 }: {
   block: RenderedBlock;
   changedIn?: number;
+  continuesChange: boolean;
   commenting: boolean;
   onComment: () => void;
   children?: ReactNode;
 }) {
   return (
-    <div className="em-reading-block relative rounded-sm py-0.5" data-commenting={commenting ? "" : undefined}>
+    <div
+      className="em-reading-block relative rounded-sm"
+      data-commenting={commenting ? "" : undefined}
+      data-change-continuation={changedIn !== undefined && continuesChange ? "" : undefined}
+    >
       {changedIn !== undefined && (
         <>
-          <span aria-hidden="true" className="absolute inset-y-1 -left-3.5 w-0.5 rounded-[1px] bg-changed-line" />
-          <div className="mb-1.5">
-            <ChangedMarker revision={changedIn} />
-          </div>
+          <span aria-hidden="true" className="em-reading-block__change absolute -left-3.5 w-0.5 bg-changed-line" />
+          {!continuesChange && (
+            <div className="em-reading-block__marker mb-1.5 flex">
+              <ChangedMarker revision={changedIn} />
+            </div>
+          )}
         </>
       )}
       <BlockView block={block} />
@@ -36,7 +44,8 @@ export function Block({
             icon={MessageSquarePlus}
             label={block.kind === "diagram" ? "Comment on diagram" : "Comment on block"}
             size="sm"
-            variant="secondary"
+            variant="ghost"
+            className="size-6 [&:not(:disabled):not([aria-disabled=true])]:hover:bg-accent-tint [&:not(:disabled):not([aria-disabled=true])]:hover:text-accent-text"
             onMouseUpCapture={(event) => event.stopPropagation()}
             onKeyUpCapture={(event) => event.stopPropagation()}
             onClick={onComment}

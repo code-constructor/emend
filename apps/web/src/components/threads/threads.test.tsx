@@ -196,6 +196,7 @@ test("Comments groups follow shown state, place unplaced first over state, hide 
   mount(<ThreadList reviewId={id} revision={2} threads={[]} changedBlocks={[]} onResume={() => {}} />);
   expect(screen.queryByRole("heading")).toBeNull();
   expect(screen.getByText("No comments yet.")).toBeTruthy();
+  expect(screen.queryByText("Select text to comment.")).toBeNull();
   expect(screen.getByText("Select text in the writeup or a doc, or click a line in the diff.")).toBeTruthy();
 });
 test.each([{ metaKey: true }, { ctrlKey: true }])(

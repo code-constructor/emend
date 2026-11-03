@@ -32,6 +32,17 @@ function cssUrls(css: string) {
   return matches.map((match) => match[2]?.trim() ?? "");
 }
 
+test("change bars define their base and continuation offsets in the components stylesheet", () => {
+  const css = readFileSync(join(webSource, "styles/reading.css"), "utf8");
+  expect(css).toMatch(/^@layer components\s*\{/);
+  const base = /\.em-reading-block__change\s*\{([^}]+)\}/.exec(css)?.[1];
+  expect(base).toMatch(/\btop:\s*0\s*;/);
+  expect(base).toMatch(/\bbottom:\s*0\s*;/);
+  const continuation =
+    /\.em-reading-block\[data-change-continuation\]\s*>\s*\.em-reading-block__change\s*\{([^}]+)\}/.exec(css)?.[1];
+  expect(continuation).toMatch(/\btop:\s*calc\(-1\s*\*\s*var\(--reading-block-gap\)\)\s*;/);
+});
+
 test("web CSS loads only relative bundled fonts and never imports a remote stylesheet", () => {
   const stylesheets = webStylesheets();
   expect(stylesheets.length).toBeGreaterThan(0);

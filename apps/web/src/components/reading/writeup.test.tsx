@@ -228,8 +228,8 @@ test.each(["writeup", "doc"])(
     );
     expect(screen.getAllByRole("button", { name: "Comment on block" })).toHaveLength(1);
     expect(screen.getAllByRole("button", { name: "Comment on diagram" })).toHaveLength(1);
-    expect(screen.getAllByText("Changed in revision 2")).toHaveLength(1);
-    const changed = screen.getByText("Changed in revision 2").closest(".em-reading-block");
+    expect(screen.getAllByText("Changed in rev 2")).toHaveLength(1);
+    const changed = screen.getByText("Changed in rev 2").closest(".em-reading-block");
     expect(changed?.querySelector('[aria-hidden="true"].bg-changed-line')).toBeTruthy();
     expect(container.querySelectorAll(".bg-changed-line")).toHaveLength(1);
     const button = screen.getByRole("button", { name: "Comment on block" });

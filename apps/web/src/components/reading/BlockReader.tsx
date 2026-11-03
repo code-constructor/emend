@@ -159,11 +159,12 @@ export function BlockReader({
     };
   }, [composing, targets]);
   const renderBlocks = (blocks: RenderedBlock[], path?: string) =>
-    blocks.map((block) => (
+    blocks.map((block, index) => (
       <Block
         key={block.id}
         block={block}
         changedIn={changes.get(block.id)}
+        continuesChange={index > 0 && changes.get(blocks[index - 1]?.id ?? "") === changes.get(block.id)}
         commenting={
           resumedBlockId === block.id || (composing && !!target && "blockId" in target && target.blockId === block.id)
         }
@@ -205,17 +206,16 @@ export function BlockReader({
       </Block>
     ));
   return (
-    <div ref={root} tabIndex={-1} className="px-4 pt-4 pb-8 md:pt-7 md:pr-8 md:pb-[72px] md:pl-14">
-      <p className="mb-6 text-fg-3 [font:var(--type-meta)]">Select text to comment.</p>
+    <div ref={root} tabIndex={-1} className="em-reading-column pt-4 pb-8 md:pt-7 md:pb-[72px]">
       {groups.map((group, index) => (
         <section
           key={group.key}
           id={group.id}
           aria-labelledby={group.labelledBy ?? `${headingBase}-${index}`}
-          className={group.topic ? "mt-9 mb-2 border-t border-line-1 pt-5" : "mb-2"}
+          className={group.topic ? "em-reading-group border-t border-line-1 pt-5" : "em-reading-group"}
         >
           {group.heading != null && (
-            <div className="mb-2.5 flex items-center gap-2.5">
+            <div className="mb-3 flex items-center gap-2.5">
               <h2
                 id={`${headingBase}-${index}`}
                 className="flex min-w-0 flex-1 items-center gap-2.5 wrap-anywhere text-fg-1 [font:var(--type-h2)]"

@@ -397,20 +397,22 @@ async function computePublish(
         throw new ApiError("invalid_request", "placement_failed");
       }
     }
-    const previousBlobs: Extract<Work, { kind: "changed" }>["previous"] = [];
+    let changedBytes: ArrayBuffer | undefined;
     if (previous) {
+      const previousBlobs: Extract<Work, { kind: "changed" }>["previous"] = [];
       if (writeup) previousBlobs.push({ format: "writeup", bytes: await read(writeup.renderedBlob) });
       for (const file of getFiles(previous.id))
         if (file.renderedBlob) previousBlobs.push({ format: "doc", bytes: await read(file.renderedBlob) });
+      // Rendering survives retries. Copy only the packed IDs before transferring them;
+      // previous rendered bytes are read fresh from the current snapshot each attempt.
+      const changed = await execute({
+        kind: "changed",
+        previous: previousBlobs,
+        next: ids.map((bytes) => bytes.slice(0)),
+      });
+      if (changed.kind !== "changed") throw new Error("wrong result");
+      changedBytes = changed.bytes;
     }
-    // Rendering survives retries. Copy only the packed IDs before transferring them;
-    // previous rendered bytes are read fresh from the current snapshot each attempt.
-    const changed = await execute({
-      kind: "changed",
-      previous: previousBlobs,
-      next: ids.map((bytes) => bytes.slice(0)),
-    });
-    if (changed.kind !== "changed") throw new Error("wrong result");
     checkPublishSignal(deps.signal);
     return deps.db.transaction(
       async (q) => {
@@ -510,7 +512,7 @@ async function computePublish(
           }
         }
         if (associations.length) await q.insert(docAssets).values(associations);
-        await insertChangedBlocks(q, ownerId, revision.id, changed.bytes, deps.signal);
+        if (changedBytes) await insertChangedBlocks(q, ownerId, revision.id, changedBytes, deps.signal);
         for (const { id, placement } of placedRows) {
           checkPublishSignal(deps.signal);
           await q.insert(placements).values({

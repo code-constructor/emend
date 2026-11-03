@@ -52,6 +52,21 @@ test("an abort during changed-block insertion rolls back the entire revision", a
   const controller = new AbortController();
   const log = vi.spyOn(console, "error").mockImplementation(() => {});
   try {
+    const input = {
+      reviewKey: "a".repeat(64),
+      repo: null,
+      branch: null,
+      title: "Synthetic",
+      base: null,
+      head: null,
+      topics: [],
+      files: [],
+      writeup: { overview: "one", tldr: "", decisions: null, topics: {} },
+    };
+    const blobs = new BlobStore(f.db, join(f.dir, "state"));
+    const deps = { db: f.db, blobs, baseUrl: "http://127.0.0.1:3636", executor: executeWork };
+    await ingest(f.ownerId, f.instanceId, input, deps);
+    const before = await f.db.read((q) => q.select().from(revisions).where(eq(revisions.ownerId, f.ownerId)));
     const db: Db = {
       ...f.db,
       transaction: (callback, options) =>
@@ -77,26 +92,17 @@ test("an abort during changed-block insertion rolls back the entire revision", a
         f.ownerId,
         f.instanceId,
         {
-          reviewKey: "a".repeat(64),
-          repo: null,
-          branch: null,
-          title: "Synthetic",
-          base: null,
-          head: null,
-          topics: [],
-          files: [],
-          writeup: { overview: "one", tldr: "", decisions: null, topics: {} },
+          ...input,
+          writeup: { ...input.writeup, overview: "two" },
         },
         {
+          ...deps,
           db,
-          blobs: new BlobStore(db, join(f.dir, "state")),
-          baseUrl: "http://127.0.0.1:3636",
-          executor: executeWork,
           signal: controller.signal,
         },
       ),
     ).rejects.toMatchObject({ detail: "publish_aborted" });
-    expect(await f.db.query((q) => q.select().from(revisions).where(eq(revisions.ownerId, f.ownerId)))).toEqual([]);
+    expect(await f.db.query((q) => q.select().from(revisions).where(eq(revisions.ownerId, f.ownerId)))).toEqual(before);
     expect(log.mock.calls).toEqual([["emend: publish abandoned"]]);
   } finally {
     log.mockRestore();

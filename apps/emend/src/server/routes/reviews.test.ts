@@ -208,9 +208,10 @@ test("changed blocks use the newest change after the last Send through the reque
     q.insert(changedBlocks).values({ ownerId: f.ownerId, revisionId: f.revisionId, blockId: "overview-11111111" }),
   );
   const beforeSend = contract.RevisionView.parse(await (await get(`/${f.reviewId}/revisions/1`)).json());
-  expect(beforeSend.changedBlocks).toEqual([{ blockId: "overview-11111111", revision: 1 }]);
-  await f.thread();
-  await f.send();
+  expect(beforeSend.changedBlocks).toEqual([]);
+  expect(
+    await f.db.read((q) => q.select().from(changedBlocks).where(eq(changedBlocks.ownerId, f.ownerId))),
+  ).toHaveLength(1);
   f.advance(-1000);
   const revision2 = await f.revision(2);
   const revision3 = await f.revision(3);
@@ -266,6 +267,31 @@ test("changed blocks use the newest change after the last Send through the reque
     expect(response.status).toBe(200);
     expect(contract.RevisionView.parse(await response.json()).changedBlocks).toEqual(expected);
   }
+});
+
+test("a Send on revision 2 clears its changes and revision 3 returns only subsequent changes", async () => {
+  const revision2 = await f.revision(2);
+  await seedWriteup(revision2);
+  await f.db.query((q) =>
+    q.insert(changedBlocks).values([
+      { ownerId: f.ownerId, revisionId: f.revisionId, blockId: "overview-11111111" },
+      { ownerId: f.ownerId, revisionId: revision2, blockId: "overview-22222222" },
+    ]),
+  );
+  expect(contract.RevisionView.parse(await (await get(`/${f.reviewId}/revisions/2`)).json()).changedBlocks).toEqual([
+    { blockId: "overview-22222222", revision: 2 },
+  ]);
+  await f.thread("Update the explanation", { kind: "review" }, 2);
+  await f.send({ revision: 2, kind: "go" });
+  expect(contract.RevisionView.parse(await (await get(`/${f.reviewId}/revisions/2`)).json()).changedBlocks).toEqual([]);
+  const revision3 = await f.revision(3);
+  await seedWriteup(revision3);
+  await f.db.query((q) =>
+    q.insert(changedBlocks).values({ ownerId: f.ownerId, revisionId: revision3, blockId: "overview-33333333" }),
+  );
+  expect(contract.RevisionView.parse(await (await get(`/${f.reviewId}/revisions/3`)).json()).changedBlocks).toEqual([
+    { blockId: "overview-33333333", revision: 3 },
+  ]);
 });
 
 test("sentOn follows each comment's Send revision despite clock changes and older revision reads", async () => {

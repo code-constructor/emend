@@ -39,6 +39,76 @@ function required<T>(value: T | undefined | null): T {
   ok(value != null);
   return value;
 }
+test.each([
+  { revisions: [2, 2, 2], labels: [2], continuations: [false, true, true] },
+  { revisions: [2, undefined, 2], labels: [2, 2], continuations: [false, false, false] },
+  { revisions: [2, 3, 3], labels: [2, 3], continuations: [false, false, true] },
+])(
+  "changed block runs include headings and split at gaps or revisions: $revisions",
+  ({ revisions, labels, continuations }) => {
+    const blocks = revisions.map((_, index) => ({
+      ...block,
+      id: `overview-${String(index).padStart(8, "0")}`,
+      ...(index === 1 ? { kind: "heading" as const, text: "Growing", html: "<h2>Growing</h2>" } : {}),
+    }));
+    const { container } = mount(
+      <BlockReader
+        reviewId={id}
+        revision={3}
+        changedBlocks={blocks.flatMap((block, index) => {
+          const revision = revisions[index];
+          return revision === undefined ? [] : [{ blockId: block.id, revision }];
+        })}
+        threads={[]}
+        groups={[{ key: "overview", blocks }]}
+      />,
+    );
+    expect(screen.getAllByText(/^Changed in rev \d+$/).map((label) => label.textContent)).toEqual(
+      labels.map((revision) => `Changed in rev ${revision}`),
+    );
+    expect(screen.getAllByText(/^Changed in revision \d+$/).map((label) => label.textContent)).toEqual(
+      labels.map((revision) => `Changed in revision ${revision}`),
+    );
+    expect(container.querySelectorAll(".bg-changed-line")).toHaveLength(
+      revisions.filter((revision) => revision !== undefined).length,
+    );
+    for (const bar of container.querySelectorAll(".em-reading-block__change")) {
+      expect([...bar.classList].filter((name) => /(?:^|:)[!-]?(?:inset|top|bottom)-/.test(name))).toEqual([]);
+    }
+    expect(
+      [...container.querySelectorAll(".em-reading-block")].map((block) =>
+        block.hasAttribute("data-change-continuation"),
+      ),
+    ).toEqual(continuations);
+  },
+);
+
+test("changed runs restart for each group and subsection", () => {
+  const blocks = [0, 1, 2, 3].map((index) => ({ ...block, id: `overview-${String(index).padStart(8, "0")}` }));
+  const { container } = mount(
+    <BlockReader
+      reviewId={id}
+      revision={2}
+      changedBlocks={blocks.map((block) => ({ blockId: block.id, revision: 2 }))}
+      threads={[]}
+      groups={[
+        { key: "overview", blocks: blocks.slice(0, 1) },
+        {
+          key: "topic",
+          blocks: blocks.slice(1, 2),
+          subsections: [
+            { key: "why", heading: "Why", blocks: blocks.slice(2, 3) },
+            { key: "body", heading: "Details", blocks: blocks.slice(3) },
+          ],
+        },
+      ]}
+    />,
+  );
+  expect(screen.getAllByText("Changed in rev 2")).toHaveLength(4);
+  expect(container.querySelectorAll(".bg-changed-line")).toHaveLength(4);
+  expect(container.querySelector("[data-change-continuation]")).toBeNull();
+});
+
 test.each(["mouseup", "keyup"])("collapsing a selection on %s retires its comment prompt", (event) => {
   const { container } = mount(
     <BlockReader
@@ -428,7 +498,8 @@ test("reading shows server blocks and change badges, rejects cross-block selecti
       threads={[]}
     />,
   );
-  expect(screen.getByText("Changed in revision 2")).toBeTruthy();
+  expect(screen.getByText("Changed in rev 2")).toBeTruthy();
+  expect(screen.queryByText("Select text to comment.")).toBeNull();
   const range = document.createRange();
   range.setStart(required(container.querySelector("[data-block-id] p")?.firstChild), 0);
   range.setEnd(required(container.querySelector("pre")?.firstChild), 3);

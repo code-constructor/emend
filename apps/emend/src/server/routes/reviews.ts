@@ -234,7 +234,13 @@ async function revisionView(ownerId: string, q: Queries, deps: AppDeps, reviewId
       revisions,
       and(eq(revisions.ownerId, ownerId), eq(revisions.reviewId, reviewId), eq(revisions.id, changedBlocks.revisionId)),
     )
-    .where(and(eq(changedBlocks.ownerId, ownerId), gt(revisions.seq, lastSend?.seq ?? 0), lte(revisions.seq, seq)))
+    .where(
+      and(
+        eq(changedBlocks.ownerId, ownerId),
+        gt(revisions.seq, Math.max(lastSend?.seq ?? 0, 1)),
+        lte(revisions.seq, seq),
+      ),
+    )
     .groupBy(changedBlocks.blockId)
     .orderBy(changedBlocks.blockId)
     .all();

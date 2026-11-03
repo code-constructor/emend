@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { PublishRequest } from "@emend/contract";
+import { renderDoc, renderWriteup } from "@emend/core";
 import { and, eq } from "drizzle-orm";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { changedBlocks, files, instances, placements, reviews, revisions, threads, writeups } from "../../db/schema.ts";
@@ -39,6 +40,38 @@ function publish(
 ) {
   return ingest(ownerId, instanceId, body, { db: f.db, blobs, baseUrl: "http://127.0.0.1:3636", executor });
 }
+test.each([false, true])("first publish skips changes; revision 2 compares against it (empty=%s)", async (empty) => {
+  const executor = vi.fn(executeWork);
+  const firstDoc = await blobs.put(f.ownerId, Buffer.from("Original doc"), "text/markdown");
+  const nextDoc = await blobs.put(f.ownerId, Buffer.from("Updated doc"), "text/markdown");
+  const doc = { path: "plan.md", role: "doc" as const, oldPath: null, oldBlob: null, newBlob: firstDoc, flag: null };
+  const first = input();
+  if (empty) first.writeup = { overview: "", tldr: "", decisions: "", topics: {} };
+  else first.files = [doc];
+  await publish(first, f.instanceId, f.ownerId, executor);
+  const changes = () => f.db.read((q) => q.select().from(changedBlocks).where(eq(changedBlocks.ownerId, f.ownerId)));
+  expect(await changes()).toEqual([]);
+  expect(executor.mock.calls.filter(([work]) => work.kind === "changed")).toHaveLength(0);
+
+  const next = { ...input(), files: [{ ...doc, newBlob: nextDoc }] };
+  next.writeup.overview = "Updated overview";
+  await publish(next, f.instanceId, f.ownerId, executor);
+  expect(executor.mock.calls.filter(([work]) => work.kind === "changed")).toHaveLength(1);
+  const rendered = await renderWriteup(next.writeup, []);
+  const expected = [
+    ...rendered.sections.filter((section) => empty || section.key === "overview").flatMap((section) => section.blocks),
+    ...(await renderDoc("Updated doc", doc.path)),
+  ];
+  expect((await changes()).map((row) => row.blockId).sort()).toEqual(expected.map((block) => block.id).sort());
+  const second = await f.db.read((q) =>
+    q
+      .select()
+      .from(revisions)
+      .where(and(eq(revisions.ownerId, f.ownerId), eq(revisions.seq, 2)))
+      .get(),
+  );
+  expect((await changes()).every((row) => row.revisionId === second?.id)).toBe(true);
+});
 test("same key appends a revision, reopens and counts placed and unplaced threads", async () => {
   const first = await publish(input());
   const revision = await f.db.query((q) => q.select().from(revisions).where(eq(revisions.ownerId, f.ownerId)).get());

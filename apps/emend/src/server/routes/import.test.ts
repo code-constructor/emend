@@ -746,7 +746,7 @@ test("imports a bundle at all five count ceilings and exactly 50000 inserted row
   input.threads = Array.from({ length: LIMITS.importThreads }, (_, i) => ({
     ...thread,
     id: randomUUID(),
-    createdRevisionId: i < 6 ? required(input.revisions.at(-34)).id : creation.id,
+    createdRevisionId: i < 4 ? required(input.revisions.at(-34)).id : creation.id,
   }));
   input.deliveries = Array.from({ length: LIMITS.importDeliveries }, () => ({ ...delivery, id: randomUUID() }));
   input.sends = input.deliveries.map((d) => ({ ...send, id: randomUUID(), revisionId: last.id, deliveryId: d.id }));
@@ -887,8 +887,32 @@ test("fix2: derived fields are stripped and changed blocks come from consecutive
   const rows = await f.db.read((q) =>
     q.select().from(tables.changedBlocks).where(eq(tables.changedBlocks.ownerId, f.ownerId)),
   );
-  expect(new Set(rows.map((r) => r.revisionId))).toEqual(new Set([input.revisions[0]?.id]));
-  expect(rows.map((r) => r.blockId)).toContain(input.changedBlocks[0]?.blockId);
+  expect(rows).toEqual([]);
+});
+test("import skips first-revision change work and stores exactly the second revision's new blocks", async () => {
+  const input = await bundle();
+  const jobs = vi.fn(required(f.deps.publishExecutor));
+  f.deps.publishExecutor = jobs;
+  const source = { overview: "Synthetic writeup\n\nNew paragraph", tldr: "", decisions: null, topics: {} };
+  required(input.writeups[1]).sourceBlob = await f.deps.blobs.put(
+    f.ownerId,
+    Buffer.from(JSON.stringify(source)),
+    "application/json",
+  );
+  expect((await request("/import", input)).status).toBe(201);
+  expect(jobs.mock.calls.filter(([work]) => work.kind === "changed")).toHaveLength(1);
+  const expected = (await core.renderWriteup(source, [])).sections
+    .flatMap((section) => section.blocks)
+    .filter((block) => block.text === "New paragraph")
+    .map((block) => ({ revisionId: required(input.revisions[1]).id, blockId: block.id }));
+  expect(expected).toHaveLength(1);
+  const rows = await f.db.read((q) =>
+    q
+      .select({ revisionId: tables.changedBlocks.revisionId, blockId: tables.changedBlocks.blockId })
+      .from(tables.changedBlocks)
+      .where(eq(tables.changedBlocks.ownerId, f.ownerId)),
+  );
+  expect(rows).toEqual(expected);
 });
 test("fix2: abort during blob size lookup stops before the next lookup", async () => {
   const input = await bundle();
@@ -1302,7 +1326,7 @@ async function multibyteCapsBundle() {
     threadId: required(input.threads[i % 1000]).id,
     sendId: required(input.sends[i % 1000]).id,
   }));
-  const changed = [...(await core.renderWriteup(source, [])).sections.flatMap((s) => s.blocks), ...blocks];
+  const changed = blocks;
   const generatedRows = 4 + changed.length; // Writeup source/rendering and two doc renderings.
   const withoutPlacements = importRowCount(input) - input.threads.length;
   const lengths: number[] = Array.from({ length: 65 }, (_, i) => (i < 4 ? 50 : 1));
@@ -1417,7 +1441,16 @@ test("fix4: the multibyte caps fixture just under derivedBytes imports with the 
 }, 90_000);
 
 test("fix3: changed-block bytes are checked after rendering and before a writer transaction", async () => {
-  const input = await bundle();
+  const input = ImportBundle.parse(await bundle());
+  input.threads = [];
+  input.comments = [];
+  input.sends = [];
+  input.deliveries = [];
+  required(input.writeups[1]).sourceBlob = await f.deps.blobs.put(
+    f.ownerId,
+    Buffer.from(JSON.stringify({ overview: "Updated writeup", tldr: "", decisions: null, topics: {} })),
+    "application/json",
+  );
   const original = LIMITS.importDerivedBytes;
   Object.assign(LIMITS, { importDerivedBytes: 128 }); // Less than even one changed-block row including its ids.
   const before = await snapshot();
@@ -1594,13 +1627,9 @@ test.each([0, -1])(
       newBlob: blob,
     }));
     required(input.threads[0]).target = { kind: "file", path };
-    const blocks = (
-      await core.renderWriteup({ overview: "Synthetic writeup", tldr: "", decisions: null, topics: {} }, [])
-    ).sections.flatMap((s) => s.blocks);
     const bytes =
       placementStorage({ kind: "file", path }, { path }) +
-      2 * placementStorage({ kind: "file", path: "a" }, { path: "a" }) +
-      blocks.reduce((n, b) => n + 64 + 3 * 36 + Buffer.byteLength(b.id), 0);
+      2 * placementStorage({ kind: "file", path: "a" }, { path: "a" });
     const original = LIMITS.importDerivedBytes;
     Object.assign(LIMITS, { importDerivedBytes: bytes + offset });
     try {
