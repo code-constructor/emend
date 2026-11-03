@@ -1,28 +1,146 @@
 import { DiffHunksRenderer } from "@pierre/diffs";
-import { cleanup, render, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { DiffView } from "./FileDiff.tsx";
 import { parsePair } from "./parse.worker.ts";
+import { syntaxTheme } from "./theme.ts";
 
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
 });
+
+test.each([
+  { style: "split", side: "deletions", line: 3, start: 2, end: 4 },
+  { style: "split", side: "additions", line: 4, start: 3, end: 5 },
+  { style: "unified", side: "deletions", line: 3, start: 2, end: 4 },
+  { style: "unified", side: "additions", line: 4, start: 3, end: 5 },
+] as const)(
+  "real $style gutter selects the hovered $side line $line and numbers still drag",
+  async ({ style, side, line, start: first, end: last }) => {
+    const parsed = parsePair({
+      oldFile: { name: "sample.ts", contents: "start\nold one\nold two\nold three\nend\n" },
+      newFile: { name: "sample.ts", contents: "inserted prefix\nstart\nnew one\nnew two\nnew three\nend\n" },
+    });
+    const select = vi.fn();
+    const view = render(
+      <DiffView fileDiff={parsed} diffStyle={style} selected={null} annotations={[]} onSelect={select} />,
+    );
+    const lineType = side === "deletions" ? "change-deletion" : "change-addition";
+    const shadow = view.container.querySelector("diffs-container")?.shadowRoot;
+    await waitFor(() =>
+      expect(shadow?.querySelector(`[data-line-type="${lineType}"][data-line="${line}"]`)).toBeTruthy(),
+    );
+    const row = shadow?.querySelector(`[data-line-type="${lineType}"][data-line="${line}"]`) as HTMLElement;
+    fireEvent.pointerMove(row, { pointerType: "mouse", pointerId: 1 });
+    expect(row.hasAttribute("data-hovered")).toBe(true);
+    const slot = shadow?.querySelector("[data-gutter-utility-slot] slot") as HTMLSlotElement;
+    expect(slot).toBeTruthy();
+    const button = view.getByRole("button", { name: "Comment on line" });
+    expect(button.tabIndex).toBe(-1);
+    fireEvent.pointerEnter(button, { pointerType: "mouse" });
+    fireEvent.pointerMove(button, { pointerType: "mouse" });
+    await waitFor(() =>
+      expect(view.getByRole("tooltip").textContent).toBe(`Comment on line ${line} · drag to select lines`),
+    );
+    fireEvent.pointerDown(button, { pointerType: "mouse", pointerId: 1 });
+    fireEvent.pointerUp(button, { pointerType: "mouse", pointerId: 1 });
+    fireEvent.click(button);
+    expect(select).toHaveBeenCalledExactlyOnceWith({ start: line, end: line, side });
+    select.mockClear();
+    const start = shadow?.querySelector(`[data-line-type="${lineType}"][data-column-number="${first}"]`) as HTMLElement;
+    const end = shadow?.querySelector(`[data-line-type="${lineType}"][data-column-number="${last}"]`) as HTMLElement;
+    // Happy DOM has no hit testing; let the real selection manager see the end row.
+    Object.defineProperty(shadow, "elementFromPoint", { configurable: true, value: () => end });
+    fireEvent.pointerDown(start, { pointerType: "mouse", pointerId: 2 });
+    fireEvent.pointerMove(end, { pointerType: "mouse", pointerId: 2 });
+    fireEvent.pointerUp(end, { pointerType: "mouse", pointerId: 2 });
+    expect(select).toHaveBeenCalledExactlyOnceWith({ start: first, end: last, side });
+    select.mockClear();
+    view.rerender(
+      <DiffView
+        fileDiff={parsed}
+        diffStyle={style}
+        selected={{ start: first, end: last, side }}
+        annotations={[]}
+        onSelect={select}
+      />,
+    );
+    const hovered = shadow?.querySelector(`[data-line-type="${lineType}"][data-line="${line}"]`) as HTMLElement;
+    expect(hovered.isConnected).toBe(true);
+    fireEvent.pointerMove(hovered, { pointerType: "mouse", pointerId: 3 });
+    expect(shadow?.querySelector("[data-gutter-utility-slot]")?.parentElement?.getAttribute("data-column-number")).toBe(
+      String(line),
+    );
+    fireEvent.pointerEnter(button, { pointerType: "mouse" });
+    fireEvent.click(button);
+    expect(select).toHaveBeenCalledExactlyOnceWith({ start: line, end: line, side });
+  },
+);
+
+test.each([
+  { style: "split", index: 0, line: 8, stillHidden: 80 },
+  { style: "split", index: 1, line: 80, stillHidden: 8 },
+  { style: "split", index: 2, line: 160, stillHidden: 80 },
+  { style: "unified", index: 0, line: 8, stillHidden: 80 },
+  { style: "unified", index: 1, line: 80, stillHidden: 8 },
+  { style: "unified", index: 2, line: 160, stillHidden: 80 },
+] as const)(
+  "$style collapsed region $index has a working manual expand control",
+  async ({ style, index, line, stillHidden }) => {
+    const expand = vi.spyOn(DiffHunksRenderer.prototype, "expandHunk");
+    const view = render(
+      <DiffView fileDiff={contextDiff()} diffStyle={style} selected={null} annotations={[]} onSelect={() => {}} />,
+    );
+    const shadow = view.container.querySelector("diffs-container")?.shadowRoot;
+    const selector = `[data-gutter] [data-separator="line-info"][data-expand-index="${index}"]`;
+    await waitFor(() => expect(shadow?.querySelector(`${selector} [data-expand-button]`)).toBeTruthy());
+    const separator = shadow?.querySelector(selector);
+    expect(separator?.textContent).toMatch(/\d+ unmodified lines/);
+    expect(shadow?.querySelector(`[data-line="${line}"]`)).toBeNull();
+    expect(expand).not.toHaveBeenCalled();
+    const button = separator?.querySelector('[data-expand-button][role="button"]');
+    if (!button) throw new Error("Missing manual expand control");
+    fireEvent.click(button);
+    await waitFor(() => expect(shadow?.querySelector(`[data-line="${line}"]`)).toBeTruthy());
+    expect(expand).toHaveBeenCalledTimes(1);
+    expect(expand.mock.calls[0]?.[0]).toBe(index);
+    expect(shadow?.querySelector(`[data-line="${stillHidden}"]`)).toBeNull();
+  },
+);
 test.each(["split", "unified"] as const)(
-  "real %s renderer preserves hostile text without creating elements",
+  "real %s renderer keeps hostile text and token styles inert",
   async (style) => {
     const text =
-      '<script>alert(1)</script>\n<img src=x onerror=alert(1)>\njavascript:alert(1)\n</span><b>\n<svg onload=alert(1)>\n<a href="javascript:alert(1)">link</a>\nclick node "javascript:alert(1)"\n';
-    const parsed = parsePair({ oldFile: null, newFile: { name: "hostile.txt", contents: text } });
-    const view = render(
-      <DiffView fileDiff={parsed} diffStyle={style} annotations={[]} onSelect={() => {}} selected={null} />,
-    );
-    const host = view.container.querySelector("diffs-container");
-    await waitFor(() => expect(host?.shadowRoot?.querySelector("[data-line]")).toBeTruthy());
-    const shadow = host?.shadowRoot;
-    expect(shadow?.querySelector("script, img, b, [onerror], [onload], [href^='javascript:']")).toBeNull();
-    const lines = [...(shadow?.querySelectorAll("[data-line]") ?? [])].map((line) => line.textContent);
-    expect(lines).toEqual(text.trimEnd().split("\n"));
+      '<script>alert(1)</script>\n</style><script>alert(1)</script>\n<img src=x onerror=alert(1)>\njavascript:alert(1)\n</span><b>raw HTML</b>\n<svg onload=alert(1)>\n<a href="javascript:alert(1)">link</a>\n[link](javascript:alert(1))\nclick node "javascript:alert(1)"\n';
+    const allowed = new Set([
+      ...syntaxTheme.tokenColors.map((rule) => `color:${rule.settings.foreground}`),
+      "font-style:italic",
+      "font-weight:bold",
+    ]);
+    for (const extension of ["txt", "ts", "md", "html"]) {
+      const parsed = parsePair({ oldFile: null, newFile: { name: `hostile.${extension}`, contents: text } });
+      const view = render(
+        <DiffView fileDiff={parsed} diffStyle={style} annotations={[]} onSelect={() => {}} selected={null} />,
+      );
+      const shadow = view.container.querySelector("diffs-container")?.shadowRoot;
+      await waitFor(() => expect(shadow?.querySelector("[data-line]")).toBeTruthy());
+      if (extension !== "txt")
+        await waitFor(() => expect(shadow?.querySelector('[data-line] span[style*="--diffs-"]')).toBeTruthy());
+      expect(shadow?.querySelector("script, img, b, a, [onerror], [onload], [href^='javascript:']")).toBeNull();
+      const lines = [...(shadow?.querySelectorAll("[data-line]") ?? [])];
+      expect(lines.map((line) => line.textContent)).toEqual(text.trimEnd().split("\n"));
+      for (const line of lines)
+        for (const element of line.querySelectorAll("*")) {
+          expect(element.tagName).toBe("SPAN");
+          for (const declaration of (element.getAttribute("style") ?? "").split(";").filter(Boolean)) {
+            expect(allowed.has(declaration)).toBe(true);
+          }
+        }
+      // SVG belongs only to Pierre's fixed icon sprite, never to the reviewed lines.
+      for (const svg of shadow?.querySelectorAll("svg") ?? []) expect(svg.closest("[data-icon-sprite]")).toBeTruthy();
+      view.unmount();
+    }
   },
 );
 
@@ -95,7 +213,10 @@ test.each([
     expect(expand).toHaveBeenCalledWith(index, direction, count);
     expect(
       renders.mock.contexts.every(
-        (renderer) => renderer instanceof DiffHunksRenderer && renderer.options.expandUnchanged === false,
+        (renderer) =>
+          renderer instanceof DiffHunksRenderer &&
+          renderer.options.expandUnchanged === false &&
+          renderer.options.hunkSeparators === "line-info",
       ),
     ).toBe(true);
     for (let number = line - 3; number <= line + 3; number++)

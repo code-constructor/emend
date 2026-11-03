@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { type RefObject, useLayoutEffect, useState } from "react";
 import type { ParsedDiff } from "./FileDiff.tsx";
 
 export type DiffStyle = "split" | "unified";
@@ -34,6 +34,51 @@ export function useDiffStyle() {
       }
     },
   ] as const;
+}
+
+export function useDiffWrap() {
+  const key = "emend.diff.wrap";
+  const [wrap, setWrap] = useState(() => {
+    try {
+      return localStorage.getItem(key) === "true";
+    } catch {
+      return false;
+    }
+  });
+  return [
+    wrap,
+    (next: boolean) => {
+      setWrap(next);
+      try {
+        localStorage.setItem(key, String(next));
+      } catch {
+        /* Storage may be disabled. */
+      }
+    },
+  ] as const;
+}
+
+export function useNarrowDiffPane(root: RefObject<HTMLElement | null>) {
+  const [narrow, setNarrow] = useState<boolean | undefined>(() =>
+    typeof ResizeObserver === "undefined" ? false : undefined,
+  );
+  useLayoutEffect(() => {
+    const pane = root.current;
+    if (!pane) return;
+    if (typeof ResizeObserver === "undefined") {
+      setNarrow(false);
+      return;
+    }
+    // Use the same border-box width initially and on every resize notification.
+    const measure = () => setNarrow(pane.getBoundingClientRect().width < 760);
+    measure();
+    const observer = new ResizeObserver((entries) => {
+      if (entries.some((entry) => entry.target === pane)) measure();
+    });
+    observer.observe(pane);
+    return () => observer.disconnect();
+  }, [root]);
+  return narrow;
 }
 
 export function scrollDiffTarget(target: HTMLElement) {

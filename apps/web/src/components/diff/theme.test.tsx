@@ -4,6 +4,7 @@ import { cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 import { DiffView } from "./FileDiff.tsx";
 import { parsePair } from "./parse.worker.ts";
+import { diffTheme, syntaxVariables } from "./theme.ts";
 
 const stylesheet = readFileSync(resolve(import.meta.dirname, "../../styles/diff.css"), "utf8");
 const installed = readFileSync(
@@ -12,9 +13,11 @@ const installed = readFileSync(
 );
 const overrides = {
   "--diffs-bg-addition-override": "--diff-add-bg",
+  "--diffs-bg-addition-number-override": "--diff-add-bg",
   "--diffs-bg-addition-emphasis-override": "--diff-add-word",
   "--diffs-addition-color-override": "--diff-add-fg",
   "--diffs-bg-deletion-override": "--diff-del-bg",
+  "--diffs-bg-deletion-number-override": "--diff-del-bg",
   "--diffs-bg-deletion-emphasis-override": "--diff-del-word",
   "--diffs-deletion-color-override": "--diff-del-fg",
   "--diffs-bg-context-override": "--bg-surface",
@@ -88,10 +91,107 @@ test.each(["light", "dark"])("real diff host uses the verified token overrides i
     expect(computed.getPropertyValue("--diffs-line-height").trim()).toBe("1lh");
     expect(host.style.colorScheme).toBe("inherit");
     expect(stylesheet).toContain("font: var(--type-code)");
-    // The real renderer provides both syntax palettes, selected by inherited color-scheme.
-    expect(host.shadowRoot?.textContent).toContain("--diffs-light");
-    expect(host.shadowRoot?.textContent).toContain("--diffs-dark");
+    // One variable palette is inherited through the shadow boundary in either scheme.
+    await waitFor(() =>
+      expect(host.shadowRoot?.querySelector('[data-line] span[style*="--diffs-token-keyword"]')).toBeTruthy(),
+    );
+    expect(host.shadowRoot?.querySelector("pre")?.getAttribute("data-indicators")).toBe("classic");
+    expect(host.shadowRoot?.querySelector("pre")?.getAttribute("data-overflow")).toBe("scroll");
+    expect(host.shadowRoot?.querySelector("style[data-unsafe-css]")?.textContent).toContain(
+      "background: var(--bg-sunken)",
+    );
   } finally {
     style.remove();
+  }
+});
+
+test("one registered CSS theme maps every syntax variable to light and both dark token sets", () => {
+  expect(diffTheme.name).toBe("emend");
+  expect(diffTheme.cssVariables?.variableDefaults).toEqual(syntaxVariables);
+  const colors = readFileSync(resolve(import.meta.dirname, "../../styles/colors.css"), "utf8");
+  const [light, automaticDark, explicitDark] = colors.split(
+    /@media \(prefers-color-scheme: dark\)|\[data-theme="dark"\]/,
+  );
+  const tokens = ["keyword", "type", "function", "string", "number", "comment", "punct", "plain"];
+  for (const token of tokens) {
+    const pattern = new RegExp(`--syn-${token}:\\s*([^;]+);`, "g");
+    const values = [...colors.matchAll(pattern)].map((match) => match[1]);
+    expect(values).toHaveLength(3);
+    expect(values[1]).toBe(values[2]);
+    for (const block of [light, automaticDark, explicitDark]) expect(block).toContain(`--syn-${token}:`);
+  }
+  for (const [key, value] of Object.entries(syntaxVariables)) expect(stylesheet).toContain(`--diffs-${key}: ${value};`);
+});
+
+test("real TypeScript syntax uses calm variables, distinct types, plain properties/parameters and italic comments", async () => {
+  const parsed = parsePair({
+    oldFile: null,
+    newFile: {
+      name: "sample.ts",
+      contents:
+        '// gentle\ninterface Person { name: string }\nfunction greet(person: Person) { return "hello"; }\nconst ANSWER = 42;\nconst yes = true;\n',
+    },
+  });
+  const view = render(
+    <DiffView fileDiff={parsed} diffStyle="unified" selected={null} annotations={[]} onSelect={() => {}} />,
+  );
+  const spans = () => [
+    ...(view.container.querySelector("diffs-container")?.shadowRoot?.querySelectorAll("[data-line] span[style]") ?? []),
+  ];
+  await waitFor(() =>
+    expect(spans().some((span) => span.getAttribute("style")?.includes("--diffs-token-keyword"))).toBe(true),
+  );
+  for (const [text, variable] of [
+    ["interface", "keyword"],
+    ["Person", "type"],
+    ["greet", "function"],
+    ["42", "constant"],
+    ["true", "constant"],
+  ]) {
+    expect(
+      spans()
+        .find((span) => span.textContent?.trim() === text)
+        ?.getAttribute("style"),
+    ).toContain(`--diffs-token-${variable}`);
+  }
+  for (const text of ["name", "person"])
+    expect(
+      spans()
+        .find((span) => span.textContent?.trim() === text)
+        ?.getAttribute("style"),
+    ).toContain("--syn-plain");
+  expect(
+    spans()
+      .find((span) => span.textContent?.includes("gentle"))
+      ?.getAttribute("style"),
+  ).toContain("font-style:italic");
+});
+
+test("Markdown headings, bold, code, links and list markers share the calm palette", async () => {
+  const parsed = parsePair({
+    oldFile: null,
+    newFile: { name: "sample.md", contents: "# Heading\n**Bold** and `inline`\n[Link](https://example.com)\n- item\n" },
+  });
+  const view = render(
+    <DiffView fileDiff={parsed} diffStyle="unified" selected={null} annotations={[]} onSelect={() => {}} />,
+  );
+  const spans = () => [
+    ...(view.container.querySelector("diffs-container")?.shadowRoot?.querySelectorAll("[data-line] span[style]") ?? []),
+  ];
+  await waitFor(() =>
+    expect(spans().some((span) => span.getAttribute("style")?.includes("--diffs-token-heading"))).toBe(true),
+  );
+  for (const [text, variable] of [
+    ["Heading", "token-heading"],
+    ["Bold", "foreground"],
+    ["inline", "token-link"],
+    ["Link", "token-link"],
+    ["-", "token-punctuation"],
+  ]) {
+    expect(
+      spans()
+        .find((span) => span.textContent?.trim() === text)
+        ?.getAttribute("style"),
+    ).toContain(`--diffs-${variable}`);
   }
 });

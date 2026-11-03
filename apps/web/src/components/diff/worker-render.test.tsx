@@ -9,6 +9,7 @@ import { expect, test } from "vitest";
 import { diffBuildPruning } from "../../../diff-build.ts";
 import { DiffView, DiffWorkers } from "./FileDiff.tsx";
 import { parsePair } from "./parse.worker.ts";
+import { diffTheme } from "./theme.ts";
 
 test("built JS worker highlights TypeScript and a language loaded late without its own registries", async () => {
   const dir = await mkdtemp(join(tmpdir(), "emend-diff-worker-"));
@@ -17,7 +18,7 @@ test("built JS worker highlights TypeScript and a language loaded late without i
     type: string;
     preferredHighlighter?: string;
     resolvedLanguages?: { name: string }[];
-    resolvedThemes?: unknown[];
+    resolvedThemes?: { name: string }[];
   }[] = [];
   const responses: { type: string; requestType?: string; error?: string }[] = [];
   const failures: unknown[] = [];
@@ -53,6 +54,7 @@ test("built JS worker highlights TypeScript and a language loaded late without i
       globalThis.addEventListener=(type,callback)=>{if(type==="message") parentPort.on("message",data=>callback({data}));};
       await import(${JSON.stringify(pathToFileURL(join(dir, entry.fileName)).href)});
       parentPort.postMessage({type:"bridge-ready"});`,
+      { mode: 0o644 },
     );
     const factory = (): Worker => {
       const node = new NodeWorker(pathToFileURL(shim));
@@ -157,9 +159,11 @@ test("built JS worker highlights TypeScript and a language loaded late without i
         (request) =>
           request.type === "initialize" &&
           request.preferredHighlighter === "shiki-js" &&
-          (request.resolvedThemes?.length ?? 0) > 0,
+          request.resolvedThemes?.length === 1 &&
+          request.resolvedThemes[0]?.name === diffTheme.name,
       ),
     ).toBe(true);
+    expect(JSON.stringify(requests.flatMap((request) => request.resolvedThemes ?? []))).toContain("--syn-keyword");
     expect(responses.filter((response) => response.type === "error")).toEqual([]);
     expect(failures).toEqual([]);
     expect((await readFile(join(dir, entry.fileName), "utf8")).length).toBeGreaterThan(0);

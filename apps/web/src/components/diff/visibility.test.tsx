@@ -176,6 +176,73 @@ test("a selection without a saved thread creates its own annotation and receives
   await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Comment" })));
 });
 
+test.each([
+  { style: "split", side: "deletions", line: 3 },
+  { style: "split", side: "additions", line: 4 },
+  { style: "unified", side: "deletions", line: 3 },
+  { style: "unified", side: "additions", line: 4 },
+] as const)(
+  "$style gutter keeps the hovered $side line $line after composer render and replacement",
+  async ({ style, side, line }) => {
+    vi.stubGlobal("matchMedia", () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+    const bounds = HTMLElement.prototype.getBoundingClientRect;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains("em-diff-pane") ? new DOMRect(0, 0, 1200, 600) : bounds.call(this);
+    });
+    localStorage.setItem("emend.diff.layout", style);
+    fetchMock.mockImplementation(
+      async (path: string) =>
+        new Response(
+          path.endsWith("/old")
+            ? "start\nold one\nold two\nold three\nend\n"
+            : "inserted prefix\nstart\nnew one\nnew two\nnew three\nend\n",
+        ),
+    );
+    await mount(revision([file()], []));
+    near("new.txt");
+    await waitFor(() =>
+      expect(document.querySelector("diffs-container")?.shadowRoot?.querySelector("[data-line]")).toBeTruthy(),
+    );
+    expect(renderer.props?.options?.diffStyle).toBe(style);
+    const host = document.querySelector("diffs-container");
+    const shadow = host?.shadowRoot;
+    const lineType = side === "deletions" ? "change-deletion" : "change-addition";
+    for (const replace of [false, true]) {
+      if (replace) {
+        const otherSide = side === "deletions" ? "additions" : "deletions";
+        act(() => renderer.props?.options?.onLineSelectionEnd?.({ side: otherSide, start: 1, end: 2 }));
+        await waitFor(() =>
+          expect(
+            screen.getByRole("textbox", { name: "Comment" }).closest(`[slot="annotation-${otherSide}-2"]`),
+          ).toBeTruthy(),
+        );
+      }
+      const row = shadow?.querySelector(`[data-line-type="${lineType}"][data-line="${line}"]`);
+      if (!row) throw new Error("Missing hovered row");
+      fireEvent.pointerMove(row, { pointerType: "mouse", pointerId: 1 });
+      const button = within(host as HTMLElement).getByRole("button", { name: /Comment on line/ });
+      fireEvent.pointerEnter(button, { pointerType: "mouse" });
+      fireEvent.pointerDown(button, { pointerType: "mouse", pointerId: 1 });
+      fireEvent.pointerUp(button, { pointerType: "mouse", pointerId: 1 });
+      fireEvent.click(button);
+      await waitFor(() =>
+        expect(
+          screen.getByRole("textbox", { name: "Comment" }).closest(`[slot="annotation-${side}-${line}"]`),
+        ).toBeTruthy(),
+      );
+      expect(renderer.props?.selectedLines).toEqual({ side, start: line, end: line });
+      const number = shadow?.querySelector(`[data-line-type="${lineType}"][data-column-number="${line}"]`);
+      const utility = shadow?.querySelector("[data-gutter-utility-slot]");
+      expect(utility?.parentElement).toBe(number);
+      expect(shadow?.querySelectorAll("[data-gutter-utility-slot]")).toHaveLength(1);
+      // It may be hidden after render, but cannot be visible on another row.
+      for (const shown of shadow?.querySelectorAll("[data-column-number][data-hovered] [data-gutter-utility-slot]") ??
+        [])
+        expect(shown.parentElement).toBe(number);
+    }
+  },
+);
+
 test("a selection in an identical file keeps a focused fallback above the diff body", async () => {
   vi.stubGlobal("matchMedia", () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
   await mount(revision([file()], []));

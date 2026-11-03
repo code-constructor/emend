@@ -1,5 +1,11 @@
 import type { FileView, RevisionView, Target, ThreadView } from "@emend/contract";
-import type { DiffLineAnnotation, FileDiffMetadata, FileDiffOptions, SelectedLineRange } from "@pierre/diffs";
+import type {
+  DiffLineAnnotation,
+  FileDiffMetadata,
+  FileDiffOptions,
+  GetHoveredLineResult,
+  SelectedLineRange,
+} from "@pierre/diffs";
 import { FileDiff as PierreFileDiff, WorkerPoolContextProvider } from "@pierre/diffs/react";
 import DiffWorker from "@pierre/diffs/worker/worker.js?worker";
 import { useQuery } from "@tanstack/react-query";
@@ -12,18 +18,25 @@ import { ThreadCard } from "../threads/ThreadCard.tsx";
 import { Button } from "../ui/Button.tsx";
 import { annotationExpansions } from "./annotation-expansion.ts";
 import { FileHeader } from "./FileHeader.tsx";
+import { GutterComment } from "./GutterComment.tsx";
 import { LineComposer } from "./LineComposer.tsx";
 import { linesTarget } from "./linesTarget.ts";
 import { type DiffParser, parseOffThread } from "./parse-client.ts";
 import { type DiffCounts, type DiffStyle, diffCounts } from "./presentation.ts";
+import { diffShadowCSS } from "./shadow.ts";
 import type { FileLocation } from "./targets.ts";
+import { diffTheme } from "./theme.ts";
 
 export type ParsedDiff = FileDiffMetadata;
 type Annotation = DiffLineAnnotation<ReactElement>;
 type BodyState = { diff?: ParsedDiff; blocked: boolean };
 type SlotState = { names: Set<string>; rendered: boolean };
 const poolOptions = { workerFactory: () => new DiffWorker(), poolSize: 2 };
-const highlighterOptions = { preferredHighlighter: "shiki-js" as const, tokenizeMaxLineLength: 1000 };
+const highlighterOptions = {
+  theme: diffTheme.name,
+  preferredHighlighter: "shiki-js" as const,
+  tokenizeMaxLineLength: 1000,
+};
 export function DiffWorkers({ children, workerFactory }: { children: ReactNode; workerFactory?: () => Worker }) {
   const pool = useMemo(() => (workerFactory ? { ...poolOptions, workerFactory } : poolOptions), [workerFactory]);
   return (
@@ -35,6 +48,7 @@ export function DiffWorkers({ children, workerFactory }: { children: ReactNode; 
 export function DiffView({
   fileDiff,
   diffStyle,
+  overflow = "scroll",
   annotations,
   onSelect,
   selected,
@@ -42,11 +56,13 @@ export function DiffView({
 }: {
   fileDiff: ParsedDiff;
   diffStyle: "split" | "unified";
+  overflow?: "scroll" | "wrap";
   annotations: Annotation[];
   onSelect: (range: SelectedLineRange | null) => void;
   selected: SelectedLineRange | null;
   onSlots?: (slots: SlotState) => void;
 }) {
+  const hoveredLine = useRef<GetHoveredLineResult<"diff"> | undefined>(undefined);
   const expansionState = useRef<{
     instance: Parameters<NonNullable<FileDiffOptions<ReactElement, undefined>["onPostRender"]>>[1];
     diff: ParsedDiff;
@@ -93,9 +109,26 @@ export function DiffView({
           preferredHighlighter: "shiki-js",
           tokenizeMaxLength: 1000,
           diffStyle,
+          theme: diffTheme.name,
           themeType: "system",
           lineDiffType: "word",
-          overflow: "wrap",
+          diffIndicators: "classic",
+          hunkSeparators: "line-info",
+          lineHoverHighlight: "both",
+          enableGutterUtility: true,
+          onLineEnter: ({ lineNumber, annotationSide, numberElement }) => {
+            hoveredLine.current = { lineNumber, side: annotationSide };
+            // 1.6.1 pins the utility to a selection's end. This pointer affordance
+            // belongs to the hovered row even while another composer is open.
+            const root = numberElement.getRootNode();
+            const utility = root instanceof ShadowRoot ? root.querySelector("[data-gutter-utility-slot]") : null;
+            if (utility) numberElement.append(utility);
+          },
+          onLineLeave: () => {
+            hoveredLine.current = undefined;
+          },
+          unsafeCSS: diffShadowCSS,
+          overflow,
           disableFileHeader: true,
           enableLineSelection: true,
           expandUnchanged: false,
@@ -105,6 +138,9 @@ export function DiffView({
         selectedLines={selected}
         lineAnnotations={annotations}
         renderAnnotation={(annotation) => annotation.metadata}
+        renderGutterUtility={(getHoveredLine) => (
+          <GutterComment getHoveredLine={() => hoveredLine.current ?? getHoveredLine()} onSelect={onSelect} />
+        )}
       />
     </div>
   );
@@ -138,6 +174,7 @@ export type DiffContext = {
   parser?: DiffParser;
   fileForTarget: (target: FileLocation) => FileView | undefined;
   diffStyle: DiffStyle;
+  overflow?: "scroll" | "wrap";
   counts: Map<string, DiffCounts>;
   onParsed: (id: string, counts: DiffCounts) => void;
   collapsedFiles: Set<string>;
@@ -466,6 +503,7 @@ function FileBody({
           <DiffView
             fileDiff={parsed.data}
             diffStyle={context.diffStyle}
+            overflow={context.overflow}
             annotations={annotations}
             onSlots={onSlots}
             onSelect={onSelect}

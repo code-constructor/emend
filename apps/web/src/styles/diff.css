@@ -100,10 +100,28 @@
     font-stretch: var(--mono-stretch);
   }
   .em-diff-host {
+    --diffs-foreground: var(--syn-plain);
+    --diffs-background: var(--bg-surface);
+    --diffs-token-keyword: var(--syn-keyword);
+    --diffs-token-type: var(--syn-type);
+    --diffs-token-function: var(--syn-function);
+    --diffs-token-string: var(--syn-string);
+    --diffs-token-string-expression: var(--syn-string);
+    --diffs-token-constant: var(--syn-number);
+    --diffs-token-comment: var(--syn-comment);
+    --diffs-token-punctuation: var(--syn-punct);
+    --diffs-token-parameter: var(--syn-plain);
+    --diffs-token-link: var(--syn-string);
+    --diffs-token-heading: var(--syn-plain);
+    --diffs-token-inserted: var(--diff-add-fg);
+    --diffs-token-deleted: var(--diff-del-fg);
+    --diffs-token-changed: var(--syn-plain);
     --diffs-bg-addition-override: var(--diff-add-bg);
+    --diffs-bg-addition-number-override: var(--diff-add-bg);
     --diffs-bg-addition-emphasis-override: var(--diff-add-word);
     --diffs-addition-color-override: var(--diff-add-fg);
     --diffs-bg-deletion-override: var(--diff-del-bg);
+    --diffs-bg-deletion-number-override: var(--diff-del-bg);
     --diffs-bg-deletion-emphasis-override: var(--diff-del-word);
     --diffs-deletion-color-override: var(--diff-del-fg);
     --diffs-bg-context-override: var(--bg-surface);
@@ -115,5 +133,20 @@
     /* Resolve against --type-code on the wrapper, without duplicating its metrics. */
     --diffs-font-size: 1em;
     --diffs-line-height: 1lh;
+  }
+  .em-diff-comment {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: 0;
+    border-radius: 5px;
+    background: var(--ochre-400);
+    color: var(--n-1000);
+    font: 16px / 1 var(--font-mono);
+    cursor: pointer;
   }
 }

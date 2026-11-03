@@ -1,4 +1,5 @@
 import type { FileView, RevisionView, Target, ThreadView } from "@emend/contract";
+import type { GetHoveredLineResult } from "@pierre/diffs";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from "@tanstack/react-router";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -13,17 +14,29 @@ import type { DiffParser } from "./parse-client.ts";
 type Selection = { side?: "additions" | "deletions"; endSide?: "additions" | "deletions"; start: number; end: number };
 type Annotation = { side: string; lineNumber: number; metadata: ReactNode };
 type RenderProps = {
-  options: { diffStyle: string; onLineSelectionEnd: (range: Selection | null) => void };
+  options: { diffStyle: string; overflow: string; onLineSelectionEnd: (range: Selection | null) => void };
   lineAnnotations: Annotation[];
   renderAnnotation: (annotation: Annotation) => ReactNode;
+  renderGutterUtility: (getHoveredLine: () => GetHoveredLineResult<"diff">) => ReactNode;
 };
-const renderer = vi.hoisted(() => ({ props: [] as RenderProps[] }));
+const renderer = vi.hoisted(() => ({ props: [] as RenderProps[], fileStyles: [] as string[] }));
+vi.mock("./FileDiff.tsx", async (original) => {
+  const actual = await original<typeof import("./FileDiff.tsx")>();
+  return {
+    ...actual,
+    FileDiff: (props: Parameters<typeof actual.FileDiff>[0]) => {
+      renderer.fileStyles.push(props.diffStyle);
+      return <actual.FileDiff {...props} />;
+    },
+  };
+});
 vi.mock("@pierre/diffs/react", () => ({
   WorkerPoolContextProvider: ({ children }: { children: ReactNode }) => children,
   FileDiff: (props: RenderProps) => {
     renderer.props.push(props);
     return (
-      <div data-testid="rendered-diff" data-style={props.options.diffStyle}>
+      <div data-testid="rendered-diff" data-style={props.options.diffStyle} data-overflow={props.options.overflow}>
+        {props.renderGutterUtility(() => ({ side: "deletions", lineNumber: 2 }))}
         {props.lineAnnotations?.map((annotation) => (
           <div
             key={`${annotation.side}:${annotation.lineNumber}`}
@@ -69,6 +82,12 @@ const revision = (files: FileView[], values: Partial<RevisionView> = {}): Revisi
 let client: QueryClient;
 let fetchMock: ReturnType<typeof vi.fn>;
 let parser: ReturnType<typeof vi.fn<DiffParser>>;
+let paneWidth: number;
+let firstMeasuredStyles: string[] | undefined;
+let resizePane: (width: number, contentWidth?: number) => void;
+let disconnectPane: ReturnType<typeof vi.fn<() => void>>;
+const boundsDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "getBoundingClientRect");
+const originalBounds = HTMLElement.prototype.getBoundingClientRect;
 let observers: {
   element: Element;
   options?: IntersectionObserverInit;
@@ -105,7 +124,42 @@ beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   observers = [];
   renderer.props = [];
+  renderer.fileStyles = [];
+  paneWidth = 900;
+  firstMeasuredStyles = undefined;
+  Object.defineProperty(HTMLElement.prototype, "getBoundingClientRect", {
+    configurable: true,
+    writable: true,
+    value(this: HTMLElement) {
+      if (this.classList.contains("em-diff-pane")) firstMeasuredStyles ??= [...renderer.fileStyles];
+      return this.classList.contains("em-diff-pane") ? new DOMRect(0, 0, paneWidth, 600) : originalBounds.call(this);
+    },
+  });
   localStorage.clear();
+  disconnectPane = vi.fn();
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      private callback: ResizeObserverCallback;
+      constructor(callback: ResizeObserverCallback) {
+        this.callback = callback;
+      }
+      observe(element: Element) {
+        if (!element.classList.contains("em-diff-pane")) return;
+        resizePane = (width, contentWidth = width) => {
+          paneWidth = width;
+          this.callback(
+            [{ target: element, contentRect: { width: contentWidth } } as ResizeObserverEntry],
+            this as unknown as ResizeObserver,
+          );
+        };
+      }
+      unobserve() {}
+      disconnect() {
+        disconnectPane();
+      }
+    },
+  );
   window.dispatchEvent(new StorageEvent("storage", { key: null, storageArea: localStorage }));
   vi.stubGlobal(
     "IntersectionObserver",
@@ -140,6 +194,8 @@ afterEach(() => {
   cleanup();
   client.clear();
   vi.restoreAllMocks();
+  if (boundsDescriptor) Object.defineProperty(HTMLElement.prototype, "getBoundingClientRect", boundsDescriptor);
+  else Reflect.deleteProperty(HTMLElement.prototype, "getBoundingClientRect");
   vi.unstubAllGlobals();
 });
 test("topics sort ascending stably, Other last, files by order, empty headers and metadata are text", async () => {
@@ -510,6 +566,140 @@ test("disabled storage still allows layout changes", async () => {
   await screen.findByTestId("rendered-diff");
   fireEvent.click(screen.getByRole("radio", { name: "Unified" }));
   expect(screen.getByTestId("rendered-diff").getAttribute("data-style")).toBe("unified");
+  fireEvent.click(screen.getByRole("button", { name: "Wrap" }));
+  expect(screen.getByTestId("rendered-diff").getAttribute("data-overflow")).toBe("wrap");
+});
+
+test("Wrap persists across mounts, controls overflow, and is forced on phones without changing the preference", async () => {
+  const value = revision([file()]);
+  let mounted = await mount(value);
+  near("source.ts");
+  expect((await screen.findByTestId("rendered-diff")).getAttribute("data-overflow")).toBe("scroll");
+  fireEvent.click(screen.getByRole("button", { name: "Wrap" }));
+  expect(screen.getByRole("button", { name: "Wrap" }).getAttribute("aria-pressed")).toBe("true");
+  expect(screen.getByTestId("rendered-diff").getAttribute("data-overflow")).toBe("wrap");
+  expect(localStorage.getItem("emend.diff.wrap")).toBe("true");
+  mounted.unmount();
+  mounted = await mount(value);
+  near("source.ts");
+  expect((await screen.findByTestId("rendered-diff")).getAttribute("data-overflow")).toBe("wrap");
+  fireEvent.click(screen.getByRole("button", { name: "Wrap" }));
+  mounted.unmount();
+  vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
+  await mount(value);
+  near("source.ts");
+  expect((await screen.findByTestId("rendered-diff")).getAttribute("data-overflow")).toBe("wrap");
+  expect(screen.queryByRole("button", { name: "Wrap" })).toBeNull();
+  expect(localStorage.getItem("emend.diff.wrap")).toBe("false");
+});
+
+test("Wrap pressed styling follows the toggle state", async () => {
+  await mount(revision([file()]));
+  const button = screen.getByRole("button", { name: "Wrap" });
+  for (const pressed of [false, true, false]) {
+    expect(button.getAttribute("aria-pressed")).toBe(String(pressed));
+    expect(button.classList.contains("bg-raised")).toBe(pressed);
+    expect(button.classList.contains("text-fg-1")).toBe(pressed);
+    fireEvent.click(button);
+  }
+});
+
+test.each([
+  { width: 1200, style: "split" },
+  { width: 600, style: "unified" },
+])("first file render at $width px is only $style after measurement", async ({ width, style }) => {
+  paneWidth = width;
+  await mount(revision([file()]));
+  expect(firstMeasuredStyles).toEqual([]);
+  near("source.ts");
+  await screen.findByTestId("rendered-diff");
+  expect(renderer.fileStyles.length).toBeGreaterThan(0);
+  expect(new Set(renderer.fileStyles)).toEqual(new Set([style]));
+  expect(new Set(renderer.props.map((props) => props.options.diffStyle))).toEqual(new Set([style]));
+});
+
+test("pane uses border-box width for both initial measurement and resize", async () => {
+  paneWidth = 760;
+  await mount(revision([file()]));
+  near("source.ts");
+  expect((await screen.findByTestId("rendered-diff")).getAttribute("data-style")).toBe("split");
+  act(() => resizePane(760, 720));
+  expect(screen.getByTestId("rendered-diff").getAttribute("data-style")).toBe("split");
+  act(() => resizePane(759, 720));
+  expect(screen.getByTestId("rendered-diff").getAttribute("data-style")).toBe("unified");
+});
+
+test.each(["split", "unified"])("missing ResizeObserver immediately uses stored %s", async (style) => {
+  vi.stubGlobal("ResizeObserver", undefined);
+  paneWidth = 0;
+  localStorage.setItem("emend.diff.layout", style);
+  await mount(revision([file()]));
+  near("source.ts");
+  await screen.findByTestId("rendered-diff");
+  expect(new Set(renderer.fileStyles)).toEqual(new Set([style]));
+  expect((screen.getByRole("radio", { name: "Split" }) as HTMLButtonElement).disabled).toBe(false);
+});
+
+test("pane width forces Unified below 760px without overwriting Split; disabled Split is skipped by keys", async () => {
+  localStorage.setItem("emend.diff.layout", "split");
+  const mounted = await mount(revision([file()]));
+  near("source.ts");
+  await screen.findByTestId("rendered-diff");
+  act(() => resizePane(759));
+  expect(screen.getByTestId("rendered-diff").getAttribute("data-style")).toBe("unified");
+  let split = screen.getByRole<HTMLButtonElement>("radio", { name: "Split" });
+  const unified = screen.getByRole("radio", { name: "Unified" });
+  expect(split.disabled).toBe(true);
+  expect(split.parentElement?.title).toBe("Widen the diff pane for Split");
+  expect(split.parentElement?.classList.contains("pointer-events-none")).toBe(false);
+  expect(split.classList.contains("pointer-events-none")).toBe(true);
+  expect(document.getElementById(split.getAttribute("aria-describedby") ?? "")?.textContent).toBe(
+    "Widen the diff pane for Split",
+  );
+  fireEvent.click(split);
+  unified.focus();
+  fireEvent.keyDown(unified, { key: "ArrowLeft" });
+  expect(document.activeElement).toBe(unified);
+  expect(localStorage.getItem("emend.diff.layout")).toBe("split");
+  act(() => resizePane(760));
+  split = screen.getByRole<HTMLButtonElement>("radio", { name: "Split" });
+  expect(split.disabled).toBe(false);
+  expect(split.getAttribute("aria-describedby")).toBeNull();
+  expect(screen.getByTestId("rendered-diff").getAttribute("data-style")).toBe("split");
+  fireEvent.click(unified);
+  act(() => resizePane(600));
+  act(() => resizePane(900));
+  expect(screen.getByTestId("rendered-diff").getAttribute("data-style")).toBe("unified");
+  mounted.unmount();
+  expect(disconnectPane).toHaveBeenCalled();
+});
+
+test("gutter comment opens and saves the same old-side line target as number selection", async () => {
+  await mount(revision([file("source.ts", { oldPath: "old.ts" })]));
+  near("source.ts");
+  await screen.findByTestId("rendered-diff");
+  const button = screen.getByRole("button", { name: "Comment on line" });
+  expect(button.tabIndex).toBe(-1);
+  fireEvent.pointerEnter(button);
+  fireEvent.click(button);
+  expect(screen.getByText("old.ts · line 2 (old)")).toBeTruthy();
+  fireEvent.change(screen.getByLabelText("Comment"), { target: { value: "One line" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save comment" }));
+  await waitFor(() =>
+    expect(
+      fetchMock.mock.calls.some(([, init]) => {
+        if (!init?.body) return false;
+        const target = JSON.parse(String(init.body)).target;
+        return (
+          target?.kind === "lines" &&
+          target.path === "old.ts" &&
+          target.side === "old" &&
+          target.start === 2 &&
+          target.end === 2
+        );
+      }),
+    ).toBe(true),
+  );
 });
 
 function placedThread(target: Extract<Target, { kind: "topic" | "file" | "lines" }>, body: string): ThreadView {

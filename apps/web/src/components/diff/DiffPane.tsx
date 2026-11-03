@@ -10,7 +10,7 @@ import { Composer } from "../threads/Composer.tsx";
 import { ThreadCard } from "../threads/ThreadCard.tsx";
 import { DiffToolbar } from "./DiffToolbar.tsx";
 import type { DiffParser } from "./parse-client.ts";
-import { type DiffCounts, scrollDiffTarget, useDiffStyle } from "./presentation.ts";
+import { type DiffCounts, scrollDiffTarget, useDiffStyle, useDiffWrap, useNarrowDiffPane } from "./presentation.ts";
 import { TopicSection } from "./TopicSection.tsx";
 import { type FileLocation, isDiffTarget, resolveFile } from "./targets.ts";
 
@@ -40,6 +40,7 @@ export function DiffPane({
 }: DiffPaneProps) {
   const layout = useLayout();
   const [style, setStyle] = useDiffStyle();
+  const [wrap, setWrap] = useDiffWrap();
   const [collapsedTopics, setCollapsedTopics] = useState(new Set<string>());
   const [collapsedFiles, setCollapsedFiles] = useState(new Set<string>());
   const [counts, setCounts] = useState(new Map<string, DiffCounts>());
@@ -52,6 +53,8 @@ export function DiffPane({
     onRendered?.();
   }, [onRendered]);
   const root = useRef<HTMLDivElement>(null);
+  const narrow = useNarrowDiffPane(root);
+  const diffStyle = layout === "phone" || narrow ? "unified" : style;
   const onParsed = useCallback(
     (id: string, count: DiffCounts) =>
       setCounts((previous) => {
@@ -182,7 +185,8 @@ export function DiffPane({
     onActive,
     parser,
     fileForTarget,
-    diffStyle: layout === "phone" ? ("unified" as const) : style,
+    diffStyle,
+    overflow: layout === "phone" || wrap ? ("wrap" as const) : ("scroll" as const),
     counts,
     onParsed,
     collapsedFiles,
@@ -205,8 +209,11 @@ export function DiffPane({
             groups={[...groups.values()]}
             ranks={ranks}
             counts={counts}
-            style={style}
+            style={diffStyle}
+            splitDisabled={narrow !== false}
             onStyle={setStyle}
+            wrap={wrap}
+            onWrap={setWrap}
             onJump={(file) => {
               setJump(file);
             }}
@@ -236,25 +243,26 @@ export function DiffPane({
         {!revision.files.some((file) => file.role === "diff") && (
           <p className="mb-4 text-sm text-neutral-500">No changed files.</p>
         )}
-        {[...groups.values()].map(({ topic, files }) => (
-          <TopicSection
-            key={topic.slug}
-            {...context}
-            topic={topic}
-            files={files}
-            rank={ranks.get(topic.slug)}
-            current={layout !== "phone" && writeupVisible && currentTopic === topic.slug}
-            writeupLink={
-              (!revision.writeupEmpty || revision.main === "writeup") &&
-              topic.slug !== OTHER_TOPIC.slug &&
-              (layout === "phone" || !writeupVisible)
-                ? `/r/${encodeURIComponent(reviewId)}?tab=writeup${search.rev === undefined ? "" : `&rev=${search.rev}`}#topic-${topic.slug}`
-                : undefined
-            }
-            collapsed={collapsedTopics.has(topic.slug)}
-            onToggle={() => setCollapsedTopics((previous) => toggle(previous, topic.slug))}
-          />
-        ))}
+        {(layout === "phone" || narrow !== undefined) &&
+          [...groups.values()].map(({ topic, files }) => (
+            <TopicSection
+              key={topic.slug}
+              {...context}
+              topic={topic}
+              files={files}
+              rank={ranks.get(topic.slug)}
+              current={layout !== "phone" && writeupVisible && currentTopic === topic.slug}
+              writeupLink={
+                (!revision.writeupEmpty || revision.main === "writeup") &&
+                topic.slug !== OTHER_TOPIC.slug &&
+                (layout === "phone" || !writeupVisible)
+                  ? `/r/${encodeURIComponent(reviewId)}?tab=writeup${search.rev === undefined ? "" : `&rev=${search.rev}`}#topic-${topic.slug}`
+                  : undefined
+              }
+              collapsed={collapsedTopics.has(topic.slug)}
+              onToggle={() => setCollapsedTopics((previous) => toggle(previous, topic.slug))}
+            />
+          ))}
       </div>
     </DiffNavigation>
   );

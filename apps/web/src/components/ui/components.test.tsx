@@ -362,6 +362,49 @@ test("SegmentedControl follows value and changes selection and focus with all ar
   }
 });
 
+test("SegmentedControl skips disabled segments and still calls onChange for selected Home/End", () => {
+  const onChange = vi.fn();
+  const { rerender } = mount(
+    <SegmentedControl
+      label="Layout"
+      value="first"
+      onChange={onChange}
+      options={[
+        { value: "first", label: "First" },
+        { value: "disabled", label: "Disabled", disabled: true },
+        { value: "last", label: "Last" },
+      ]}
+    />,
+  );
+  const first = screen.getByRole("radio", { name: "First" });
+  const disabled = screen.getByRole<HTMLButtonElement>("radio", { name: "Disabled" });
+  const last = screen.getByRole("radio", { name: "Last" });
+  expect([first.tabIndex, disabled.tabIndex, last.tabIndex]).toEqual([0, -1, -1]);
+  expect(disabled.disabled).toBe(true);
+  expect(disabled.classList.contains("disabled:hover:text-fg-3")).toBe(true);
+  fireEvent.keyDown(first, { key: "Home" });
+  expect(onChange).toHaveBeenLastCalledWith("first");
+  fireEvent.keyDown(first, { key: "ArrowRight" });
+  expect(document.activeElement).toBe(last);
+  expect(onChange).toHaveBeenLastCalledWith("last");
+  fireEvent.keyDown(last, { key: "ArrowLeft" });
+  expect(document.activeElement).toBe(first);
+  rerender(
+    <SegmentedControl
+      label="Layout"
+      value="last"
+      onChange={onChange}
+      options={[
+        { value: "first", label: "First" },
+        { value: "last", label: "Last" },
+      ]}
+    />,
+  );
+  onChange.mockClear();
+  fireEvent.keyDown(screen.getByRole("radio", { name: "Last" }), { key: "End" });
+  expect(onChange).toHaveBeenCalledExactlyOnceWith("last");
+});
+
 test("Menu opens from the keyboard, skips headings, separators and disabled items, and selects", async () => {
   const onSelect = vi.fn();
   mount(
