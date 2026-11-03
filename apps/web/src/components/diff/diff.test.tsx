@@ -154,17 +154,18 @@ test("topics sort ascending stably, Other last, files by order, empty headers an
   await mount(
     revision(files, {
       topics: [
-        { slug: "low", title: "Low", importance: 1, summary: "" },
+        { slug: "low", title: "Low", importance: 1, summary: "", attention: "skim" },
         { slug: "other", title: "Other changes", importance: 100, summary: "" },
         {
           slug: "first",
           title: "First",
           importance: 10,
           summary: "<img src=x onerror=alert(1)>",
+          attention: "critical",
           door: "one-way",
           blastRadius: { scope: "local", note: "A synthetic note" },
         },
-        { slug: "tie", title: "Tie", importance: 10, summary: "", door: "two-way" },
+        { slug: "tie", title: "Tie", importance: 10, summary: "", door: "two-way", attention: "review" },
       ],
     }),
   );
@@ -183,6 +184,15 @@ test("topics sort ascending stably, Other last, files by order, empty headers an
   for (const text of ["One-way door", "Two-way door", "<img src=x onerror=alert(1)>"])
     expect(screen.getByText(text)).toBeTruthy();
   expect(screen.getByText("local").parentElement?.textContent).toBe("Blast radius local · A synthetic note");
+  for (const [title, attention] of [
+    ["Low", "SKIM"],
+    ["First", "CRITICAL"],
+    ["Tie", "REVIEW"],
+  ]) {
+    const header = screen.getByRole("heading", { name: title }).closest("header");
+    expect(header?.querySelectorAll("[data-attention]")).toHaveLength(1);
+    expect(header?.querySelector("[data-attention]")?.textContent).toBe(attention);
+  }
   expect(document.querySelector("img")).toBeNull();
   expect(fetchMock).not.toHaveBeenCalled();
 });

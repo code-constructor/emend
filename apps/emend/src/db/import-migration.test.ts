@@ -18,7 +18,7 @@ test("0007 retains existing reviews and remembers current and retired self ident
       tokenless = randomUUID(),
       review = randomUUID();
     await db.transaction(async (q) => {
-      for (const migration of MIGRATIONS.slice(0, -1))
+      for (const migration of MIGRATIONS.filter((migration) => migration.tag < "0007_"))
         for (const statement of migration.statements) await q.exec(statement);
       await q.run(sql`insert into owners (id) values (${owner})`);
       for (const [id, self] of [
@@ -33,7 +33,7 @@ test("0007 retains existing reviews and remembers current and retired self ident
       await q.run(
         sql`insert into reviews (id, owner_id, origin_instance_id, review_key, title, created_at, updated_at) values (${review}, ${owner}, ${retired}, ${"b".repeat(64)}, 'Synthetic review', 1, 2)`,
       );
-      const migration = MIGRATIONS.at(-1);
+      const migration = MIGRATIONS.find((migration) => migration.tag.startsWith("0007_"));
       expect(migration?.tag).toMatch(/^0007_/);
       for (const statement of migration?.statements ?? []) await q.exec(statement);
     });

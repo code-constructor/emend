@@ -255,6 +255,7 @@ async function revisionView(ownerId: string, q: Queries, deps: AppDeps, reviewId
       title: topic.title,
       importance: topic.importance,
       summary: topic.summary,
+      ...(topic.attention === null ? {} : { attention: topic.attention }),
       ...(topic.door === null ? {} : { door: topic.door }),
       ...(topic.blastScope === null || topic.blastNote === null
         ? {}

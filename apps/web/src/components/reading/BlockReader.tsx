@@ -1,4 +1,4 @@
-import type { RenderedBlock, RevisionView, Target } from "@emend/contract";
+import type { RenderedBlock, RevisionView, Target, TopicMeta } from "@emend/contract";
 import { TextSelect } from "lucide-react";
 import { type ReactNode, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { mapBlockText } from "../../lib/block-ranges.ts";
@@ -10,6 +10,7 @@ import { Composer } from "../threads/Composer.tsx";
 import { ThreadCard } from "../threads/ThreadCard.tsx";
 import { Button } from "../ui/Button.tsx";
 import { Block } from "./Block.tsx";
+import { ReadingGroup } from "./ReadingGroup.tsx";
 
 export type ReaderProps = {
   reviewId: string;
@@ -28,10 +29,13 @@ export type ReaderGroup = {
   blocks: RenderedBlock[];
   path?: string;
   content?: ReactNode;
-  topic?: boolean;
+  topic?: TopicMeta;
+  rank?: number;
+  commentCount?: number;
+  presentation?: "tldr" | "decisions" | "glossary";
   action?: ReactNode;
   meta?: ReactNode;
-  subsections?: { key: string; heading: string; blocks: RenderedBlock[] }[];
+  subsections?: { key: string; heading: string; kind: "why" | "example" | "body"; blocks: RenderedBlock[] }[];
 };
 function groupBlocks(group: ReaderGroup) {
   return [...group.blocks, ...(group.subsections?.flatMap((section) => section.blocks) ?? [])];
@@ -158,11 +162,12 @@ export function BlockReader({
       element?.removeEventListener("keyup", capture);
     };
   }, [composing, targets]);
-  const renderBlocks = (blocks: RenderedBlock[], path?: string) =>
+  const renderBlocks = (blocks: RenderedBlock[], path?: string, decisions = false) =>
     blocks.map((block, index) => (
       <Block
         key={block.id}
         block={block}
+        drift={decisions && /^drift:/i.test(block.text.trimStart())}
         changedIn={changes.get(block.id)}
         continuesChange={index > 0 && changes.get(blocks[index - 1]?.id ?? "") === changes.get(block.id)}
         commenting={
@@ -208,33 +213,28 @@ export function BlockReader({
   return (
     <div ref={root} tabIndex={-1} className="em-reading-column pt-4 pb-8 md:pt-7 md:pb-[72px]">
       {groups.map((group, index) => (
-        <section
-          key={group.key}
-          id={group.id}
-          aria-labelledby={group.labelledBy ?? `${headingBase}-${index}`}
-          className={group.topic ? "em-reading-group border-t border-line-1 pt-5" : "em-reading-group"}
+        <ReadingGroup
+          key={`${reviewId}:${revision}:${group.key}`}
+          group={group}
+          headingId={`${headingBase}-${index}`}
+          changedIn={
+            groupBlocks(group).reduce((latest, block) => Math.max(latest, changes.get(block.id) ?? 0), 0) || undefined
+          }
         >
-          {group.heading != null && (
-            <div className="mb-3 flex items-center gap-2.5">
-              <h2
-                id={`${headingBase}-${index}`}
-                className="flex min-w-0 flex-1 items-center gap-2.5 wrap-anywhere text-fg-1 [font:var(--type-h2)]"
-              >
-                {group.heading}
-              </h2>
-              {group.action}
-            </div>
-          )}
-          {group.meta}
           {group.content}
-          {renderBlocks(group.blocks, group.path)}
+          {renderBlocks(group.blocks, group.path, group.presentation === "decisions")}
           {group.subsections?.map((section) => (
-            <div key={section.key} className="mt-6">
-              <h3 className="mb-1.5 text-fg-1 [font:var(--type-h3)]">{section.heading}</h3>
+            <div
+              key={section.key}
+              className={
+                section.kind === "body" ? "em-writeup-details" : `em-writeup-callout em-writeup-${section.kind}`
+              }
+            >
+              <h3 className={section.kind === "body" ? "sr-only" : "em-writeup-kicker"}>{section.heading}</h3>
               {renderBlocks(section.blocks, group.path)}
             </div>
           ))}
-        </section>
+        </ReadingGroup>
       ))}
       {!composing && (error || target) && (
         <div

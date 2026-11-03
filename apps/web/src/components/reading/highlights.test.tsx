@@ -402,7 +402,13 @@ test("marker and composer updates retain nodes, while a changed group structure 
   view.rerender(
     <BlockReader
       {...props}
-      groups={[{ key: "overview", blocks: [], subsections: [{ key: "details", heading: "Details", blocks: [block] }] }]}
+      groups={[
+        {
+          key: "overview",
+          blocks: [],
+          subsections: [{ key: "details", heading: "Details", kind: "body", blocks: [block] }],
+        },
+      ]}
     />,
   );
   expect(map).toHaveBeenCalledOnce();

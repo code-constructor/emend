@@ -57,6 +57,13 @@
       "when": 1793175607067,
       "tag": "0007_remarkable_kid_colt",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1793670569428,
+      "tag": "0008_eminent_lady_ursula",
+      "breakpoints": true
     }
   ]
 }

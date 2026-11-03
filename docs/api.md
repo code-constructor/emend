@@ -539,8 +539,13 @@ The general `FileRole` vocabulary is `diff`, `doc`, `asset`; `FileStatus` is `ad
 `FilePath` also rejects a segment equal to `.git` or `git~1` after lowercasing and removing
 trailing dots/spaces, and rejects HFS-ignorable code points U+206A–U+206F.
 
-`TopicMeta = { slug, title, importance, summary, door?, blastRadius? }`. A slug matches
+`TopicMeta = { slug, title, importance, summary, attention?, door?, blastRadius? }`. A slug matches
 `^[a-z0-9][a-z0-9-]{0,63}$`. Importance is a number from 0 through 100; lower sorts first.
+Attention is optional: `critical` marks a security boundary, an irreversible effect, data loss,
+or a decision only the reviewer can make; `review` marks behaviour worth reading line by line;
+`skim` marks mechanical changes, renames, tests that only follow the code, or wording.
+Skim topics start folded in the writeup. Attention never changes order: `importance` alone sorts.
+When absent, attention stays absent in views and export/import, and the topic starts open.
 Door is `one-way` or `two-way`. Blast radius is `{ scope, note }`: scope is one non-whitespace word,
 and note must contain non-whitespace text. The fallback is `{ slug: "other", title: "Other changes" }`;
 declaring that slug in a manifest fails with `topic slug other is reserved`. It remains a valid

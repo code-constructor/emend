@@ -8,6 +8,7 @@ import { BlockView } from "./BlockView.tsx";
 
 export function Block({
   block,
+  drift,
   changedIn,
   continuesChange,
   commenting,
@@ -15,6 +16,7 @@ export function Block({
   children,
 }: {
   block: RenderedBlock;
+  drift?: boolean;
   changedIn?: number;
   continuesChange: boolean;
   commenting: boolean;
@@ -24,12 +26,13 @@ export function Block({
   return (
     <div
       className="em-reading-block relative rounded-sm"
+      data-drift={drift ? "" : undefined}
       data-commenting={commenting ? "" : undefined}
       data-change-continuation={changedIn !== undefined && continuesChange ? "" : undefined}
     >
       {changedIn !== undefined && (
         <>
-          <span aria-hidden="true" className="em-reading-block__change absolute -left-3.5 w-0.5 bg-changed-line" />
+          <span aria-hidden="true" className="em-reading-block__change absolute w-0.5 bg-changed-line" />
           {!continuesChange && (
             <div className="em-reading-block__marker mb-1.5 flex">
               <ChangedMarker revision={changedIn} />

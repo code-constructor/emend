@@ -1,10 +1,9 @@
 import type { RenderedWriteup, RevisionView } from "@emend/contract";
 import { useMemo, useRef } from "react";
+import { plural } from "../../lib/count.ts";
 import { rankedTopics } from "../../lib/topics.ts";
 import type { ReviewSearch } from "../../router.tsx";
-import { TopicRank } from "../status/TopicRank.tsx";
 import { BlockReader, type ReaderGroup, type ReaderProps } from "./BlockReader.tsx";
-import { TopicMeta } from "./TopicMeta.tsx";
 import { TopicsMap } from "./TopicsMap.tsx";
 import { useCurrentTopic } from "./useCurrentTopic.ts";
 
@@ -43,11 +42,34 @@ export function Writeup({
       for (const [key, value] of Object.entries(next)) if (value !== undefined) params.set(key, String(value));
       return `/r/${encodeURIComponent(props.reviewId)}${params.size ? `?${params}` : ""}#${hash}`;
     };
+    const blockTopics = new Map(
+      writeup.sections.flatMap((section) => section.blocks.map((block) => [block.id, section.topic] as const)),
+    );
+    const commentCounts = new Map<string, number>();
+    for (const thread of props.threads) {
+      if (thread.state === "resolved" || thread.placement.status !== "placed") continue;
+      const location = thread.placement.location;
+      const slug =
+        location.kind === "topic"
+          ? location.slug
+          : location.kind === "writeup-span"
+            ? blockTopics.get(location.blockId)
+            : undefined;
+      if (slug) commentCounts.set(slug, (commentCounts.get(slug) ?? 0) + 1);
+    }
     const groups: ReaderGroup[] = [];
     for (const section of writeup.sections) {
       const entry = section.topic ? bySlug.get(section.topic) : undefined;
       if (!entry) {
-        groups.push({ key: section.key, heading: section.label, blocks: section.blocks });
+        groups.push({
+          key: section.key,
+          heading: section.key === "decisions" ? "Decisions & drift" : section.label,
+          blocks: section.blocks,
+          presentation:
+            section.key === "tldr" || section.key === "decisions" || section.key === "glossary"
+              ? section.key
+              : undefined,
+        });
         continue;
       }
       const { topic, rank } = entry;
@@ -56,10 +78,11 @@ export function Writeup({
         group = {
           key: section.key,
           id: `topic-${topic.slug}`,
-          topic: true,
+          topic,
+          rank,
+          commentCount: commentCounts.get(topic.slug) ?? 0,
           heading: (
             <>
-              <TopicRank rank={rank} />
               <span>
                 <span className="sr-only">Topic {rank}: </span>
                 {topic.title}
@@ -72,26 +95,34 @@ export function Writeup({
             <a
               href={link(`diff-topic-${topic.slug}`, true)}
               aria-label={`Files in diff: ${topic.title}`}
-              className="ml-auto whitespace-nowrap text-12 text-fg-3 hover:text-link"
+              className="em-topic-files"
             >
-              Files in diff <span aria-hidden="true">→</span>
+              {fileCount(topic.slug)} {plural(fileCount(topic.slug), "file")} · Files in diff{" "}
+              <span aria-hidden="true">→</span>
             </a>
           ),
-          meta: (topic.door || topic.blastRadius) && (
-            <div className="-mt-0.5 mb-4 flex flex-wrap gap-x-3 gap-y-1 text-fg-3 [font:var(--type-meta)]">
-              <TopicMeta topic={topic} note />
-            </div>
+          meta: (
+            <>
+              <p className="em-topic-summary">{topic.summary}</p>
+              {topic.blastRadius && (
+                <p className="em-topic-blast">
+                  Blast radius: <strong>{topic.blastRadius.scope}</strong> — {topic.blastRadius.note}
+                </p>
+              )}
+            </>
           ),
         };
         groups.push(group);
       }
       const suffix = section.key.slice(section.key.lastIndexOf("-") + 1);
-      const heading = suffix === "why" ? "Why" : suffix === "example" ? "Example" : "Details";
-      group.subsections?.push({ key: section.key, heading, blocks: section.blocks });
+      const kind = suffix === "why" || suffix === "example" ? suffix : "body";
+      const heading = kind === "why" ? "Why" : kind === "example" ? "Example" : "Details";
+      group.subsections?.push({ key: section.key, heading, kind, blocks: section.blocks });
     }
     if (ranked.length) {
       const written = new Set(groups.flatMap((group) => (group.id ? [group.id] : [])));
-      const afterIntro = groups.findLastIndex((group) => group.key === "overview" || group.key === "tldr") + 1;
+      const afterIntro =
+        groups.findLastIndex((group) => ["overview", "tldr", "decisions", "glossary"].includes(group.key)) + 1;
       groups.splice(afterIntro, 0, {
         key: "topics-map",
         heading: "Topics",
@@ -112,7 +143,7 @@ export function Writeup({
       });
     }
     return groups;
-  }, [writeup.sections, topics, files, search.tab, search.rev, phone, props.reviewId]);
+  }, [writeup.sections, topics, files, search.tab, search.rev, phone, props.reviewId, props.threads]);
   return (
     <div ref={root} className="contents">
       <BlockReader {...props} topics={topics} groups={groups} />

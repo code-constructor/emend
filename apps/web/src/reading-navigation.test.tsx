@@ -2033,3 +2033,135 @@ test.each([false, true])(
     else expect(scroll).toHaveBeenCalledExactlyOnceWith(moved.closest(".em-composer"));
   },
 );
+
+test.each(["hash", "map", "thread hash", "thread go to", "browser search"])(
+  "%s reveals a folded skim topic before scrolling and repeated navigation reveals it again",
+  async (navigation) => {
+    currentRevision.topics = currentRevision.topics.map((topic) => ({ ...topic, attention: "skim" }));
+    currentRevision.threads = [
+      placedWriteupThread(),
+      { ...placedWriteupThread(), id: "22222222-2222-4222-8222-222222222222", state: "resolved" },
+    ];
+    const targetId =
+      navigation === "map"
+        ? "topic-seed"
+        : navigation === "thread hash"
+          ? `thread-${id}`
+          : "block-t-seed-body-12345678";
+    let visibleAtScroll = false;
+    const scroll = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(function (this: HTMLElement) {
+      if (this.id === targetId) visibleAtScroll = !this.closest("[hidden]");
+    });
+    const { history } = mount(navigation === "thread go to" ? "?tab=comments&rev=1" : "?tab=writeup&rev=1");
+    const navigate = async () => {
+      if (navigation === "thread go to") {
+        const link = await screen.findAllByRole("link", { name: "Show in place" });
+        if (!link[0]) throw new Error("Missing thread link");
+        fireEvent.click(link[0]);
+      } else if (navigation === "map") {
+        fireEvent.click(await screen.findByRole("link", { name: "Plant a seed" }));
+      } else if (navigation === "browser search") {
+        const block = document.getElementById(targetId);
+        if (!block) throw new Error("Missing search target");
+        fireEvent(block, new Event("beforematch", { bubbles: true }));
+      } else {
+        await act(async () => history.push(`/r/${id}?tab=writeup&rev=1#${targetId}`));
+      }
+    };
+    if (navigation !== "thread go to") {
+      const unfold = await screen.findByRole("button", { name: "Topic 1: Plant a seed", expanded: false });
+      expect(unfold.getAttribute("aria-expanded")).toBe("false");
+      expect(screen.getByText("1 comment")).toBeTruthy();
+      expect(document.getElementById("block-t-seed-body-12345678")?.closest("[hidden]")?.getAttribute("hidden")).toBe(
+        "until-found",
+      );
+    }
+    await navigate();
+    const fold = await screen.findByRole("button", { name: "Topic 1: Plant a seed", expanded: true });
+    expect(document.getElementById("block-t-seed-body-12345678")?.closest("[hidden]")).toBeNull();
+    if (navigation !== "browser search") {
+      expect(scroll).toHaveBeenCalled();
+      // A thread's go-to link points to its block and may carry the thread hash instead.
+      if (navigation !== "thread go to") expect(visibleAtScroll).toBe(true);
+    }
+    if (navigation === "map" || navigation === "browser search") {
+      fireEvent.click(fold);
+      await navigate();
+      await screen.findByRole("button", { name: "Topic 1: Plant a seed", expanded: true });
+      expect(document.getElementById("block-t-seed-body-12345678")?.closest("[hidden]")).toBeNull();
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Topic 1: Plant a seed", expanded: true }));
+    await act(async () => client.setQueryData(["revision", id, 1], { ...currentRevision }));
+    expect(
+      screen.getByRole("button", { name: "Topic 1: Plant a seed", expanded: false }).getAttribute("aria-expanded"),
+    ).toBe("false");
+  },
+);
+
+test.each(["hash", "browser search"])("%s opens the glossary before navigating to its block", async (navigation) => {
+  const block: RenderedBlock = {
+    id: "glossary-12345678",
+    section: "glossary",
+    kind: "item",
+    text: "Seed: a start",
+    html: "<ul><li>Seed: a start</li></ul>",
+  };
+  currentRevision.writeup.sections.unshift({ key: "glossary", label: "Glossary", topic: null, blocks: [block] });
+  let openAtScroll = false;
+  vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(function (this: HTMLElement) {
+    if (this.id === `block-${block.id}`) openAtScroll = this.closest("details")?.open === true;
+  });
+  const { history } = mount();
+  const glossary = (await screen.findByText("Glossary · 1 term")).closest("details");
+  expect(glossary?.open).toBe(false);
+  if (navigation === "hash") {
+    await act(async () => history.push(`/r/${id}?tab=writeup&rev=1#block-${block.id}`));
+    await waitFor(() => expect(openAtScroll).toBe(true));
+  } else {
+    const target = document.getElementById(`block-${block.id}`);
+    if (!target) throw new Error("Missing glossary target");
+    fireEvent(target, new Event("beforematch", { bubbles: true }));
+  }
+  expect(glossary?.open).toBe(true);
+  expect(glossary && within(glossary).getByRole("button", { name: "Comment on block" })).toBeTruthy();
+});
+
+test.each(["skim", "review"] as const)(
+  "%s fold choice survives tabs and resets on revision change",
+  async (attention) => {
+    currentRevision.topics = currentRevision.topics.map((topic) => ({ ...topic, attention }));
+    currentReview.revisions.push({ seq: 2, createdAt: "2026-01-02T00:00:00.000Z" });
+    const { history } = mount();
+    const name = "Topic 1: Plant a seed";
+    const defaultOpen = attention !== "skim";
+    const initial = await screen.findByRole("button", { name, expanded: defaultOpen });
+    const stored = { ...localStorage };
+    fireEvent.click(initial);
+    expect(initial.getAttribute("aria-expanded")).toBe(String(!defaultOpen));
+    fireEvent.click(screen.getByRole("tab", { name: /Comments/ }));
+    await waitFor(() => expect(screen.queryByRole("button", { name })).toBeNull());
+    fireEvent.click(screen.getByRole("tab", { name: "Writeup" }));
+    await screen.findByRole("button", { name, expanded: !defaultOpen });
+    expect({ ...localStorage }).toEqual(stored);
+    await act(async () => history.push(`/r/${id}?tab=writeup&rev=2`));
+    await screen.findByRole("button", { name, expanded: defaultOpen });
+    // Returning to the older revision also starts fresh; choices are confined to the current revision.
+    await act(async () => history.push(`/r/${id}?tab=writeup&rev=1`));
+    await screen.findByRole("button", { name, expanded: defaultOpen });
+  },
+);
+
+test("glossary fold choice survives a tab switch and resets for a new revision", async () => {
+  currentRevision.writeup.sections.unshift({ key: "glossary", label: "Glossary", topic: null, blocks: [] });
+  currentReview.revisions.push({ seq: 2, createdAt: "2026-01-02T00:00:00.000Z" });
+  const { history } = mount();
+  const summary = await screen.findByText("Glossary · 0 terms");
+  fireEvent.click(summary);
+  await waitFor(() => expect(summary.closest("details")?.open).toBe(true));
+  fireEvent.click(screen.getByRole("tab", { name: /Comments/ }));
+  await waitFor(() => expect(screen.queryByText("Glossary · 0 terms")).toBeNull());
+  fireEvent.click(screen.getByRole("tab", { name: "Writeup" }));
+  expect((await screen.findByText("Glossary · 0 terms")).closest("details")?.open).toBe(true);
+  await act(async () => history.push(`/r/${id}?tab=writeup&rev=2`));
+  await waitFor(() => expect(screen.getByText("Glossary · 0 terms").closest("details")?.open).toBe(false));
+});

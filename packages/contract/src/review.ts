@@ -53,6 +53,7 @@ export const TopicMeta = z.object({
     .refine((title) => /\S/.test(title), "title must not be blank"),
   importance: z.number().min(0).max(100),
   summary: z.string().max(LIMITS.summaryChars),
+  attention: z.enum(["critical", "review", "skim"]).optional(),
   door: z.enum(["one-way", "two-way"]).optional(),
   blastRadius: z
     .object({

@@ -161,6 +161,7 @@ export async function importReview(principal: Principal, bundle: ImportBundle, d
           bundle.topics.map((r) => ({
             ...r,
             ownerId,
+            attention: r.attention,
             blastScope: r.blastRadius?.scope,
             blastNote: r.blastRadius?.note,
           })),

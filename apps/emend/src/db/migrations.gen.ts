@@ -142,5 +142,13 @@ export const MIGRATIONS: readonly { tag: string; when: number; hash: string; sta
       "ALTER TABLE `reviews` ADD `imported_at` integer;",
       "UPDATE `instances` SET `was_self` = 1;"
     ]
+  },
+  {
+    "tag": "0008_eminent_lady_ursula",
+    "when": 1793670569428,
+    "hash": "571ebb6592aa3c3ab7b4690cb49e023c6ed131ab453f671ca9d927db3b9325d0",
+    "statements": [
+      "ALTER TABLE `topics` ADD `attention` text CONSTRAINT `topics_attention_check` CHECK(`attention` in ('critical', 'review', 'skim'));"
+    ]
   }
 ];

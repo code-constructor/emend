@@ -97,8 +97,8 @@ test("changed runs restart for each group and subsection", () => {
           key: "topic",
           blocks: blocks.slice(1, 2),
           subsections: [
-            { key: "why", heading: "Why", blocks: blocks.slice(2, 3) },
-            { key: "body", heading: "Details", blocks: blocks.slice(3) },
+            { key: "why", heading: "Why", kind: "why", blocks: blocks.slice(2, 3) },
+            { key: "body", heading: "Details", kind: "body", blocks: blocks.slice(3) },
           ],
         },
       ]}

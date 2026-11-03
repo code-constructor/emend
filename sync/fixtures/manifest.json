@@ -8,6 +8,7 @@
       "slug": "retry-budget",
       "title": "Retry budget",
       "importance": 10,
+      "attention": "review",
       "summary": "Requests stop retrying after three attempts.",
       "door": "two-way",
       "blastRadius": { "scope": "user", "note": "A failed request could stop before a later attempt succeeds." }

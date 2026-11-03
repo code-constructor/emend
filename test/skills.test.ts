@@ -351,6 +351,11 @@ test("the complete example is the synthetic manifest fixture, with no stripped o
   const example = JSON.parse(blocks[0]?.[1] ?? "");
   expect(example).toEqual(json("sync/fixtures/manifest.json"));
   expect(PublishManifest.parse(example)).toEqual(example);
+  expect(
+    example.topics.every((topic: { attention?: string }) =>
+      ["critical", "review", "skim"].includes(topic.attention ?? ""),
+    ),
+  ).toBe(true);
   expect(example.files.map((file: { role: string }) => file.role)).toEqual(expect.arrayContaining(["doc", "diff"]));
   expect(example.files).toEqual(
     expect.arrayContaining([

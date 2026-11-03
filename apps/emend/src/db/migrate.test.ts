@@ -13,6 +13,16 @@ vi.mock("./migrations.gen.ts", async (importOriginal) => {
   return { MIGRATIONS: [...actual.MIGRATIONS] };
 });
 
+// migrate() uses one transaction: foreign_keys is a no-op there, so table rebuilds fail with foreign-key children.
+test.each(MIGRATIONS.filter(({ tag }) => tag.slice(0, 4) > "0001"))(
+  "$tag avoids foreign_keys pragmas and table rebuilds",
+  ({ statements }) => {
+    const source = statements.join("\n");
+    expect(source).not.toMatch(/\bPRAGMA\s+foreign_keys\b/i);
+    expect(source).not.toMatch(/__new_/i);
+  },
+);
+
 test("the embedded migrations exactly match the generated journal and SQL", async () => {
   const root = new URL("../../drizzle/", import.meta.url);
   const journal = JSON.parse(await readFile(new URL("meta/_journal.json", root), "utf8")) as {

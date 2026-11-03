@@ -58,6 +58,7 @@ test.each([
     "topics.0.slug (topic slug: lowercase letters, digits and -, at most 64)",
   ],
   [{ topics: [{ ...topic, door: "received-door" }] }, "topics.0.door (one-way or two-way)"],
+  [{ topics: [{ ...topic, attention: "received-attention" }] }, "topics.0.attention (critical, review or skim)"],
   [
     { topics: [{ ...topic, blastRadius: { scope: "received scope", note: "Synthetic" } }] },
     "topics.0.blastRadius.scope (one word, at most 32 characters)",

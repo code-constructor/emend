@@ -172,6 +172,7 @@ export const topics = sqliteTable(
     title: text("title").notNull(),
     importance: real("importance").notNull(),
     summary: text("summary").notNull(),
+    attention: text("attention", { enum: ["critical", "review", "skim"] }),
     door: text("door", { enum: ["one-way", "two-way"] }),
     blastScope: text("blast_scope"),
     blastNote: text("blast_note"),
@@ -181,6 +182,7 @@ export const topics = sqliteTable(
     unique("topics_owner_revision_slug_unique").on(t.ownerId, t.revisionId, t.slug),
     foreignKey({ columns: [t.ownerId, t.revisionId], foreignColumns: [revisions.ownerId, revisions.id] }),
     enumCheck("topics_door_check", t.door, ["one-way", "two-way"]),
+    enumCheck("topics_attention_check", t.attention, ["critical", "review", "skim"]),
     check("topics_importance_range", sql`${t.importance} between 0 and 100`),
   ],
 );

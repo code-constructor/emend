@@ -20,6 +20,7 @@ function expectedForm(issue: ManifestIssue): string {
     return "topic slug: lowercase letters, digits and -, at most 64";
   if (topic && field === "scope") return "one word, at most 32 characters";
   if (topic && field === "door") return "one-way or two-way";
+  if (topic && field === "attention") return "critical, review or skim";
   if (topic && field === "importance") return "a number from 0 to 100";
   if (issue.code === "too_big" && issue.origin === "string") return `at most ${issue.maximum} characters`;
   // Zod's type diagnostic includes the received type; expose only the expected form.

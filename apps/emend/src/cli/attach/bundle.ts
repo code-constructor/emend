@@ -128,6 +128,7 @@ export async function snapshot(
     revisions: revisionRows.map((r) => ({ ...r, createdAt: iso(r.createdAt) })),
     topics: topicRows.map((t) => ({
       ...t,
+      attention: t.attention ?? undefined,
       door: t.door ?? undefined,
       blastRadius:
         t.blastScope === null || t.blastNote === null ? undefined : { scope: t.blastScope, note: t.blastNote },

@@ -108,11 +108,10 @@ test.each([
   expect(screen.getAllByRole("heading", { level: 2 }).map((heading) => heading.textContent)).toEqual([
     ...(overview ? ["Overview"] : []),
     ...(tldr ? ["TL;DR"] : []),
+    "Decisions & drift",
     "Topics",
-    "Decisions and drift",
-    "Glossary",
-    "01Topic 1: Plant a seed",
-    "02Topic 2: Water the garden",
+    "Topic 1: Plant a seed",
+    "Topic 2: Water the garden",
     "Unknown topic — Why",
   ]);
   expect(container.querySelectorAll("section#topic-seed")).toHaveLength(1);
@@ -308,4 +307,189 @@ test("hostile metadata stays React text and server-sanitized Markdown remains in
   expect(container.querySelector("script, svg[onload], [onerror], [onclick]")).toBeNull();
   expect(container.querySelector('a[href^="javascript:"]')).toBeNull();
   expect(container.querySelectorAll(".em-prose").length).toBeGreaterThan(0);
+});
+
+test.each(["critical", "review", "skim", undefined] as const)(
+  "topic chips and folding for attention %s",
+  (attention) => {
+    const value = { ...topic, attention };
+    const why = { ...section("seed", "why"), blocks: [block] };
+    const { container } = mount(<Writeup {...props} topics={[value]} files={[file]} writeup={{ sections: [why] }} />);
+    const group = screen.getByRole("region", { name: "Topic 1: Plant a seed" });
+    const chip = group.querySelector("[data-attention]");
+    expect(chip?.textContent).toBe(attention?.toUpperCase());
+    const map = screen.getByRole("region", { name: "Topics" });
+    expect(map.querySelector("[data-attention]")?.textContent).toBe(attention?.toUpperCase());
+    expect(within(group).getByText(topic.summary)).toBeTruthy();
+    expect(within(group).getByText("garden").tagName).toBe("STRONG");
+    expect(within(group).getByText(/Blast radius:.*The seed bed/)).toBeTruthy();
+    expect(within(group).getByRole("link", { name: `Files in diff: ${topic.title}` }).textContent).toBe(
+      "1 file · Files in diff →",
+    );
+    const fold = within(group).getByRole("button", {
+      name: `Topic 1: ${topic.title}`,
+    });
+    const title = within(group).getByRole("heading", { level: 2 });
+    expect(fold.getAttribute("aria-labelledby")).toBe(title.id);
+    expect(title.textContent).toBe(`Topic 1: ${topic.title}`);
+    const header = title.parentElement;
+    if (!header) throw new Error("Missing topic header");
+    expect(within(header).getByText("01").closest("h2")).toBeNull();
+    expect(within(header).queryByText(/Changed in rev/)).toBeNull();
+    const body = document.getElementById(fold.getAttribute("aria-controls") ?? "");
+    expect(fold.getAttribute("aria-expanded")).toBe(String(attention !== "skim"));
+    expect(body?.hasAttribute("hidden")).toBe(attention === "skim");
+    fireEvent.click(fold);
+    expect(within(group).getByRole("button", { name: `Topic 1: ${topic.title}` })).toBe(fold);
+    expect(fold.getAttribute("aria-expanded")).toBe(String(attention === "skim"));
+    expect(body?.hasAttribute("hidden")).toBe(attention !== "skim");
+    expect(container.querySelectorAll(`[data-block-id="${block.id}"]`)).toHaveLength(1);
+  },
+);
+
+test.each(["one-way", "two-way", undefined] as const)("topic door chip %s", (door) => {
+  mount(<Writeup {...props} topics={[{ ...topic, door }]} writeup={{ sections: [section("seed", "why")] }} />);
+  const group = screen.getByRole("region", { name: "Topic 1: Plant a seed" });
+  expect(group.querySelector("[data-door]")?.textContent).toBe(door?.toUpperCase());
+});
+
+test("front matter cards, callouts and hidden Details keep the original comment anchors", async () => {
+  const writeup = RenderedWriteup.parse(
+    await renderWriteup(
+      {
+        overview: "Overview text",
+        tldr: "Summary text",
+        decisions: "Drift: A changed assumption.\n\ndRiFt: Another change.\n\nA decision.",
+        glossary: "- Seed: a start.\n- Bed: a place.",
+        topics: {
+          seed: { why: "A reason.", example: "| Before | After |\n| --- | --- |\n| One | Two |", body: "A detail." },
+        },
+      },
+      [topic],
+    ),
+  );
+  const { container } = mount(<Writeup {...props} topics={[topic]} writeup={writeup} />);
+  expect(screen.getByRole("heading", { name: "TL;DR" }).closest(".em-writeup-card")).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "Decisions & drift" }).closest(".em-writeup-decisions")).toBeTruthy();
+  expect(container.querySelectorAll("[data-drift]")).toHaveLength(2);
+  for (const drift of container.querySelectorAll<HTMLElement>("[data-drift]")) {
+    expect(within(drift).getByRole("button", { name: "Comment on block" })).toBeTruthy();
+  }
+  const why = screen.getByRole("heading", { name: "Why", level: 3 });
+  const example = screen.getByRole("heading", { name: "Example", level: 3 });
+  expect(why.closest(".em-writeup-why")?.querySelector("[data-block-id]")?.textContent).toBe("A reason.");
+  expect(example.closest(".em-writeup-example")?.querySelector("table")).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "Details", level: 3 }).className).toBe("sr-only");
+  const ids = writeup.sections.flatMap((section) => section.blocks.map((block) => block.id));
+  expect(
+    [...container.querySelectorAll("[data-block-id]")].map((element) => element.getAttribute("data-block-id")),
+  ).toEqual(ids);
+  expect(screen.getByText("Glossary · 2 terms").closest("details")?.open).toBe(false);
+  fireEvent.click(screen.getByText("Glossary · 2 terms"));
+  const glossary = screen.getByText("Glossary · 2 terms").closest("details");
+  expect(glossary?.open).toBe(true);
+  expect(glossary && within(glossary).getAllByRole("button", { name: "Comment on block" })).toHaveLength(2);
+});
+
+test("glossary without list items counts blocks", () => {
+  mount(<Writeup {...props} writeup={{ sections: [{ ...plain("glossary", "Glossary"), blocks: [block] }] }} />);
+  expect(screen.getByText("Glossary · 1 term").closest("details")?.open).toBe(false);
+});
+
+test("literal hostile title, summary and blast note appear in the topic section", () => {
+  const hostile = "<img src=x onerror=alert(1)>";
+  const { container } = mount(
+    <Writeup
+      {...props}
+      topics={[{ ...topic, title: hostile, summary: hostile, blastRadius: { scope: "garden", note: hostile } }]}
+      writeup={{ sections: [section("seed", "why")] }}
+    />,
+  );
+  const group = screen.getByRole("region", { name: `Topic 1: ${hostile}` });
+  expect(within(group).getByRole("heading", { level: 2 }).textContent).toContain(hostile);
+  expect(group.querySelector(".em-topic-summary")?.textContent).toBe(hostile);
+  expect(group.querySelector(".em-topic-blast")?.textContent).toBe(`Blast radius: garden — ${hostile}`);
+  expect(container.querySelector("img, [onerror]")).toBeNull();
+});
+
+test.each(["critical", "review", "skim", undefined] as const)(
+  "changed topics start open and keep their newest change visible when folded (%s)",
+  (attention) => {
+    const newer = { ...block, id: "t-seed-body-23456789" };
+    mount(
+      <Writeup
+        {...props}
+        revision={4}
+        topics={[{ ...topic, attention }]}
+        changedBlocks={[
+          { blockId: newer.id, revision: 3 },
+          { blockId: block.id, revision: 2 },
+        ]}
+        writeup={{
+          sections: [
+            { ...section("seed", "why"), blocks: [block] },
+            { ...section("seed", "body"), blocks: [newer] },
+          ],
+        }}
+      />,
+    );
+    const button = screen.getByRole("button", { name: "Topic 1: Plant a seed", expanded: true });
+    const header = button.parentElement;
+    if (!header) throw new Error("Missing topic header");
+    expect(within(header).queryByText("Changed in rev 3")).toBeNull();
+    fireEvent.click(button);
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+    expect(within(header).getByText("Changed in rev 3")).toBeTruthy();
+    expect(within(header).queryByText("Changed in rev 2")).toBeNull();
+    expect(document.getElementById(button.getAttribute("aria-controls") ?? "")?.hasAttribute("hidden")).toBe(true);
+  },
+);
+
+test("a changed glossary starts open", () => {
+  mount(
+    <Writeup
+      {...props}
+      changedBlocks={[{ blockId: block.id, revision: 2 }]}
+      writeup={{ sections: [{ ...plain("glossary", "Glossary"), blocks: [block] }] }}
+    />,
+  );
+  const glossary = screen.getByText("Glossary · 1 term").closest("details");
+  expect(glossary?.open).toBe(true);
+  expect(glossary && within(glossary).getByRole("button", { name: "Comment on block" })).toBeTruthy();
+});
+
+test("loose-list and blockquote Drift blocks are tinted without changing their text or anchors", async () => {
+  const writeup = RenderedWriteup.parse(
+    await renderWriteup(
+      {
+        overview: "",
+        tldr: "",
+        decisions:
+          "- Drift: A loose-list change.\n\n- A decision.\n\n> dRiFt: A quoted change.\n\nA paragraph mentions drift: later.",
+        topics: {},
+      },
+      [],
+    ),
+  );
+  const decisions = writeup.sections.find((section) => section.key === "decisions");
+  if (!decisions) throw new Error("Missing decisions");
+  const driftBlocks = decisions.blocks.filter((block) => /^drift:/i.test(block.text.trimStart()));
+  expect(driftBlocks).toHaveLength(2);
+  expect(driftBlocks.every((block) => block.text.startsWith("\n"))).toBe(true);
+  const { container } = mount(<Writeup {...props} writeup={writeup} />);
+  expect(container.querySelectorAll("[data-drift]")).toHaveLength(2);
+  for (const block of decisions.blocks) {
+    const element = document.getElementById(`block-${block.id}`);
+    expect(element?.getAttribute("data-block-text")).toBe(block.text);
+    expect(element?.closest(".em-reading-block")?.hasAttribute("data-drift")).toBe(driftBlocks.includes(block));
+  }
+  const first = driftBlocks[0];
+  if (!first) throw new Error("Missing Drift block");
+  const wrapper = document.getElementById(`block-${first.id}`)?.closest<HTMLElement>(".em-reading-block");
+  if (!wrapper) throw new Error("Missing commentable Drift block");
+  fireEvent.click(within(wrapper).getByRole("button", { name: "Comment on block" }));
+  fireEvent.change(screen.getByLabelText("Comment"), { target: { value: "Explain this drift" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save comment" }));
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+  expect(JSON.parse(fetchMock.mock.calls[0]?.[1].body).target).toEqual({ kind: "writeup-span", ...blockAnchor(first) });
 });

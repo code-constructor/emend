@@ -1,7 +1,7 @@
 import type { ReviewView, RevisionView } from "@emend/contract";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
-import { type MouseEvent, type Ref, useCallback, useEffect, useId, useRef, useState } from "react";
+import { type MouseEvent, type Ref, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { placeSpan } from "../../../../packages/core/src/place/span.ts";
 import { reviewQuery, revisionQuery } from "../api/queries.ts";
 import { LazyDiffPane } from "../components/diff/LazyDiffPane.tsx";
@@ -13,6 +13,7 @@ import { ReviewInbox } from "../components/layout/ReviewInbox.tsx";
 import { ReviewTabs } from "../components/layout/ReviewTabs.tsx";
 import { DocView } from "../components/reading/DocView.tsx";
 import type { HtmlNavigation } from "../components/reading/HtmlDocFrame.tsx";
+import { ReadingFoldContext } from "../components/reading/ReadingGroup.tsx";
 import { Writeup } from "../components/reading/Writeup.tsx";
 import { ReviewHeader } from "../components/review/ReviewHeader.tsx";
 import { SendBar } from "../components/send/SendBar.tsx";
@@ -25,6 +26,7 @@ import { draftKey, hasDraft, type SavedDraft, saveDraft, subscribeDrafts } from 
 import { useReviewEvents } from "../lib/events.ts";
 import { useInboxCollapsed, useLayout } from "../lib/layout.ts";
 import { openingView } from "../lib/opening-view.ts";
+import { revealReadingTarget } from "../lib/reading-reveal.ts";
 import { type ReviewSearch, validateReviewSearch } from "../router.tsx";
 
 function Reading({
@@ -163,6 +165,10 @@ function LoadedReview({
   const hash = location.hash;
   const [initialRevision] = useState(review.newestRevision);
   const seq = search.rev ?? initialRevision;
+  const readingFolds = useMemo(
+    () => ({ reviewId: review.id, revision: seq, choices: new Map<string, boolean>() }),
+    [review.id, seq],
+  );
   const query = useQuery(revisionQuery(review.id, seq));
   const navigate = useNavigate({ from: "/r/$reviewId" });
   const layout = useLayout();
@@ -375,6 +381,7 @@ function LoadedReview({
     const element = document.getElementById(intent.elementId);
     if (!element) return;
     pending.current = null;
+    revealReadingTarget(element);
     element.scrollIntoView?.({ block: intent.block });
   });
   const tabProps = {
@@ -446,23 +453,25 @@ function LoadedReview({
                   </div>
                 )}
                 {revision && (
-                  <Reading
-                    key={`${seq}:${readingTab}`}
-                    reviewId={review.id}
-                    revision={revision}
-                    tab={readingTab}
-                    search={search}
-                    openDoc={openDoc}
-                    targeted={!!hash || !!search.thread}
-                    activeThreadId={readingIntent(search, hash, seq).threadId}
-                    onOpenDoc={(path) => navigateReading({ ...search, tab: "docs", doc: path, thread: undefined })}
-                    phone={layout === "phone"}
-                    onResume={resume}
-                    htmlNavigation={htmlNavigation}
-                    composingPath={resumed?.target?.kind === "html-span" ? resumed.target.path : undefined}
-                    resumedBlockId={resumedBlockId}
-                    onCurrentTopic={layout !== "phone" && hasDiff ? setCurrentTopic : undefined}
-                  />
+                  <ReadingFoldContext value={readingFolds}>
+                    <Reading
+                      key={`${seq}:${readingTab}`}
+                      reviewId={review.id}
+                      revision={revision}
+                      tab={readingTab}
+                      search={search}
+                      openDoc={openDoc}
+                      targeted={!!hash || !!search.thread}
+                      activeThreadId={readingIntent(search, hash, seq).threadId}
+                      onOpenDoc={(path) => navigateReading({ ...search, tab: "docs", doc: path, thread: undefined })}
+                      phone={layout === "phone"}
+                      onResume={resume}
+                      htmlNavigation={htmlNavigation}
+                      composingPath={resumed?.target?.kind === "html-span" ? resumed.target.path : undefined}
+                      resumedBlockId={resumedBlockId}
+                      onCurrentTopic={layout !== "phone" && hasDiff ? setCurrentTopic : undefined}
+                    />
+                  </ReadingFoldContext>
                 )}
                 {resumed?.target && !isDiffTarget(resumed.target) && (
                   <Composer

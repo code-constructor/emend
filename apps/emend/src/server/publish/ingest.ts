@@ -456,6 +456,7 @@ async function computePublish(
             title: topic.title,
             importance: topic.importance,
             summary: topic.summary,
+            attention: topic.attention,
             door: topic.door,
             blastScope: topic.blastRadius?.scope,
             blastNote: topic.blastRadius?.note,

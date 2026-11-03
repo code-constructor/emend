@@ -16,6 +16,15 @@ const manifest = {
 };
 
 describe("publish manifest", () => {
+  test.each(["critical", "review", "skim"])("preserves optional attention %s without changing order", (attention) => {
+    const topics = [
+      { ...topic, importance: 30, attention },
+      { ...topic, slug: "other-topic", importance: 1 },
+    ];
+    expect(PublishManifest.parse({ ...manifest, topics }).topics).toEqual(topics);
+    expect(PublishManifest.parse(manifest).topics[0]).not.toHaveProperty("attention");
+  });
+
   test.each([undefined, "writeup", "docs/plan.md"])("accepts main %s", (main) => {
     expect(PublishManifest.parse({ ...manifest, main, files: [{ path: "docs/plan.md", role: "doc" }] }).main).toBe(
       main,
@@ -67,6 +76,8 @@ describe("publish manifest", () => {
     { importance: 101 },
     { importance: -1 },
     { door: "three-way" },
+    { attention: "urgent" },
+    { attention: null },
     { blastRadius: { scope: "two words", note: "A note." } },
     { blastRadius: { scope: "module\n", note: "A note." } },
     { blastRadius: { scope: "module", note: "  " } },

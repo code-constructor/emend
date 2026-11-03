@@ -146,6 +146,12 @@ Use these constraints when writing the manifest:
 
 - Topic slugs use lowercase letters, digits and `-`, at most 64 characters. Start with a letter or digit.
 - `scope` is one word, at most 32 characters.
+- Set `attention` on every topic: `critical`, `review`, or `skim`.
+- `critical`: a security boundary, an irreversible effect, data loss, or a decision only the reviewer can make.
+- `review`: behaviour worth reading line by line.
+- `skim`: mechanical changes, renames, tests that only follow the code, or wording.
+- A `skim` topic starts folded. Never give a topic with real risk `skim`.
+- Attention never changes order. `importance` alone sorts.
 - `door` is `one-way` or `two-way`.
 - `title` is at most 200 characters; `summary` is at most 2000.
 - `base` and `head` are full commit hashes. `head` may be `worktree`.
@@ -169,6 +175,7 @@ Fix those fields and publish again.
       "slug": "retry-budget",
       "title": "Retry budget",
       "importance": 10,
+      "attention": "review",
       "summary": "Requests stop retrying after three attempts.",
       "door": "two-way",
       "blastRadius": { "scope": "user", "note": "A failed request could stop before a later attempt succeeds." }

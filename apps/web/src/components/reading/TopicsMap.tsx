@@ -35,7 +35,7 @@ export function TopicsMap({
               )}
             </span>
             <p className="col-start-2 text-pretty wrap-anywhere text-14 leading-[1.45] text-fg-2">{topic.summary}</p>
-            {(topic.door || topic.blastRadius || count > 0) && (
+            {(topic.attention || topic.door || topic.blastRadius || count > 0) && (
               <div className="col-start-2 mt-0.5 flex flex-wrap gap-x-3 gap-y-1 text-fg-3 [font:var(--type-meta)]">
                 <TopicMeta topic={topic} />
                 {count > 0 && (

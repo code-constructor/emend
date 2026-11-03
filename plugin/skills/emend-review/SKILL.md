@@ -37,6 +37,14 @@ Lower importance sorts first. Lead with
 security boundaries, irreversible effects, removals and uncertain behavior. Mechanical changes
 belong later, regardless of file size or alphabetic order.
 
+Set `attention` on every topic. It never changes order.
+
+- `critical`: a security boundary, an irreversible effect, data loss, or a decision only the reviewer can make.
+- `review`: behaviour worth reading line by line.
+- `skim`: mechanical changes, renames, tests that only follow the code, or wording.
+
+A `skim` topic starts folded. Never give a topic with real risk `skim`.
+
 Make two separate calls for each topic:
 
 - `door`: `one-way` when reverting the code cannot undo an effect, such as deleting stored data
@@ -61,7 +69,7 @@ and short sentences of 20 words or fewer.
   open; say when no independent review ran. With no first-hand intent, set this field to `null`:
   the decisions section is **not written**. Never reconstruct intent from commits or the diff.
 - `glossary`: brief definitions of the domain terms this writeup uses. Prefer existing project
-  meanings and omit general programming terms.
+  meanings and omit general programming terms. Write the glossary as a list, one term per item.
 - `topics[slug]`: `why` explains what the area does, the problem and the fix; `example` shows a
   concrete before/after case; `body` gives the decisions, trade-offs and checks. Keep examples
   grounded in the actual change. A request to explain something in the writeup belongs here.
