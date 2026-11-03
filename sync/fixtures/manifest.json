@@ -31,7 +31,8 @@
       ]
     },
     { "path": "docs/retry-prd.md", "role": "diff", "topic": "retry-budget" },
-    { "path": "docs/retry-prd.md", "role": "doc", "topic": "retry-budget" }
+    { "path": "docs/retry-prd.md", "role": "doc", "topic": "retry-budget" },
+    { "path": "docs/adr/2026-07-01-retries.md", "role": "doc", "topic": "retry-budget" }
   ],
   "writeup": {
     "overview": "- **Goal:** Failed requests must stop retrying.\n- **Change:** Each request gets three attempts.\n- **Scope:** The request loop and its design doc change.",
@@ -42,7 +43,7 @@
       "retry-budget": {
         "why": "**What it is:** The request loop retries temporary failures.\n\n**Problem:** Repeated failures kept the loop running.\n\n**Fix:** The loop stops after three attempts.",
         "example": "A request fails on every attempt.\n\n| Input | Before | After |\n| --- | --- | --- |\n| Repeated temporary failure | Retries continue | Stops after attempt three |",
-        "body": "- The first call counts as attempt one. <span class=\"ref\">ref A</span>\n- A successful attempt ends the loop immediately.\n- Check that the third attempt can still succeed."
+        "body": "- The first call counts as attempt one. <span class=\"ref\">ref A</span>\n- A successful attempt ends the loop immediately.\n- Check that the third attempt can still succeed.\n- The retry budget follows `docs/adr/2026-07-01-retries.md`, section Consistency model."
       }
     }
   }

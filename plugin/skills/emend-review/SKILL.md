@@ -52,6 +52,89 @@ Make two separate calls for each topic:
 - `blastRadius`: a one-word `scope` naming who is affected, and a short `note` explaining how.
   These describe the risk; `importance` alone determines order.
 
+## Collect the docs the change rests on
+
+Without `base` and `head`, skip Git commands and take the task's supported docs as `doc` entries only.
+Only readable `.md`, `.markdown`, `.html` and `.htm` files qualify for `doc` entries.
+
+For code reviews, find changed design docs, RFCs, ADRs, PRDs, runbooks and plans using the manifest's commits:
+
+```sh
+git diff --no-color --name-status -M <base>...<head> -- '*.md' '*.markdown' '*.html' '*.htm' '*.rst' '*.adoc'
+```
+
+With `head: worktree`, include tracked changes and untracked docs:
+
+```sh
+git diff --no-color --name-status -M <base> -- '*.md' '*.markdown' '*.html' '*.htm' '*.rst' '*.adoc'
+git ls-files --others --exclude-standard -- '*.md' '*.markdown' '*.html' '*.htm' '*.rst' '*.adoc'
+```
+
+`R` lines contain old and new paths; use the new path.
+With `head: worktree`, a deleted doc whose content now lives at an untracked path is a move; declare the new path.
+Judge substance by reading docs; keep substantial docs and decision records, skipping generated indexes.
+
+- Give added, modified or renamed Markdown and HTML docs `diff` and `doc` entries, subject to the disk check.
+- Give deleted docs and changed `.rst` or `.adoc` docs only `diff` entries; cite unsupported formats in prose.
+
+When publish refuses an entry for a doc, whatever the reason (`not changed in …`, `doc not found`,
+`doc source must end in …`, `source is behind a symlink or non-folder`, a size limit),
+remove that entry, cite the doc in prose, and publish again.
+Unassigned changes still appear under Other changes.
+
+Run the check from the repository root, because publish reads `source ?? path` from disk there.
+With a commit `head`, add a repository `doc` entry only when its disk content matches that commit:
+
+```sh
+git cat-file -e <head>:<path> && git show <head>:<path> | cmp -s - <path>
+```
+
+Exit 0 means the doc exists at `head` and the file on disk is identical.
+Otherwise, keep only the changed doc's `diff` entry and say in its topic that the current text differs.
+
+Inspect record names and adapt the folder and patterns; a dated slug may itself be the identifier:
+
+```sh
+ls docs/*/ | head -30
+```
+
+With a commit `head`, search the in-scope commit messages and diff:
+
+```sh
+git log --no-color <base>..<head> --format=%B | grep -nE 'ADR|RFC|PRD|[Rr]unbook|docs/[a-z-]+/[0-9]{4}-'
+git diff --no-color <base>...<head> | grep -nE 'ADR|RFC|PRD|[Rr]unbook|docs/[a-z-]+/[0-9]{4}-'
+```
+
+With `head: worktree`, search commits through HEAD, the worktree diff and untracked content:
+
+```sh
+git log --no-color <base>..HEAD --format=%B | grep -nE 'ADR|RFC|PRD|[Rr]unbook|docs/[a-z-]+/[0-9]{4}-'
+git diff --no-color <base> | grep -nE 'ADR|RFC|PRD|[Rr]unbook|docs/[a-z-]+/[0-9]{4}-'
+git ls-files -z --others --exclude-standard | xargs -0 grep -nHE 'ADR|RFC|PRD|[Rr]unbook|docs/[a-z-]+/[0-9]{4}-' --
+```
+
+Resolve references to supported, readable files; cite unavailable or unsupported docs in prose.
+Give unchanged cited docs only `doc` entries when they pass the format, readability and commit-content checks above.
+Set each doc entry's `topic` to the topic whose prose leans on it.
+An eligible design doc among a topic's changed files without a `doc` entry was missed.
+
+Name the doc and its supporting heading in the topic's `why` or `body`.
+List candidate Markdown or HTML headings:
+
+```sh
+grep -n '^#' <markdown-file>
+grep -n -i '<h[1-6]' <html-file>
+```
+
+The Markdown list misses Setext headings and includes `#` lines in code blocks.
+Never invent a heading; confirm it in the file before citing it in words:
+"The retry budget follows `docs/adr/2026-07-01-retries.md`, section Consistency model."
+
+Docs may come from the worktree or a folder listed in `docRoots`.
+For a sibling checkout or vault, follow the doc-root refusal rule under "Publish and offer the views".
+Never paste a doc's text into the writeup.
+If no related docs are found, write "No design doc is cited." in the Overview's scope.
+
 ## Write for the reviewer
 
 Author Markdown in `writeup`. Keep each section useful to someone who has not opened the code.

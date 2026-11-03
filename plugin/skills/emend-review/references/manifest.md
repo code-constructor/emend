@@ -117,7 +117,9 @@ This example is entirely synthetic. Replace its base with the full merge-base co
 and use real changed paths and accurate writeup text. `head` may also be a full commit hash.
 
 The PRD is included as a diff because it changed, and as a doc because the reviewer needs to
-read it. A doc's `path` is its published name. When the local filename differs, set `source`
+read it. The cited ADR did not change, so it has only a `doc` entry.
+Both docs name the topic whose prose leans on them. The topic cites the ADR's heading in words.
+A doc's `path` is its published name. When the local filename differs, set `source`
 to its local filename.
 Relative `source` paths resolve from the repository root or, outside a git repository, from the folder publish runs in.
 Outside a git repository, every doc source must sit in a folder listed in `docRoots`.
@@ -211,7 +213,8 @@ Fix those fields and publish again.
       ]
     },
     { "path": "docs/retry-prd.md", "role": "diff", "topic": "retry-budget" },
-    { "path": "docs/retry-prd.md", "role": "doc", "topic": "retry-budget" }
+    { "path": "docs/retry-prd.md", "role": "doc", "topic": "retry-budget" },
+    { "path": "docs/adr/2026-07-01-retries.md", "role": "doc", "topic": "retry-budget" }
   ],
   "writeup": {
     "overview": "- **Goal:** Failed requests must stop retrying.\n- **Change:** Each request gets three attempts.\n- **Scope:** The request loop and its design doc change.",
@@ -222,7 +225,7 @@ Fix those fields and publish again.
       "retry-budget": {
         "why": "**What it is:** The request loop retries temporary failures.\n\n**Problem:** Repeated failures kept the loop running.\n\n**Fix:** The loop stops after three attempts.",
         "example": "A request fails on every attempt.\n\n| Input | Before | After |\n| --- | --- | --- |\n| Repeated temporary failure | Retries continue | Stops after attempt three |",
-        "body": "- The first call counts as attempt one. <span class=\"ref\">ref A</span>\n- A successful attempt ends the loop immediately.\n- Check that the third attempt can still succeed."
+        "body": "- The first call counts as attempt one. <span class=\"ref\">ref A</span>\n- A successful attempt ends the loop immediately.\n- Check that the third attempt can still succeed.\n- The retry budget follows `docs/adr/2026-07-01-retries.md`, section Consistency model."
       }
     }
   }
