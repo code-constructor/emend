@@ -1,9 +1,11 @@
 import type { RenderedWriteup, RevisionView } from "@emend/contract";
-import { useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { plural } from "../../lib/count.ts";
+import { useLayoutPreferences } from "../../lib/layout-store.ts";
 import { rankedTopics } from "../../lib/topics.ts";
 import type { ReviewSearch } from "../../router.tsx";
 import { BlockReader, type ReaderGroup, type ReaderProps } from "./BlockReader.tsx";
+import { FocusOutline } from "./FocusOutline.tsx";
 import { TopicsMap } from "./TopicsMap.tsx";
 import { useCurrentTopic } from "./useCurrentTopic.ts";
 
@@ -16,6 +18,7 @@ export function Writeup({
   files = emptyFiles,
   search = {},
   phone = false,
+  visible = true,
   onCurrentTopic,
   ...props
 }: ReaderProps & {
@@ -24,10 +27,14 @@ export function Writeup({
   files?: RevisionView["files"];
   search?: ReviewSearch;
   phone?: boolean;
+  visible?: boolean;
   onCurrentTopic?: (slug: string | undefined) => void;
 }) {
   const root = useRef<HTMLDivElement>(null);
-  useCurrentTopic(root, onCurrentTopic, writeup.sections);
+  const { reading } = useLayoutPreferences();
+  const focus = !phone && reading === "focus";
+  useCurrentTopic(root, onCurrentTopic, writeup.sections, visible && !focus);
+  useEffect(() => () => onCurrentTopic?.(undefined), [onCurrentTopic]);
   const groups = useMemo(() => {
     const ranked = rankedTopics(topics);
     const bySlug = new Map(ranked.map((entry) => [entry.topic.slug, entry]));
@@ -145,8 +152,19 @@ export function Writeup({
     return groups;
   }, [writeup.sections, topics, files, search.tab, search.rev, phone, props.reviewId, props.threads]);
   return (
-    <div ref={root} className="contents">
-      <BlockReader {...props} topics={topics} groups={groups} />
+    <div className={focus ? "em-focus-container" : "contents"}>
+      <div ref={root} className={focus ? "em-focus" : "contents"}>
+        {focus && (
+          <FocusOutline
+            root={root}
+            groups={groups}
+            threads={props.threads}
+            visible={visible}
+            onCurrentTopic={onCurrentTopic}
+          />
+        )}
+        <BlockReader {...props} topics={topics} groups={groups} focus={focus} />
+      </div>
     </div>
   );
 }

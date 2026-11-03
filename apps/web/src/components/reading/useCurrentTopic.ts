@@ -5,16 +5,19 @@ export function useCurrentTopic(
   root: RefObject<HTMLDivElement | null>,
   onTopic: ((slug: string | undefined) => void) | undefined,
   sections: RenderedWriteup["sections"],
+  visible = true,
 ) {
   useEffect(() => {
     const content = root.current;
     const scroll = content?.closest<HTMLElement>("[data-reading-scroll]");
-    if (!content || !scroll || !onTopic) return;
+    if (!content || !scroll || !onTopic || !visible) return;
+    let stopped = false;
     const slugs = new Set(sections.map((section) => section.topic).filter(Boolean));
     const topics = [...content.querySelectorAll<HTMLElement>('section[id^="topic-"]')].filter((section) =>
       slugs.has(section.id.slice(6)),
     );
     const report = () => {
+      if (stopped || scroll.closest("[hidden]")) return;
       const tabs = scroll.querySelector('[role="tablist"]')?.getBoundingClientRect().height ?? 0;
       const top = scroll.getBoundingClientRect().top + tabs + 1;
       const current = topics.findLast((section) => section.getBoundingClientRect().top <= top);
@@ -22,6 +25,7 @@ export function useCurrentTopic(
     };
     let observer: IntersectionObserver | undefined;
     const observe = () => {
+      if (stopped || scroll.closest("[hidden]")) return;
       observer?.disconnect();
       const tabs = scroll.querySelector('[role="tablist"]')?.getBoundingClientRect().height ?? 0;
       // A one-pixel strip at the scroll area's top detects a section crossing it,
@@ -37,9 +41,9 @@ export function useCurrentTopic(
     const resize = new ResizeObserver(observe);
     resize.observe(scroll);
     return () => {
+      stopped = true;
       observer?.disconnect();
       resize.disconnect();
-      onTopic(undefined);
     };
-  }, [root, onTopic, sections]);
+  }, [root, onTopic, sections, visible]);
 }

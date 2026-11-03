@@ -10,6 +10,7 @@ import { Composer } from "../threads/Composer.tsx";
 import { ThreadCard } from "../threads/ThreadCard.tsx";
 import { Button } from "../ui/Button.tsx";
 import { Block } from "./Block.tsx";
+import { BlockThreads, type ThreadJump } from "./BlockThreads.tsx";
 import { ReadingGroup } from "./ReadingGroup.tsx";
 
 export type ReaderProps = {
@@ -20,6 +21,7 @@ export type ReaderProps = {
   topics?: RevisionView["topics"];
   resumedBlockId?: string;
   activeThreadId?: string;
+  threadJump?: ThreadJump;
 };
 export type ReaderGroup = {
   key: string;
@@ -49,8 +51,11 @@ export function BlockReader({
   groups,
   resumedBlockId,
   activeThreadId,
+  threadJump,
+  focus = false,
 }: ReaderProps & {
   groups: ReaderGroup[];
+  focus?: boolean;
 }) {
   const headingBase = useId();
   const root = useRef<HTMLDivElement>(null);
@@ -181,17 +186,27 @@ export function BlockReader({
           );
         }}
       >
-        {blockThreads.get(block.id)?.map((thread) => (
-          <div key={thread.id} className="mt-2.5 mb-1.5">
-            <ThreadCard
-              reviewId={reviewId}
-              revision={revision}
-              thread={thread}
-              changedBlocks={changedBlocks}
-              topics={topics}
-            />
-          </div>
-        ))}
+        <BlockThreads
+          focus={focus}
+          reviewId={reviewId}
+          threads={blockThreads.get(block.id) ?? []}
+          composing={
+            resumedBlockId === block.id || (composing && !!target && "blockId" in target && target.blockId === block.id)
+          }
+          jump={threadJump}
+        >
+          {blockThreads.get(block.id)?.map((thread) => (
+            <div key={thread.id} className="mt-2.5 mb-1.5">
+              <ThreadCard
+                reviewId={reviewId}
+                revision={revision}
+                thread={thread}
+                changedBlocks={changedBlocks}
+                topics={topics}
+              />
+            </div>
+          ))}
+        </BlockThreads>
         {composing && target && "blockId" in target && target.blockId === block.id && (
           <Composer
             reviewId={reviewId}
@@ -211,7 +226,11 @@ export function BlockReader({
       </Block>
     ));
   return (
-    <div ref={root} tabIndex={-1} className="em-reading-column pt-4 pb-8 md:pt-7 md:pb-[72px]">
+    <div
+      ref={root}
+      tabIndex={-1}
+      className={focus ? "em-reading-column em-focus-prose" : "em-reading-column pt-4 pb-8 md:pt-7 md:pb-[72px]"}
+    >
       {groups.map((group, index) => (
         <ReadingGroup
           key={`${reviewId}:${revision}:${group.key}`}

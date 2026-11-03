@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { renderWriteup } from "../../../../../packages/core/src/render/writeup.ts";
+import { layoutStore } from "../../lib/layout-store.ts";
 import { blockAnchor } from "../../lib/selection.ts";
 import { ToastProvider } from "../ui/Toast.tsx";
 import { DocView } from "./DocView.tsx";
@@ -271,43 +272,51 @@ test("an HTML doc keeps its sandbox note under the frame", () => {
   }
 });
 
-test("hostile metadata stays React text and server-sanitized Markdown remains inert inside the new wrappers", async () => {
-  const hostile = "<script>evil()</script><img src=x onerror=evil()><svg onload=evil()></svg>";
-  const markdown = `${hostile}\n\n[bad](javascript:evil())\n\nRaw <b>HTML</b>`;
-  const evilTopic = {
-    ...topic,
-    title: hostile,
-    summary: hostile,
-    blastRadius: { scope: "<img/onerror=evil()>", note: hostile },
-  };
-  const writeup = await renderWriteup(
-    {
-      overview: markdown,
-      tldr: "",
-      decisions: null,
-      glossary: markdown,
-      topics: { seed: { why: markdown, body: markdown } },
-    },
-    [evilTopic],
-  );
-  const { container } = mount(
-    <>
-      <Writeup {...props} topics={[evilTopic]} writeup={RenderedWriteup.parse(writeup)} />
-      <DocView
-        {...props}
-        docs={[{ path: hostile, kind: "markdown", blocks: [] }]}
-        openDoc={{ path: hostile, kind: "markdown", blocks: [] }}
-        search={{ tab: "docs" }}
-        targeted={false}
-        onOpenDoc={() => {}}
-      />
-    </>,
-  );
-  expect(screen.getAllByText(hostile).length).toBeGreaterThanOrEqual(3);
-  expect(container.querySelector("script, svg[onload], [onerror], [onclick]")).toBeNull();
-  expect(container.querySelector('a[href^="javascript:"]')).toBeNull();
-  expect(container.querySelectorAll(".em-prose").length).toBeGreaterThan(0);
-});
+test.each(["standard", "focus"] as const)(
+  "%s: hostile metadata stays text and server-sanitized Markdown remains inert",
+  async (reading) => {
+    layoutStore.update({ reading });
+    const hostile = "<script>evil()</script><img src=x onerror=evil()><svg onload=evil()></svg>";
+    const markdown = `${hostile}\n\n[bad](javascript:evil())\n\nRaw <b>HTML</b>\n\n\`\`\`mermaid\ngraph TD; A-->B; click A evil "click"\n\`\`\``;
+    const evilTopic = {
+      ...topic,
+      title: hostile,
+      summary: hostile,
+      blastRadius: { scope: "<img/onerror=evil()>", note: hostile },
+    };
+    const writeup = await renderWriteup(
+      {
+        overview: markdown,
+        tldr: "",
+        decisions: null,
+        glossary: markdown,
+        topics: { seed: { why: markdown, body: markdown } },
+      },
+      [evilTopic],
+    );
+    const { container } = mount(
+      <>
+        <Writeup {...props} topics={[evilTopic]} writeup={RenderedWriteup.parse(writeup)} />
+        <DocView
+          {...props}
+          docs={[{ path: hostile, kind: "markdown", blocks: [] }]}
+          openDoc={{ path: hostile, kind: "markdown", blocks: [] }}
+          search={{ tab: "docs" }}
+          targeted={false}
+          onOpenDoc={() => {}}
+        />
+      </>,
+    );
+    expect(screen.getAllByText(hostile).length).toBeGreaterThanOrEqual(3);
+    expect(container.querySelector("script, svg[onload], [onerror], [onclick]")).toBeNull();
+    expect(container.querySelector('a[href^="javascript:"]')).toBeNull();
+    expect(container.querySelectorAll(".em-prose").length).toBeGreaterThan(0);
+    for (const frame of container.querySelectorAll("iframe")) {
+      expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
+      expect(frame.getAttribute("src")).toBe("/mermaid-frame.html");
+    }
+  },
+);
 
 test.each(["critical", "review", "skim", undefined] as const)(
   "topic chips and folding for attention %s",

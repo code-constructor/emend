@@ -87,6 +87,9 @@ export function hasDraft(key: string) {
   loadDraft(key);
   return texts.get(key) != null;
 }
+export function hasDraftText(key: string) {
+  return !!loadDraft(key).trim();
+}
 export function saveDraft(key: string, body: string) {
   texts.set(key, body);
   try {

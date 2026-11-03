@@ -9,6 +9,7 @@ import { renderWriteup } from "../../../../../packages/core/src/render/writeup.t
 import * as blockRanges from "../../lib/block-ranges.ts";
 import { registerCommentRanges, trackCommentCard } from "../../lib/comment-highlights.ts";
 import { draftKey } from "../../lib/drafts.ts";
+import { layoutStore } from "../../lib/layout-store.ts";
 import { Composer } from "../threads/Composer.tsx";
 import { ThreadCard } from "../threads/ThreadCard.tsx";
 import { ToastProvider } from "../ui/Toast.tsx";
@@ -616,4 +617,33 @@ test("sanitized Markdown and glossary remain inert while marked, and Mermaid cli
   expect(view.container.querySelector("script, img, svg[onload], [onerror], a[href^='javascript:']")).toBeNull();
   for (const frame of view.container.querySelectorAll("iframe"))
     expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
+});
+
+test("Focus keeps quoted ranges while closed, tracks opened cards and unregisters them on Hide", () => {
+  layoutStore.update({ reading: "focus" });
+  const sent = { ...thread, comments: thread.comments.map((comment) => ({ ...comment, sent: true, sentOn: 1 })) };
+  const view = mount(<Writeup {...props} threads={[sent]} writeup={writeup()} />);
+  expect(quotes()).toEqual(["seed"]);
+  const originalRange = ranges()[0];
+  expect(view.container.querySelector("[data-thread-card]")).toBeNull();
+  fireEvent.click(view.getByRole("button", { name: "1 comment" }));
+  const card = required(view.container.querySelector<HTMLElement>("[data-thread-card]"));
+  fireEvent.pointerEnter(card, { pointerType: "mouse" });
+  expect(quotes(true)).toEqual(["seed"]);
+  fireEvent.pointerLeave(card, { pointerType: "mouse" });
+  const reply = within(card).getByRole("button", { name: "Reply" });
+  act(() => reply.focus());
+  expect(card.hasAttribute("data-focus-within")).toBe(true);
+  expect(quotes(true)).toEqual(["seed"]);
+  fireEvent.click(view.getByRole("button", { name: "Hide" }));
+  expect(card.isConnected).toBe(false);
+  expect(card.hasAttribute("data-focus-within")).toBe(false);
+  expect(quotes(true)).toEqual([]);
+  expect(ranges()).toEqual([originalRange]);
+  fireEvent.pointerEnter(card, { pointerType: "mouse" });
+  expect(quotes(true)).toEqual([]);
+  fireEvent.click(view.getByRole("button", { name: "1 comment" }));
+  const reopened = required(view.container.querySelector<HTMLElement>("[data-thread-card]"));
+  fireEvent.pointerEnter(reopened, { pointerType: "mouse" });
+  expect(quotes(true)).toEqual(["seed"]);
 });

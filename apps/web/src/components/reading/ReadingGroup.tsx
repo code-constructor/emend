@@ -116,6 +116,7 @@ export function ReadingGroup({
     <section
       ref={root}
       id={group.id}
+      data-reading-section={group.key}
       aria-labelledby={group.labelledBy ?? headingId}
       className={`em-reading-group${group.topic ? " em-topic-section" : ""}${group.presentation === "tldr" ? " em-writeup-card" : group.presentation === "decisions" ? " em-writeup-callout em-writeup-decisions" : ""}`}
     >

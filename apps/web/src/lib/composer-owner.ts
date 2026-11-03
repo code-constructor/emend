@@ -1,7 +1,7 @@
 import type { Target } from "@emend/contract";
 import { useContext, useId, useLayoutEffect, useRef, useSyncExternalStore } from "react";
 import { DiffNavigation } from "./diff-navigation.ts";
-import { hasDraft, isDraftSaving, loadDraft, subscribeDrafts } from "./drafts.ts";
+import { hasDraft, hasDraftText, isDraftSaving, subscribeDrafts } from "./drafts.ts";
 
 type Claim = { surface: string; id?: string; pendingFocus?: HTMLTextAreaElement; focusCancelled?: boolean };
 type Entry = {
@@ -90,12 +90,12 @@ export function useReplyComposer(key: string) {
   const id = useId();
   useSyncExternalStore(subscribe, snapshot, snapshot);
   const value = entries.get(key);
-  const open = value?.replyOpen ?? !!loadDraft(key).trim();
+  const open = value?.replyOpen ?? hasDraftText(key);
   useLayoutEffect(() => {
     const value = entry(key);
     value.release = undefined;
     value.cards.add(id);
-    value.replyOpen ??= !!loadDraft(key).trim();
+    value.replyOpen ??= hasDraftText(key);
     notify();
     // Close every copy as soon as a successful save clears its draft, even if
     // query refreshes unmount the submitting composer before its onSaved runs.
@@ -123,6 +123,9 @@ export function useReplyComposer(key: string) {
   }, [key, id]);
   return { open, close: () => closeReply(key) };
 }
+export function isEditComposerOpen(key: string) {
+  return !edits.get(key)?.dismissed;
+}
 /** Dismissing an edit hides every copy without changing its draft or ownership handoff. */
 export function useEditComposer(key: string) {
   const id = useId();
@@ -137,7 +140,7 @@ export function useEditComposer(key: string) {
     };
   }, [key, id]);
   return {
-    open: !edits.get(key)?.dismissed,
+    open: isEditComposerOpen(key),
     close: () => {
       const edit = edits.get(key);
       if (edit) edit.dismissed = true;

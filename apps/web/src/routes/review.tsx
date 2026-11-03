@@ -11,6 +11,7 @@ import { Panes } from "../components/layout/Panes.tsx";
 import { PhoneTabs } from "../components/layout/PhoneTabs.tsx";
 import { ReviewInbox } from "../components/layout/ReviewInbox.tsx";
 import { ReviewTabs } from "../components/layout/ReviewTabs.tsx";
+import type { ThreadJump } from "../components/reading/BlockThreads.tsx";
 import { DocView } from "../components/reading/DocView.tsx";
 import type { HtmlNavigation } from "../components/reading/HtmlDocFrame.tsx";
 import { ReadingFoldContext } from "../components/reading/ReadingGroup.tsx";
@@ -38,12 +39,14 @@ function Reading({
   composingPath,
   resumedBlockId,
   activeThreadId,
+  threadJump,
   search,
   phone,
   openDoc,
   targeted,
   onOpenDoc,
   onCurrentTopic,
+  visible,
 }: {
   reviewId: string;
   revision: RevisionView;
@@ -53,12 +56,14 @@ function Reading({
   composingPath?: string;
   resumedBlockId?: string;
   activeThreadId?: string;
+  threadJump?: ThreadJump;
   search: ReviewSearch;
   phone: boolean;
   openDoc?: RevisionView["docs"][number];
   targeted: boolean;
   onOpenDoc: (path: string) => void;
   onCurrentTopic?: (slug: string | undefined) => void;
+  visible: boolean;
 }) {
   const props = {
     reviewId,
@@ -67,6 +72,7 @@ function Reading({
     changedBlocks: revision.changedBlocks,
     topics: revision.topics,
     activeThreadId,
+    threadJump,
   };
   if (tab === "comments") return <ThreadList {...props} search={search} phone={phone} onResume={onResume} />;
   if (tab === "docs")
@@ -90,6 +96,7 @@ function Reading({
       files={revision.files}
       search={search}
       phone={phone}
+      visible={visible}
       resumedBlockId={resumedBlockId}
       onCurrentTopic={onCurrentTopic}
     />
@@ -120,6 +127,7 @@ function readingIntent(search: ReviewSearch, hash: string, seq: number) {
     block: "center" as ScrollLogicalPosition,
   };
 }
+type PendingReadingIntent = ReturnType<typeof readingIntent> & { token: object; jumpThread: boolean };
 function resolveOpenDoc(
   revision: RevisionView,
   search: ReviewSearch,
@@ -214,25 +222,26 @@ function LoadedReview({
         (hasWriteup ? "writeup" : hasDocs ? "docs" : "comments")
       : tab;
   const docsVisible = readingTab === "docs" && (paneMode === "split" || tab !== "diff");
+  const currentIntent = readingIntent(search, hash, seq);
   const openDoc = revision
-    ? resolveOpenDoc(
-        revision,
-        search,
-        readingIntent(search, hash, seq),
-        useOpening ? opening.doc : undefined,
-        docsVisible,
-      )
+    ? resolveOpenDoc(revision, search, currentIntent, useOpening ? opening.doc : undefined, docsVisible)
     : undefined;
   const setRevision = (rev: number) => {
     void navigate({ search: { ...search, tab, rev } });
   };
-  const [requested, setRequested] = useState<ReturnType<typeof readingIntent> | null>(null);
+  const [requested, setRequested] = useState<PendingReadingIntent | null>(null);
+  const [threadJump, setThreadJump] = useState<ThreadJump & { navigation: string }>();
   const [htmlNavigation, setHtmlNavigation] = useState<HtmlNavigation>();
-  const pending = useRef<ReturnType<typeof readingIntent> | null>(null);
-  const previous = useRef<{ navigation: string; requested: typeof requested } | null>(null);
+  const pending = useRef<PendingReadingIntent | null>(null);
+  const previous = useRef<{
+    navigation: string;
+    elementId: string;
+    threadId?: string;
+    requested: typeof requested;
+  } | null>(null);
   const navigateReading = (next: ReviewSearch, nextHash = "") => {
     // A repeated Resume or link click is a new intent even when the URL is unchanged.
-    setRequested(readingIntent(next, nextHash, next.rev ?? initialRevision));
+    setRequested({ ...readingIntent(next, nextHash, next.rev ?? initialRevision), token: {}, jumpThread: true });
     void navigate({ search: next, hash: nextHash });
   };
   const followReadingLink = (event: MouseEvent) => {
@@ -329,13 +338,41 @@ function LoadedReview({
   };
   // Data/DOM changes may fulfill an existing intent, but only navigation creates one.
   useEffect(() => {
-    const current = readingIntent(search, hash, seq);
+    const current = currentIntent;
     if (requested && requested !== previous.current?.requested) pending.current = { ...requested };
     else if (current.navigation !== previous.current?.navigation && pending.current?.navigation !== current.navigation)
-      pending.current = current;
-    previous.current = { navigation: current.navigation, requested };
+      pending.current = {
+        ...current,
+        token: {},
+        // A carried-over hash on a tab, doc or revision change is not a new thread jump.
+        jumpThread:
+          current.elementId !== previous.current?.elementId || current.threadId !== previous.current?.threadId,
+      };
+    previous.current = {
+      navigation: current.navigation,
+      elementId: current.elementId,
+      threadId: current.threadId,
+      requested,
+    };
     const intent = pending.current;
-    if (!revision || !intent || intent.navigation !== current.navigation) return;
+    if (!intent || intent.navigation !== current.navigation) return;
+    const complete = () => {
+      pending.current = null;
+      setThreadJump(undefined);
+    };
+    const opensThread =
+      intent.jumpThread && !intent.reply && intent.threadId && intent.elementId === `thread-${intent.threadId}`;
+    if (opensThread && intent.threadId) {
+      if (threadJump?.token !== intent.token || threadJump.navigation !== current.navigation) {
+        setThreadJump({ threadId: intent.threadId, token: intent.token, navigation: current.navigation });
+        // Mount the destination's cards before fulfilling the scroll in the next commit.
+        return;
+      }
+    } else if (threadJump) {
+      setThreadJump(undefined);
+      return;
+    }
+    if (!revision) return;
     if (docsVisible && search.doc !== openDoc?.path) {
       const next: ReviewSearch = { ...search, doc: openDoc?.path };
       intent.navigation = readingIntent(next, hash, seq).navigation;
@@ -372,12 +409,12 @@ function LoadedReview({
       }
     }
     if (!intent.elementId) {
-      pending.current = null;
+      complete();
       return;
     }
     if (intent.reply) {
       if (!thread) return;
-      pending.current = null;
+      complete();
       claimDraft(draftKey(review.id, thread.target, thread.id), search.tab === "docs" ? "reading" : "comments");
       return;
     }
@@ -388,12 +425,12 @@ function LoadedReview({
         void navigate({ search: next, hash, replace: true });
         return;
       }
-      if (navigateDiff.current?.({ elementId: intent.elementId })) pending.current = null;
+      if (navigateDiff.current?.({ elementId: intent.elementId })) complete();
       return;
     }
     const element = document.getElementById(intent.elementId);
     if (!element) return;
-    pending.current = null;
+    complete();
     revealReadingTarget(element);
     element.scrollIntoView?.({ block: intent.block });
   });
@@ -470,10 +507,12 @@ function LoadedReview({
                       reviewId={review.id}
                       revision={revision}
                       tab={readingTab}
+                      visible={paneMode === "split" || tab !== "diff" || !hasDiff}
                       search={search}
                       openDoc={openDoc}
                       targeted={!!hash || !!search.thread}
-                      activeThreadId={readingIntent(search, hash, seq).threadId}
+                      activeThreadId={currentIntent.threadId}
+                      threadJump={threadJump?.navigation === currentIntent.navigation ? threadJump : undefined}
                       onOpenDoc={(path) => navigateReading({ ...search, tab: "docs", doc: path, thread: undefined })}
                       phone={layout === "phone"}
                       onResume={resume}

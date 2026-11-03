@@ -29,6 +29,7 @@ import { useThreadJump } from "../../lib/thread-jump.ts";
 import type { ReviewSearch } from "../../router.tsx";
 import { useCommentCard } from "../diff/comment-lines.ts";
 import { targetLabel } from "../diff/targets.ts";
+import { useThreadComposer } from "../reading/ThreadComposerContext.ts";
 import { ChangedMarker } from "../status/ChangedMarker.tsx";
 import { OutcomeBadge } from "../status/OutcomeBadge.tsx";
 import { shownThreadState, ThreadStateBadge } from "../status/ThreadStateBadge.tsx";
@@ -120,6 +121,7 @@ export function ThreadCard({
   const { label, icon } = targetLabel(thread.target, topics);
   const resolved = thread.state === "resolved";
   const collapsed = collapse && resolved;
+  useThreadComposer(replyOpen && !collapsed);
   const canReply = !resolved && thread.comments.some((comment) => comment.author === "agent" || comment.sent);
   return (
     <article
@@ -284,6 +286,7 @@ function Comment({
   const mutation = useReviewMutation(reviewId, key);
   const agent = comment.author === "agent";
   const editable = !agent && !comment.sent;
+  useThreadComposer(editable && editing);
   return (
     <li className="em-comment" data-agent={agent ? "" : undefined}>
       <span className="em-comment__avatar">

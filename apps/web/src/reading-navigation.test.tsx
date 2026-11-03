@@ -15,6 +15,7 @@ import * as diffPresentation from "./components/diff/presentation.ts";
 import { blockLink } from "./components/threads/ThreadCard.tsx";
 import { claimDraft } from "./lib/composer-owner.ts";
 import { draftKey, editDraftKey, saveDraft } from "./lib/drafts.ts";
+import { layoutKey, layoutStore } from "./lib/layout-store.ts";
 import { cancelThreadActionFocus } from "./lib/thread-action-focus.ts";
 import { validateReviewSearch } from "./router.tsx";
 
@@ -2235,4 +2236,202 @@ test("Tabs retains the selected doc while Diff is visible and gives each panel a
   await waitFor(() => expect(reading.hidden).toBe(false));
   expect(screen.getByRole("heading", { name: "seed.md" })).toBe(heading);
   expect(reading.scrollTop).toBe(90);
+});
+
+test.each([1280, 900, 390])(
+  "Focus switch belongs only to the active desktop/tablet Writeup at %s px",
+  async (pixels) => {
+    width = pixels;
+    mount();
+    await screen.findByRole("heading", { name: "Topic 1: Plant a seed" });
+    if (pixels === 390) {
+      expect(screen.queryByRole("radiogroup", { name: "Reading mode" })).toBeNull();
+      act(() => layoutStore.update({ reading: "focus" }));
+      expect(screen.queryByRole("navigation", { name: "Writeup outline" })).toBeNull();
+      return;
+    }
+    const mode = within(screen.getByRole("radiogroup", { name: "Reading mode" }));
+    expect(mode.getByRole("radio", { name: "Standard" }).getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(mode.getByRole("radio", { name: "Focus" }));
+    expect(JSON.parse(localStorage.getItem(layoutKey) ?? "{}").reading).toBe("focus");
+    expect(screen.getByRole("navigation", { name: "Writeup outline" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: "Docs 2" }));
+    await waitFor(() => expect(screen.queryByRole("radiogroup", { name: "Reading mode" })).toBeNull());
+    expect(screen.queryByRole("navigation", { name: "Writeup outline" })).toBeNull();
+    fireEvent.click(screen.getByRole("tab", { name: "Comments 2" }));
+    await screen.findByText("No comments yet.");
+    expect(screen.queryByRole("radiogroup", { name: "Reading mode" })).toBeNull();
+    if (pixels === 900) {
+      fireEvent.click(screen.getByRole("tab", { name: "Diff" }));
+      await waitFor(() => expect(screen.getByTestId("reading-pane").hidden).toBe(true));
+      expect(screen.queryByRole("radiogroup", { name: "Reading mode" })).toBeNull();
+    }
+    fireEvent.click(screen.getByRole("tab", { name: "Writeup" }));
+    await screen.findByRole("navigation", { name: "Writeup outline" });
+    expect(screen.getByRole("radio", { name: "Focus" }).getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(screen.getByRole("radio", { name: "Standard" }));
+    expect(screen.queryByRole("navigation", { name: "Writeup outline" })).toBeNull();
+    expect(JSON.parse(localStorage.getItem(layoutKey) ?? "{}").reading).toBe("standard");
+  },
+);
+
+test.each(["hash", "Show in place", "initial hash"])(
+  "Focus %s opens a pill and its folded topic before scrolling the marked card",
+  async (navigation) => {
+    layoutStore.update({ reading: "focus" });
+    currentRevision.topics = currentRevision.topics.map((topic) => ({ ...topic, attention: "skim" }));
+    currentRevision.threads = [placedWriteupThread()];
+    const scrolled: { id: string; hidden: boolean; jumped: boolean }[] = [];
+    vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(function (this: HTMLElement) {
+      scrolled.push({ id: this.id, hidden: !!this.closest("[hidden]"), jumped: this.hasAttribute("data-jump") });
+    });
+    const { history } = mount(
+      navigation === "Show in place"
+        ? "?tab=comments&rev=1"
+        : `?tab=writeup&rev=1${navigation === "initial hash" ? `#thread-${id}` : ""}`,
+    );
+    if (navigation === "Show in place") {
+      fireEvent.click(await screen.findByRole("link", { name: "Show in place" }));
+    } else if (navigation === "hash") {
+      await screen.findByRole("button", { name: "Topic 1: Plant a seed", expanded: false });
+      expect(document.getElementById(`thread-${id}`)).toBeNull();
+      await act(async () => history.push(`/r/${id}?tab=writeup&rev=1#thread-${id}`));
+    }
+    await waitFor(() => expect(scrolled).toContainEqual({ id: `thread-${id}`, hidden: false, jumped: true }));
+    expect(screen.getByRole("button", { name: "Topic 1: Plant a seed", expanded: true })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Hide" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Hide" }));
+    expect(document.getElementById(`thread-${id}`)).toBeNull();
+    scrolled.length = 0;
+    await act(async () => history.push(`/r/${id}?tab=writeup&rev=1`));
+    // Returning to the same thread is a fresh navigation and reopens the pill.
+    await act(async () => history.push(`/r/${id}?tab=writeup&rev=1#thread-${id}`));
+    await waitFor(() => expect(scrolled).toContainEqual({ id: `thread-${id}`, hidden: false, jumped: true }));
+  },
+);
+
+test("Focus disconnects its observer while Tabs hides the mounted reading pane and resumes it", async () => {
+  width = 900;
+  layoutStore.update({ reading: "focus" });
+  const observers: {
+    root?: Element | Document | null;
+    disconnect: ReturnType<typeof vi.fn<() => void>>;
+    callback: () => void;
+  }[] = [];
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class {
+      entry: (typeof observers)[number];
+      constructor(callback: () => void, options?: IntersectionObserverInit) {
+        this.entry = { root: options?.root, disconnect: vi.fn(), callback };
+        observers.push(this.entry);
+      }
+      observe() {}
+      disconnect() {
+        this.entry.disconnect();
+      }
+    },
+  );
+  mount();
+  const outline = await screen.findByRole("navigation", { name: "Writeup outline" });
+  const pane = screen.getByTestId("reading-pane");
+  const observer = observers.find((entry) => entry.root === pane);
+  expect(observer).toBeTruthy();
+  fireEvent.click(screen.getByRole("tab", { name: "Diff" }));
+  await waitFor(() => expect(pane.hidden).toBe(true));
+  expect(observer?.disconnect).toHaveBeenCalled();
+  const bounds = vi.spyOn(pane, "getBoundingClientRect");
+  act(() => observer?.callback());
+  expect(bounds).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("tab", { name: "Writeup" }));
+  await waitFor(() => expect(pane.hidden).toBe(false));
+  expect(screen.getByRole("navigation", { name: "Writeup outline" })).toBe(outline);
+  expect(observers.filter((entry) => entry.root === pane).length).toBeGreaterThan(1);
+});
+
+test("Focus repeats an explicit Show in place intent with the same URL after Hide", async () => {
+  layoutStore.update({ reading: "focus" });
+  currentRevision.threads = [placedWriteupThread()];
+  const block = currentRevision.writeup.sections[0]?.blocks[0];
+  if (!block) throw new Error("Missing synthetic block");
+  // A persistent in-writeup link exercises the same route handler as Comments' Show in place.
+  block.html = `<p>Keep growing <a href="/r/${id}?tab=writeup&amp;rev=1#thread-${id}">Show in place</a></p>`;
+  block.text = "Keep growing Show in place";
+  const scroll = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => {});
+  const { history } = mount();
+  const link = await screen.findByRole("link", { name: "Show in place" });
+  fireEvent.click(link);
+  await screen.findByRole("button", { name: "Hide" });
+  const url = history.location.href;
+  fireEvent.click(screen.getByRole("button", { name: "Hide" }));
+  expect(document.getElementById(`thread-${id}`)).toBeNull();
+  scroll.mockClear();
+  fireEvent.click(link);
+  await screen.findByRole("button", { name: "Hide" });
+  const card = document.getElementById(`thread-${id}`);
+  expect(card?.hasAttribute("data-jump")).toBe(true);
+  expect(history.location.href).toBe(url);
+  await waitFor(() => expect(scroll.mock.instances).toContain(card));
+});
+
+test.each(["tab", "doc", "revision", "no thread", "other thread"])(
+  "Focus keeps a hidden pill closed after an unrelated %s navigation",
+  async (navigation) => {
+    width = 900;
+    layoutStore.update({ reading: "focus" });
+    currentRevision.threads = [placedWriteupThread()];
+    currentReview.revisions.push({ seq: 2, createdAt: "2026-01-02T00:00:00.000Z" });
+    const { history } = mount(`?tab=writeup&rev=1#thread-${id}`);
+    fireEvent.click(await screen.findByRole("button", { name: "Hide" }));
+    const next =
+      navigation === "tab"
+        ? `?tab=diff&rev=1#thread-${id}`
+        : navigation === "doc"
+          ? `?tab=writeup&doc=seed.md&rev=1#thread-${id}`
+          : navigation === "revision"
+            ? `?tab=writeup&rev=2#thread-${id}`
+            : navigation === "other thread"
+              ? "?tab=writeup&rev=1#thread-22222222-2222-4222-8222-222222222222"
+              : "?tab=writeup&rev=1";
+    await act(async () => history.push(`/r/${id}${next}`));
+    await waitFor(() => expect(document.querySelector(".em-focus-pill")?.textContent).toBe("1 comment"));
+    expect(document.getElementById(`thread-${id}`)).toBeNull();
+    if (navigation === "tab") {
+      await waitFor(() => expect(screen.getByTestId("reading-pane").hidden).toBe(true));
+      await act(async () => history.push(`/r/${id}?tab=writeup&rev=1#thread-${id}`));
+      expect(document.getElementById(`thread-${id}`)).toBeNull();
+    }
+  },
+);
+
+test("a fulfilled Focus jump does not reopen a hidden pill when the block remounts in the same navigation", async () => {
+  layoutStore.update({ reading: "focus" });
+  currentRevision.threads = [placedWriteupThread()];
+  const scroll = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => {});
+  const { history } = mount("?tab=comments&rev=1");
+  fireEvent.click(await screen.findByRole("link", { name: "Show in place" }));
+  await screen.findByRole("button", { name: "Hide" });
+  const card = document.getElementById(`thread-${id}`);
+  await waitFor(() => expect(scroll.mock.instances).toContain(card));
+  fireEvent.click(screen.getByRole("button", { name: "Hide" }));
+  expect(card?.isConnected).toBe(false);
+  const url = history.location.href;
+  const originalBlock = document.getElementById("block-t-seed-body-12345678");
+  expect(originalBlock).toBeTruthy();
+  // Remount the reader's blocks without replacing the route or creating another navigation intent.
+  await act(async () => {
+    client.setQueryData(["revision", id, 1], { ...currentRevision, writeup: { sections: [] } });
+  });
+  await waitFor(() => expect(originalBlock?.isConnected).toBe(false));
+  scroll.mockClear();
+  await act(async () => {
+    client.setQueryData(["revision", id, 1], currentRevision);
+  });
+  await screen.findByRole("button", { name: "1 comment" });
+  const newBlock = document.getElementById("block-t-seed-body-12345678");
+  expect(newBlock).toBeTruthy();
+  expect(newBlock).not.toBe(originalBlock);
+  expect(document.getElementById(`thread-${id}`)).toBeNull();
+  expect(history.location.href).toBe(url);
+  expect(scroll).not.toHaveBeenCalled();
 });
