@@ -1,4 +1,5 @@
-import { useCallback, useState, useSyncExternalStore } from "react";
+import { useCallback, useSyncExternalStore } from "react";
+import { layoutStore, useLayoutPreferences } from "./layout-store.ts";
 
 function useMedia(query: string) {
   const subscribe = useCallback(
@@ -20,24 +21,12 @@ export function useLayout() {
   const tablet = useMedia("(min-width: 768px)");
   return desktop ? "desktop" : tablet ? "tablet" : "phone";
 }
-const key = "emend.inbox.collapsed";
 export function useInboxCollapsed() {
-  const [collapsed, setCollapsed] = useState(() => {
-    try {
-      return localStorage.getItem(key) === "true";
-    } catch {
-      return false;
-    }
-  });
-  return [
-    collapsed,
-    (value: boolean) => {
-      setCollapsed(value);
-      try {
-        localStorage.setItem(key, String(value));
-      } catch {
-        /* Storage may be disabled. */
-      }
-    },
-  ] as const;
+  const { inboxCollapsed } = useLayoutPreferences();
+  return [inboxCollapsed, (value: boolean) => layoutStore.update({ inboxCollapsed: value })] as const;
+}
+export function usePaneMode() {
+  const layout = useLayout();
+  const { pane } = useLayoutPreferences();
+  return layout === "phone" ? "tabs" : pane[layout];
 }

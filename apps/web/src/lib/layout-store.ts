@@ -1,0 +1,120 @@
+import { z } from "@emend/contract/browser";
+import { useSyncExternalStore } from "react";
+
+export const layoutKey = "emend.layout.v1";
+const paneChoice = z.enum(["split", "tabs"]);
+export const layoutSchema = z.object({
+  inboxWidth: z.number().min(220).max(520).catch(280),
+  readingShare: z.number().min(0).max(1).catch(0.42),
+  pane: z
+    .object({ desktop: paneChoice.catch("split"), tablet: paneChoice.catch("tabs") })
+    .catch({ desktop: "split", tablet: "tabs" }),
+  reading: z.enum(["standard", "focus"]).catch("standard"),
+  diffStyle: z.enum(["split", "unified"]).catch("split"),
+  wrap: z.boolean().catch(false),
+  inboxCollapsed: z.boolean().catch(false),
+  proseSize: z.union([z.literal(15), z.literal(16), z.literal(17), z.literal(18)]).catch(16),
+  // D.4 inherits --type-code, currently 12px, rather than Pierre's 13px fallback.
+  codeSize: z.union([z.literal(11), z.literal(12), z.literal(13), z.literal(14)]).catch(12),
+});
+export type LayoutPreferences = z.infer<typeof layoutSchema>;
+type LayoutPatch = Partial<Omit<LayoutPreferences, "proseSize" | "codeSize">> & {
+  proseSize?: number;
+  codeSize?: number;
+};
+export const defaultLayout = layoutSchema.parse({});
+
+function parse(raw: string | null): LayoutPreferences {
+  try {
+    return layoutSchema.parse(JSON.parse(raw ?? "{}"));
+  } catch {
+    return layoutSchema.parse({});
+  }
+}
+function read(key: string): string | null | undefined {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return undefined;
+  }
+}
+
+export function createLayoutStore() {
+  let saved = read(layoutKey);
+  let snapshot =
+    saved == null
+      ? layoutSchema.parse({
+          diffStyle: read("emend.diff.layout") ?? undefined,
+          wrap: read("emend.diff.wrap") === "true",
+          inboxCollapsed: read("emend.inbox.collapsed") === "true",
+        })
+      : parse(saved);
+  const listeners = new Set<() => void>();
+  const notify = () => {
+    for (const listener of listeners) listener();
+  };
+  const persist = () => {
+    try {
+      const raw = JSON.stringify(snapshot);
+      localStorage.setItem(layoutKey, raw);
+      saved = raw;
+    } catch {
+      // Preferences still work in memory when storage is denied or full.
+    }
+  };
+  // Migrate before React reads a snapshot; getSnapshot must never write during render.
+  if (saved === null) persist();
+  const getSnapshot = () => {
+    const raw = read(layoutKey);
+    if (raw !== undefined && raw !== saved) {
+      saved = raw;
+      snapshot = parse(raw);
+    }
+    return snapshot;
+  };
+  const reconcile = () => {
+    const previous = snapshot;
+    if (getSnapshot() !== previous) notify();
+  };
+  const onStorage = (event: StorageEvent) => {
+    if (event.key !== null && event.key !== layoutKey) return;
+    try {
+      if (event.storageArea && event.storageArea !== localStorage) return;
+    } catch {
+      return;
+    }
+    getSnapshot();
+    // A render may already have refreshed the cache before this event was delivered.
+    notify();
+  };
+  return {
+    getSnapshot,
+    subscribe(listener: () => void) {
+      if (listeners.size === 0) window.addEventListener("storage", onStorage);
+      listeners.add(listener);
+      // Catch writes that happened between the render's first read and subscription.
+      reconcile();
+      return () => {
+        listeners.delete(listener);
+        if (listeners.size === 0) window.removeEventListener("storage", onStorage);
+      };
+    },
+    update(patch: LayoutPatch) {
+      const next = { ...getSnapshot(), ...patch };
+      next.inboxWidth = Math.min(520, Math.max(220, next.inboxWidth));
+      next.readingShare = Math.min(1, Math.max(0, next.readingShare));
+      snapshot = layoutSchema.parse({
+        ...next,
+        proseSize: Math.round(Math.min(18, Math.max(15, next.proseSize))),
+        codeSize: Math.round(Math.min(14, Math.max(11, next.codeSize))),
+      });
+      persist();
+      notify();
+    },
+  };
+}
+
+export const layoutStore = createLayoutStore();
+export function useLayoutPreferences() {
+  return useSyncExternalStore(layoutStore.subscribe, layoutStore.getSnapshot, () => defaultLayout);
+}

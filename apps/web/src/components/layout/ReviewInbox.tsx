@@ -21,7 +21,7 @@ export function ReviewInbox({
       <aside
         aria-label="Inbox"
         data-testid="inbox-pane"
-        className="flex min-h-0 w-(--inbox-w) shrink-0 flex-col border-r border-line-1 bg-app"
+        className="flex min-h-0 w-(--inbox-w) shrink-0 flex-col bg-app"
       >
         <Inbox compact onCollapse={() => onCollapsedChange(true)} />
       </aside>

@@ -1,4 +1,5 @@
 import { useNavigate } from "@tanstack/react-router";
+import { usePaneMode } from "../../lib/layout.ts";
 import type { ReviewSearch } from "../../router.tsx";
 import { Tabs } from "../ui/Tabs.tsx";
 
@@ -16,12 +17,15 @@ export function ReviewTabs({
   search,
   hasDocs,
   hasWriteup,
+  hasDiff,
   unsentCount,
   docsCount,
   idBase,
 }: ReviewTabsProps & { docsCount: number; idBase: string }) {
   const navigate = useNavigate();
-  const active = search.tab === "diff" ? (hasWriteup ? "writeup" : hasDocs ? "docs" : "comments") : search.tab;
+  const showDiff = usePaneMode() === "tabs" && hasDiff;
+  const active =
+    search.tab === "diff" && !showDiff ? (hasWriteup ? "writeup" : hasDocs ? "docs" : "comments") : search.tab;
   return (
     <Tabs
       idBase={idBase}
@@ -32,9 +36,10 @@ export function ReviewTabs({
         { id: "writeup", label: "Writeup", hidden: !hasWriteup },
         { id: "docs", label: "Docs", hidden: !hasDocs, count: docsCount },
         { id: "comments", label: "Comments", count: unsentCount, accent: true },
-      ].map((item) => ({ ...item, "aria-controls": `${idBase}-panel` }))}
+        { id: "diff", label: "Diff", hidden: !showDiff },
+      ].map((item) => ({ ...item, "aria-controls": `${idBase}-${item.id === "diff" ? "diff" : "reading"}-panel` }))}
       onChange={(tab) => {
-        if (tab !== "writeup" && tab !== "docs" && tab !== "comments") return;
+        if (tab !== "writeup" && tab !== "docs" && tab !== "comments" && tab !== "diff") return;
         void navigate({
           to: "/r/$reviewId",
           params: { reviewId: id },

@@ -24,7 +24,7 @@ import { claimDraft } from "../lib/composer-owner.ts";
 import type { NavigateDiff } from "../lib/diff-navigation.ts";
 import { draftKey, hasDraft, type SavedDraft, saveDraft, subscribeDrafts } from "../lib/drafts.ts";
 import { usePublishedRevision } from "../lib/events.tsx";
-import { useInboxCollapsed, useLayout } from "../lib/layout.ts";
+import { useInboxCollapsed, useLayout, usePaneMode } from "../lib/layout.ts";
 import { openingView } from "../lib/opening-view.ts";
 import { revealReadingTarget } from "../lib/reading-reveal.ts";
 import { type ReviewSearch, validateReviewSearch } from "../router.tsx";
@@ -172,6 +172,7 @@ function LoadedReview({
   const query = useQuery(revisionQuery(review.id, seq));
   const navigate = useNavigate({ from: "/r/$reviewId" });
   const layout = useLayout();
+  const paneMode = usePaneMode();
   const readingId = useId();
   // Resolving the lazy pane does not otherwise rerender this route's pending scroll effect.
   const [, setDiffRendered] = useState(0);
@@ -205,8 +206,14 @@ function LoadedReview({
   const opening = revision ? openingView(revision) : { tab: "writeup" as const };
   const useOpening = !search.tab || !{ writeup: hasWriteup, diff: hasDiff, docs: hasDocs, comments: true }[search.tab];
   const tab = useOpening ? opening.tab : (search.tab ?? opening.tab);
-  const readingTab = tab === "diff" ? (hasWriteup ? "writeup" : hasDocs ? "docs" : "comments") : tab;
-  const docsVisible = readingTab === "docs" && (layout !== "phone" || tab !== "diff");
+  const [lastReadingTab, setLastReadingTab] = useState<Exclude<ReviewSearch["tab"], "diff">>();
+  if (tab !== "diff" && lastReadingTab !== tab) setLastReadingTab(tab);
+  const readingTab =
+    tab === "diff"
+      ? (layout !== "phone" && paneMode === "tabs" && lastReadingTab) ||
+        (hasWriteup ? "writeup" : hasDocs ? "docs" : "comments")
+      : tab;
+  const docsVisible = readingTab === "docs" && (paneMode === "split" || tab !== "diff");
   const openDoc = revision
     ? resolveOpenDoc(
         revision,
@@ -375,6 +382,12 @@ function LoadedReview({
       return;
     }
     if (intent.elementId.startsWith("diff-")) {
+      if (paneMode === "tabs" && hasDiff && tab !== "diff") {
+        const next = { ...search, tab: "diff" as const };
+        intent.navigation = readingIntent(next, hash, seq).navigation;
+        void navigate({ search: next, hash, replace: true });
+        return;
+      }
       if (navigateDiff.current?.({ elementId: intent.elementId })) pending.current = null;
       return;
     }
@@ -401,6 +414,7 @@ function LoadedReview({
           tab={tab}
           hasDiff={hasDiff}
           phoneTabs={<PhoneTabs {...tabProps} />}
+          tabs={<ReviewTabs {...tabProps} docsCount={revision?.docs.length ?? 0} idBase={readingId} />}
           sendBar={
             <SendBar
               key={review.id}
@@ -429,14 +443,11 @@ function LoadedReview({
           }
           reading={
             <div className="contents">
-              {layout !== "phone" && (
-                <ReviewTabs {...tabProps} docsCount={revision?.docs.length ?? 0} idBase={readingId} />
-              )}
               <div
                 {...(layout !== "phone"
                   ? {
                       role: "tabpanel" as const,
-                      id: `${readingId}-panel`,
+                      id: `${readingId}-reading-panel`,
                       "aria-labelledby": `${readingId}-tab-${readingTab}`,
                     }
                   : {})}
@@ -496,24 +507,34 @@ function LoadedReview({
             </div>
           }
           diff={
-            revision ? (
-              <LazyDiffPane
-                key={seq}
-                reviewId={review.id}
-                revision={revision}
-                resume={resumed?.target && isDiffTarget(resumed.target) ? resumed : undefined}
-                onResumeEnd={endResume}
-                onRendered={onDiffRendered}
-                onNavigator={onDiffNavigator}
-                currentTopic={currentTopic}
-                writeupVisible={readingTab === "writeup"}
-                search={search}
-              />
-            ) : (
-              <p role={query.isError ? "alert" : "status"} className="p-5">
-                {query.isError ? "Could not load this revision." : "Loading revision…"}
-              </p>
-            )
+            <div
+              {...(layout !== "phone" && paneMode === "tabs"
+                ? {
+                    role: "tabpanel",
+                    id: `${readingId}-diff-panel`,
+                    "aria-labelledby": `${readingId}-tab-diff`,
+                  }
+                : {})}
+            >
+              {revision ? (
+                <LazyDiffPane
+                  key={seq}
+                  reviewId={review.id}
+                  revision={revision}
+                  resume={resumed?.target && isDiffTarget(resumed.target) ? resumed : undefined}
+                  onResumeEnd={endResume}
+                  onRendered={onDiffRendered}
+                  onNavigator={onDiffNavigator}
+                  currentTopic={currentTopic}
+                  writeupVisible={readingTab === "writeup" && paneMode === "split"}
+                  search={search}
+                />
+              ) : (
+                <p role={query.isError ? "alert" : "status"} className="p-5">
+                  {query.isError ? "Could not load this revision." : "Loading revision…"}
+                </p>
+              )}
+            </div>
           }
         />
       </div>

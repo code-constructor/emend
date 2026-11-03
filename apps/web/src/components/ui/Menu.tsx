@@ -5,13 +5,15 @@ import type { ReactElement, ReactNode } from "react";
 import { Icon, type IconComponent } from "./Icon.tsx";
 import { IconButton } from "./IconButton.tsx";
 import { Kbd } from "./Kbd.tsx";
-import { cn, focusRing } from "./utils.ts";
+import { cn, focusRing, selectionIndex } from "./utils.ts";
 
 export type MenuItem =
   | { separator: true }
   | { heading: string }
   | {
       radioGroup: {
+        segmented?: boolean;
+        label?: string;
         value: string;
         onValueChange: (value: string) => void;
         items: { value: string; label: ReactNode; hint?: string; disabled?: boolean }[];
@@ -63,23 +65,58 @@ export function Menu({ label, trigger, align = "right", size = "md", items, defa
                   key={index}
                   value={item.radioGroup.value}
                   onValueChange={item.radioGroup.onValueChange}
+                  aria-label={item.radioGroup.label}
+                  className={
+                    item.radioGroup.segmented
+                      ? "mx-2 mb-2 flex gap-0.5 rounded-md border border-line-1 bg-sunken p-0.5"
+                      : undefined
+                  }
+                  onKeyDownCapture={(event) => {
+                    if (!item.radioGroup.segmented) return;
+                    const options = item.radioGroup.items.filter((option) => !option.disabled);
+                    const buttons = [
+                      ...event.currentTarget.querySelectorAll<HTMLElement>(
+                        '[role="menuitemradio"]:not([data-disabled])',
+                      ),
+                    ];
+                    const focused = document.activeElement;
+                    const index = focused instanceof HTMLElement ? buttons.indexOf(focused) : -1;
+                    const next = selectionIndex(event.key, index, options.length);
+                    if (next === undefined) return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const option = options[next];
+                    if (!option) return;
+                    item.radioGroup.onValueChange(option.value);
+                    buttons[next]?.focus();
+                  }}
                 >
                   {item.radioGroup.items.map((option) => (
                     <Primitive.RadioItem
                       key={option.value}
                       value={option.value}
                       disabled={option.disabled}
+                      onSelect={item.radioGroup.segmented ? (event) => event.preventDefault() : undefined}
                       className={cn(
                         "flex min-h-8 items-start gap-2.5 rounded-[6px] px-2.5 py-2 font-sans text-13 font-medium leading-(--lh-snug) text-fg-1 data-highlighted:bg-hover data-disabled:pointer-events-none data-disabled:opacity-45 [@media(pointer:coarse)]:min-h-11",
                         focusRing,
+                        item.radioGroup.segmented &&
+                          "min-h-7 flex-1 justify-center px-2 py-1 text-fg-3 data-[state=checked]:bg-raised data-[state=checked]:text-fg-1 data-[state=checked]:shadow-1",
                       )}
                     >
-                      <span aria-hidden="true" className="mt-0.5 size-3.5 shrink-0">
-                        <Primitive.ItemIndicator>
-                          <Icon icon={Check} size={14} />
-                        </Primitive.ItemIndicator>
-                      </span>
-                      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                      {!item.radioGroup.segmented && (
+                        <span aria-hidden="true" className="mt-0.5 size-3.5 shrink-0">
+                          <Primitive.ItemIndicator>
+                            <Icon icon={Check} size={14} />
+                          </Primitive.ItemIndicator>
+                        </span>
+                      )}
+                      <span
+                        className={cn(
+                          "flex min-w-0 flex-1 flex-col gap-0.5",
+                          item.radioGroup.segmented && "items-center",
+                        )}
+                      >
                         <span className="flex items-center gap-1.5">{option.label}</span>
                         {option.hint && <span className="text-fg-3 [font:var(--type-meta)]">{option.hint}</span>}
                       </span>

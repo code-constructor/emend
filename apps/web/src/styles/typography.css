@@ -26,15 +26,24 @@
   --tracking-normal: 0;
   --tracking-label: 0.04em;
   /* semantic roles */
+  --type-prose-size: var(--text-16);
+  --type-code-size: var(--text-12);
   --type-display: 600 var(--text-30) / var(--lh-tight) var(--font-sans);
   --type-h1: 600 var(--text-24) / var(--lh-tight) var(--font-sans);
   --type-h2: 600 var(--text-18) / var(--lh-snug) var(--font-sans);
   --type-h3: 600 var(--text-15) / var(--lh-snug) var(--font-sans);
   --type-body: 400 var(--text-14) / var(--lh-body) var(--font-sans);
-  --type-prose: 400 var(--text-16) / var(--lh-prose) var(--font-sans);
   --type-ui: 500 var(--text-13) / var(--lh-snug) var(--font-sans);
   --type-meta: 400 var(--text-12) / var(--lh-snug) var(--font-sans);
   --type-label: 500 var(--text-11) / var(--lh-snug) var(--font-mono);
-  --type-code: 400 var(--text-12) / 1.6 var(--font-mono);
   --type-path: 400 var(--text-12) / var(--lh-snug) var(--font-mono);
+}
+
+/* Resolve shorthands where preferences are set, before inheritance into the reader. */
+:root,
+.em-app,
+.em-diff-code,
+.em-diff-host {
+  --type-prose: 400 var(--reader-prose-size, var(--type-prose-size)) / var(--lh-prose) var(--font-sans);
+  --type-code: 400 var(--reader-code-size, var(--type-code-size)) / 1.6 var(--font-mono);
 }

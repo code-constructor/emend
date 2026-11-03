@@ -10,6 +10,7 @@ import { inboxQuery, reviewQuery } from "./api/queries.ts";
 import type { PhoneTabs } from "./components/layout/PhoneTabs.tsx";
 import type { ReviewTabs, ReviewTabsProps } from "./components/layout/ReviewTabs.tsx";
 import { draftKey, editDraftKey } from "./lib/drafts.ts";
+import { defaultLayout, layoutStore } from "./lib/layout-store.ts";
 import { rememberPairingSecret, takePairingSecret } from "./lib/pairing-secret.ts";
 import { validateReviewSearch } from "./router.tsx";
 import { Events } from "./test/events.ts";
@@ -109,11 +110,17 @@ test.each([
   }
 });
 beforeEach(() => {
+  // Happy DOM has no layout; dedicated diff tests control positive and hidden measurements.
+  const bounds = HTMLElement.prototype.getBoundingClientRect;
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+    return this.classList.contains("em-diff-pane") ? new DOMRect(0, 0, 900, 600) : bounds.call(this);
+  });
   (window as unknown as Window).happyDOM.setURL(initialUrl);
   width = 1280;
   mediaQueries.clear();
   newest = 1;
   localStorage.clear();
+  layoutStore.update(defaultLayout);
   window.dispatchEvent(new StorageEvent("storage", { key: null, storageArea: localStorage }));
   window.history.replaceState(null, "", "/");
   vi.stubGlobal(
@@ -423,28 +430,32 @@ test("moved inbox rows show the destination host without a navigable link", asyn
   expect(await screen.findByText("Moved to hub.example")).toBeTruthy();
   expect(screen.queryByRole("link", { name: /Synthetic review/ })).toBeNull();
 });
-test.each([767, 768, 1279, 1280, 390])("review mounts only visible panes at %s px", async (size) => {
-  width = size;
-  mount(`/r/${id}`);
-  await screen.findByText("Overview");
-  expect(screen.getAllByTestId(/-pane$/)).toHaveLength(size >= 1280 ? 3 : size >= 768 ? 2 : 1);
-  if (size < 768) {
-    const tabs = within(screen.getByRole("navigation", { name: "Review tabs" }));
-    expect(tabs.getAllByRole("link").map((link) => link.textContent)).toEqual([
-      "Writeup",
-      "Diff",
-      "Docs",
-      "Comments 2 unsent",
-    ]);
-    fireEvent.click(tabs.getByRole("link", { name: "Diff" }));
-    await waitFor(() => expect(screen.getByTestId("diff-pane")).toBeTruthy());
-    expect(screen.queryByTestId("reading-pane")).toBeNull();
-  }
-  if (size >= 768 && size < 1280) {
-    fireEvent.click(screen.getByRole("button", { name: "Show inbox" }));
-    expect(await screen.findByRole("dialog", { name: "Inbox" })).toBeTruthy();
-  }
-});
+test.each([767, 768, 1279, 1280, 390])(
+  "review retains tablet panes and mounts only the active phone pane at %s px",
+  async (size) => {
+    width = size;
+    mount(`/r/${id}`);
+    await screen.findByText("Overview");
+    expect(screen.getAllByTestId(/-pane$/)).toHaveLength(size >= 1280 ? 3 : size >= 768 ? 2 : 1);
+    expect(screen.getAllByTestId(/-pane$/).filter((pane) => !pane.hidden)).toHaveLength(size >= 1280 ? 3 : 1);
+    if (size < 768) {
+      const tabs = within(screen.getByRole("navigation", { name: "Review tabs" }));
+      expect(tabs.getAllByRole("link").map((link) => link.textContent)).toEqual([
+        "Writeup",
+        "Diff",
+        "Docs",
+        "Comments 2 unsent",
+      ]);
+      fireEvent.click(tabs.getByRole("link", { name: "Diff" }));
+      await waitFor(() => expect(screen.getByTestId("diff-pane")).toBeTruthy());
+      expect(screen.queryByTestId("reading-pane")).toBeNull();
+    }
+    if (size >= 768 && size < 1280) {
+      fireEvent.click(screen.getByRole("button", { name: "Show inbox" }));
+      expect(await screen.findByRole("dialog", { name: "Inbox" })).toBeTruthy();
+    }
+  },
+);
 test("resizing from desktop to phone replaces three panes with one and phone tabs", async () => {
   mount(`/r/${id}`);
   await screen.findByText("Overview");
@@ -478,13 +489,16 @@ test("inbox collapse survives reload and unavailable localStorage", async () => 
   const first = mount(`/r/${id}`);
   await screen.findByText("Overview");
   fireEvent.click(screen.getByRole("button", { name: "Collapse inbox" }));
-  expect(localStorage.getItem("emend.inbox.collapsed")).toBe("true");
+  expect(JSON.parse(localStorage.getItem("emend.layout.v1") ?? "{}").inboxCollapsed).toBe(true);
   expect(screen.queryByTestId("inbox-pane")).toBeNull();
   first.unmount();
   const second = mount(`/r/${id}`);
   await screen.findByText("Overview");
   expect(screen.queryByTestId("inbox-pane")).toBeNull();
   second.unmount();
+  localStorage.clear();
+  window.dispatchEvent(new StorageEvent("storage", { key: null, storageArea: localStorage }));
+  layoutStore.getSnapshot();
   vi.stubGlobal("localStorage", {
     getItem: () => {
       throw new Error("Storage denied");
@@ -2007,10 +2021,10 @@ test("desktop frame has wordmark and Devices links, expands its rail and persist
   expect(link.getAttribute("aria-current")).toBe("page");
   expect(within(link).getByRole("img", { name: "From Workshop" })).toBeTruthy();
   expect(rail.queryByRole("link", { name: /Another proposal/ })).toBeNull();
-  expect(localStorage.getItem("emend.inbox.collapsed")).toBe("true");
+  expect(JSON.parse(localStorage.getItem("emend.layout.v1") ?? "{}").inboxCollapsed).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: "Show inbox" }));
   expect(screen.getByTestId("inbox-pane")).toBeTruthy();
-  expect(localStorage.getItem("emend.inbox.collapsed")).toBe("false");
+  expect(JSON.parse(localStorage.getItem("emend.layout.v1") ?? "{}").inboxCollapsed).toBe(false);
   first.unmount();
   mount(`/r/${id}`);
   expect(await screen.findByTestId("inbox-pane")).toBeTruthy();
@@ -2484,4 +2498,91 @@ test("phone Diff navigation consumes pending heading focus before a later refetc
   });
   expect(document.activeElement).toBe(keepFocus);
   expect(focus.mock.instances).not.toContain(heading);
+});
+
+test("pane defaults and choices are independent across desktop, tablet and phone", async () => {
+  const { history } = mount(`/r/${id}`);
+  await screen.findByText("Overview");
+  const paneControls = () => within(screen.getByRole("radiogroup", { name: "Panes" }));
+  expect(paneControls().getByRole("radio", { name: "Split" }).getAttribute("aria-checked")).toBe("true");
+  expect(screen.queryByRole("tab", { name: "Diff" })).toBeNull();
+  fireEvent.click(paneControls().getByRole("radio", { name: "Tabs" }));
+  expect(screen.getByTestId("diff-pane").hidden).toBe(true);
+  expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Writeup", "Docs1", "Comments2", "Diff"]);
+  fireEvent.click(screen.getByRole("tab", { name: "Diff" }));
+  await waitFor(() => expect(history.location.search).toContain("tab=diff"));
+  expect(screen.getByTestId("reading-pane").hidden).toBe(true);
+  expect(screen.getByRole("tab", { name: "Diff" }).getAttribute("aria-selected")).toBe("true");
+  expect(screen.getByRole("tabpanel").getAttribute("aria-labelledby")).toBe(
+    screen.getByRole("tab", { name: "Diff" }).id,
+  );
+  fireEvent.click(paneControls().getByRole("radio", { name: "Split" }));
+  expect(screen.getByTestId("reading-pane")).toBeTruthy();
+  expect(screen.getByTestId("diff-pane")).toBeTruthy();
+  expect(screen.getByRole("tab", { name: "Writeup" }).getAttribute("aria-selected")).toBe("true");
+  act(() => resize(900));
+  expect(paneControls().getByRole("radio", { name: "Tabs" }).getAttribute("aria-checked")).toBe("true");
+  fireEvent.click(paneControls().getByRole("radio", { name: "Split" }));
+  expect(screen.getByRole("separator", { name: "Resize reading pane" })).toBeTruthy();
+  expect(screen.queryByRole("separator", { name: "Resize inbox" })).toBeNull();
+  act(() => resize(1280));
+  fireEvent.click(paneControls().getByRole("radio", { name: "Tabs" }));
+  act(() => resize(900));
+  expect(paneControls().getByRole("radio", { name: "Split" }).getAttribute("aria-checked")).toBe("true");
+  act(() => resize(390));
+  expect(screen.queryByRole("radiogroup", { name: "Panes" })).toBeNull();
+  expect(screen.queryByRole("separator")).toBeNull();
+  expect(screen.getByRole("link", { name: "Diff" }).getAttribute("aria-current")).toBe("page");
+});
+
+test("Tabs without code has no Diff tab or reading resize handle", async () => {
+  width = 900;
+  openingRevision({ files: [] });
+  mount(`/r/${id}`);
+  await screen.findByText("Overview");
+  expect(screen.queryByRole("tab", { name: "Diff" })).toBeNull();
+  expect(screen.queryByRole("separator", { name: "Resize reading pane" })).toBeNull();
+});
+
+test("thread Show in place opens the Diff tab before navigating in Tabs mode", async () => {
+  width = 900;
+  withDiff();
+  const { history } = mount(`/r/${id}?tab=comments`);
+  fireEvent.click(await screen.findByRole("link", { name: "Show in place" }));
+  await waitFor(() => expect(history.location.search).toContain("tab=diff"));
+  expect(history.location.hash).toContain(`diff-thread-${id}`);
+  const diff = within(await screen.findByTestId("diff-pane"));
+  expect(await diff.findByText("Diff thread")).toBeTruthy();
+  expect(screen.getByRole("tab", { name: "Diff" }).getAttribute("aria-selected")).toBe("true");
+});
+
+test("Topics map links open the Diff tab in Tabs mode", async () => {
+  width = 900;
+  withDiff();
+  const { history } = mount(`/r/${id}`);
+  const link = await screen.findByRole("link", { name: "Topic" });
+  fireEvent.click(link);
+  await waitFor(() => expect(history.location.search).toContain("tab=diff"));
+  expect(history.location.hash).toContain("diff-topic-topic");
+  expect(screen.getByRole("tab", { name: "Diff" }).getAttribute("aria-selected")).toBe("true");
+});
+
+test.each([1280, 900, 390])("text menu changes validated app variables at %s px", async (size) => {
+  width = size;
+  localStorage.setItem("emend.layout.v1", JSON.stringify({ proseSize: "18px; color: red", codeSize: 100 }));
+  const { container } = mount(`/r/${id}`);
+  await screen.findByText("Overview");
+  const root = container.querySelector<HTMLElement>(".em-app");
+  expect(root?.style.getPropertyValue("--reader-prose-size")).toBe("16px");
+  expect(root?.style.getPropertyValue("--reader-code-size")).toBe("12px");
+  fireEvent.keyDown(screen.getByRole("button", { name: size < 768 ? "More" : "Text size" }), { key: "ArrowDown" });
+  const menu = within(await screen.findByRole("menu"));
+  fireEvent.click(menu.getByRole("menuitemradio", { name: "18 px" }));
+  expect(root?.style.getPropertyValue("--reader-prose-size")).toBe("18px");
+  fireEvent.click(menu.getByRole("menuitemradio", { name: "14 px" }));
+  expect(root?.style.getPropertyValue("--reader-code-size")).toBe("14px");
+  fireEvent.keyDown(menu.getByRole("menuitemradio", { name: "14 px" }), { key: "ArrowLeft" });
+  expect(root?.style.getPropertyValue("--reader-code-size")).toBe("13px");
+  fireEvent.keyDown(menu.getByRole("menuitemradio", { name: "13 px" }), { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
 });

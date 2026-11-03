@@ -6,6 +6,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { draftKey } from "../../lib/drafts.ts";
+import { layoutStore } from "../../lib/layout-store.ts";
 import { Panes } from "../layout/Panes.tsx";
 import { DiffPane, type DiffPaneProps } from "./DiffPane.tsx";
 import { parsePair } from "./parse.worker.ts";
@@ -551,10 +552,11 @@ test("Split and Unified change renderer options and survive remount; phone keeps
   near("source.ts");
   expect((await screen.findByTestId("rendered-diff")).getAttribute("data-style")).toBe("unified");
   expect(screen.queryByRole("radiogroup", { name: "Diff layout" })).toBeNull();
-  expect(localStorage.getItem("emend.diff.layout")).toBe("split");
+  expect(JSON.parse(localStorage.getItem("emend.layout.v1") ?? "{}").diffStyle).toBe("split");
 });
 
 test("disabled storage still allows layout changes", async () => {
+  layoutStore.getSnapshot();
   vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
     throw new Error("Disabled");
   });
@@ -578,7 +580,7 @@ test("Wrap persists across mounts, controls overflow, and is forced on phones wi
   fireEvent.click(screen.getByRole("button", { name: "Wrap" }));
   expect(screen.getByRole("button", { name: "Wrap" }).getAttribute("aria-pressed")).toBe("true");
   expect(screen.getByTestId("rendered-diff").getAttribute("data-overflow")).toBe("wrap");
-  expect(localStorage.getItem("emend.diff.wrap")).toBe("true");
+  expect(JSON.parse(localStorage.getItem("emend.layout.v1") ?? "{}").wrap).toBe(true);
   mounted.unmount();
   mounted = await mount(value);
   near("source.ts");
@@ -590,7 +592,7 @@ test("Wrap persists across mounts, controls overflow, and is forced on phones wi
   near("source.ts");
   expect((await screen.findByTestId("rendered-diff")).getAttribute("data-overflow")).toBe("wrap");
   expect(screen.queryByRole("button", { name: "Wrap" })).toBeNull();
-  expect(localStorage.getItem("emend.diff.wrap")).toBe("false");
+  expect(JSON.parse(localStorage.getItem("emend.layout.v1") ?? "{}").wrap).toBe(false);
 });
 
 test("Wrap pressed styling follows the toggle state", async () => {
@@ -632,7 +634,7 @@ test("pane uses border-box width for both initial measurement and resize", async
 test.each(["split", "unified"])("missing ResizeObserver immediately uses stored %s", async (style) => {
   vi.stubGlobal("ResizeObserver", undefined);
   paneWidth = 0;
-  localStorage.setItem("emend.diff.layout", style);
+  localStorage.setItem("emend.layout.v1", JSON.stringify({ diffStyle: style }));
   await mount(revision([file()]));
   near("source.ts");
   await screen.findByTestId("rendered-diff");
@@ -641,7 +643,7 @@ test.each(["split", "unified"])("missing ResizeObserver immediately uses stored 
 });
 
 test("pane width forces Unified below 760px without overwriting Split; disabled Split is skipped by keys", async () => {
-  localStorage.setItem("emend.diff.layout", "split");
+  localStorage.setItem("emend.layout.v1", JSON.stringify({ diffStyle: "split" }));
   const mounted = await mount(revision([file()]));
   near("source.ts");
   await screen.findByTestId("rendered-diff");
@@ -660,7 +662,7 @@ test("pane width forces Unified below 760px without overwriting Split; disabled 
   unified.focus();
   fireEvent.keyDown(unified, { key: "ArrowLeft" });
   expect(document.activeElement).toBe(unified);
-  expect(localStorage.getItem("emend.diff.layout")).toBe("split");
+  expect(JSON.parse(localStorage.getItem("emend.layout.v1") ?? "{}").diffStyle).toBe("split");
   act(() => resizePane(760));
   split = screen.getByRole<HTMLButtonElement>("radio", { name: "Split" });
   expect(split.disabled).toBe(false);
@@ -824,4 +826,63 @@ test.each([390, 1280])("R8 fix1 a revision without a writeup has no Writeup link
   }));
   await mount(revision([file()], { writeupEmpty: true, main: "diff" }), { writeupVisible: false });
   expect(screen.queryByRole("link", { name: "Writeup" })).toBeNull();
+});
+
+test("dragging reading across the 760px diff threshold switches presentation without remounting", async () => {
+  vi.stubGlobal("matchMedia", () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+    if (this.classList.contains("em-diff-pane")) {
+      const reading = document.querySelector<HTMLElement>("[data-reading-scroll]");
+      return new DOMRect(0, 0, 1400 - Number.parseFloat(reading?.style.flexBasis ?? "588") - 8, 600);
+    }
+    return new DOMRect(0, 0, 1400, 600);
+  });
+  await mount(revision([file()]));
+  near("source.ts");
+  const rendered = await screen.findByTestId("rendered-diff");
+  expect(rendered.getAttribute("data-style")).toBe("split");
+  const handle = screen.getByRole("separator", { name: "Resize reading pane" });
+  Object.assign(handle, { setPointerCapture() {}, hasPointerCapture: () => false });
+  const write = vi.spyOn(localStorage, "setItem");
+  fireEvent.pointerDown(handle, { pointerId: 1, button: 0, clientX: 588 });
+  fireEvent.pointerMove(handle, { pointerId: 1, clientX: 700 });
+  act(() => resizePane(692));
+  expect(screen.getByTestId("rendered-diff")).toBe(rendered);
+  expect(rendered.getAttribute("data-style")).toBe("unified");
+  fireEvent.pointerMove(handle, { pointerId: 1, clientX: 500 });
+  act(() => resizePane(892));
+  expect(screen.getByTestId("rendered-diff")).toBe(rendered);
+  expect(rendered.getAttribute("data-style")).toBe("split");
+  expect(write).not.toHaveBeenCalled();
+  fireEvent.pointerUp(handle, { pointerId: 1, clientX: 500 });
+  expect(write).toHaveBeenCalledTimes(1);
+  expect(layoutStore.getSnapshot().diffStyle).toBe("split");
+});
+
+test("a hidden pane's zero-width resize keeps its last diff style", async () => {
+  await mount(revision([file()]));
+  near("source.ts");
+  const rendered = await screen.findByTestId("rendered-diff");
+  expect(rendered.getAttribute("data-style")).toBe("split");
+  act(() => resizePane(0));
+  expect(rendered.getAttribute("data-style")).toBe("split");
+  act(() => resizePane(600));
+  expect(rendered.getAttribute("data-style")).toBe("unified");
+  act(() => resizePane(0));
+  expect(rendered.getAttribute("data-style")).toBe("unified");
+  expect(screen.getByTestId("rendered-diff")).toBe(rendered);
+  act(() => resizePane(900));
+  expect(rendered.getAttribute("data-style")).toBe("split");
+});
+
+test("a diff starting hidden waits for its first positive measurement then mounts its files", async () => {
+  paneWidth = 0;
+  await mount(revision([file()]));
+  expect(screen.queryByTestId("rendered-diff")).toBeNull();
+  expect(renderer.fileStyles).toEqual([]);
+  act(() => resizePane(0));
+  expect(screen.queryByTestId("rendered-diff")).toBeNull();
+  act(() => resizePane(900));
+  near("source.ts");
+  expect((await screen.findByTestId("rendered-diff")).getAttribute("data-style")).toBe("split");
 });

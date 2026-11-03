@@ -72,6 +72,7 @@ const revision = (files: FileView[], threads: ThreadView[], title = "Topic"): Re
 let client: QueryClient;
 let callbacks: Map<Element, (entries: Partial<IntersectionObserverEntry>[]) => void>;
 let fetchMock: ReturnType<typeof vi.fn>;
+const originalBounds = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "getBoundingClientRect");
 function Pane({ parser = parsePair }: { parser?: DiffParser }) {
   const { data } = useQuery<RevisionView>({ queryKey: ["test-revision"], staleTime: Infinity, enabled: false });
   return data && <DiffPane reviewId={reviewId} revision={data} parser={parser} />;
@@ -94,6 +95,15 @@ function near(path: string, value = true) {
   act(() => callbacks.get(section)?.([{ isIntersecting: value, target: section }]));
 }
 beforeEach(() => {
+  // These visibility tests need a visible pane; zero-width behavior has dedicated coverage.
+  const bounds = HTMLElement.prototype.getBoundingClientRect;
+  Object.defineProperty(HTMLElement.prototype, "getBoundingClientRect", {
+    configurable: true,
+    writable: true,
+    value(this: HTMLElement) {
+      return this.classList.contains("em-diff-pane") ? new DOMRect(0, 0, 600, 600) : bounds.call(this);
+    },
+  });
   renderer.props = undefined;
   localStorage.clear();
   window.dispatchEvent(new StorageEvent("storage", { key: null, storageArea: localStorage }));
@@ -189,7 +199,7 @@ test.each([
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
       return this.classList.contains("em-diff-pane") ? new DOMRect(0, 0, 1200, 600) : bounds.call(this);
     });
-    localStorage.setItem("emend.diff.layout", style);
+    localStorage.setItem("emend.layout.v1", JSON.stringify({ diffStyle: style }));
     fetchMock.mockImplementation(
       async (path: string) =>
         new Response(
@@ -258,6 +268,7 @@ afterEach(() => {
   cleanup();
   client.clear();
   vi.restoreAllMocks();
+  if (originalBounds) Object.defineProperty(HTMLElement.prototype, "getBoundingClientRect", originalBounds);
   vi.unstubAllGlobals();
 });
 test.each([false, true])("identical rename preserves line thread under the header (split=%s)", async (split) => {

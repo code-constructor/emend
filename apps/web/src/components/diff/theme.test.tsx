@@ -7,6 +7,7 @@ import { parsePair } from "./parse.worker.ts";
 import { diffTheme, syntaxVariables } from "./theme.ts";
 
 const stylesheet = readFileSync(resolve(import.meta.dirname, "../../styles/diff.css"), "utf8");
+const typography = readFileSync(resolve(import.meta.dirname, "../../styles/typography.css"), "utf8");
 const installed = readFileSync(
   resolve(import.meta.dirname, "../../../node_modules/@pierre/diffs/dist/style.js"),
   "utf8",
@@ -64,7 +65,7 @@ test.each(["light", "dark"])("real diff host uses the verified token overrides i
     ]),
   );
   // Happy DOM does not apply cascade layers; preserve the actual selectors/declarations.
-  style.textContent = stylesheet.replace("@layer components {", "").replace(/}\s*$/, "");
+  style.textContent = typography + stylesheet.replace("@layer components {", "").replace(/}\s*$/, "");
   document.head.append(style);
   try {
     const value = parsePair({ oldFile: null, newFile: { name: "theme.ts", contents: "const value = true;\n" } });
@@ -87,7 +88,7 @@ test.each(["light", "dark"])("real diff host uses the verified token overrides i
     for (const name of ["--diffs-font-family", "--diffs-font-size", "--diffs-line-height"])
       expect(installed).toContain(name);
     expect(computed.getPropertyValue("--diffs-font-family").trim()).toBe("monospace");
-    expect(computed.getPropertyValue("--diffs-font-size").trim()).toBe("1em");
+    expect(computed.getPropertyValue("--diffs-font-size").trim()).toBe("12px");
     expect(computed.getPropertyValue("--diffs-line-height").trim()).toBe("1lh");
     expect(host.style.colorScheme).toBe("inherit");
     expect(stylesheet).toContain("font: var(--type-code)");
@@ -99,6 +100,18 @@ test.each(["light", "dark"])("real diff host uses the verified token overrides i
     expect(host.shadowRoot?.querySelector("pre")?.getAttribute("data-overflow")).toBe("scroll");
     expect(host.shadowRoot?.querySelector("style[data-unsafe-css]")?.textContent).toContain(
       "background: var(--bg-sunken)",
+    );
+    const line = host.shadowRoot?.querySelector("[data-line]");
+    const wrapper = container.firstElementChild as HTMLElement;
+    wrapper.style.setProperty("--reader-code-size", "14px");
+    expect(getComputedStyle(host).getPropertyValue("--diffs-font-size").trim()).toBe("14px");
+    wrapper.style.removeProperty("--reader-code-size");
+    wrapper.style.setProperty("--type-code-size", "11px");
+    expect(getComputedStyle(host).getPropertyValue("--diffs-font-size").trim()).toBe("11px");
+    expect(getComputedStyle(host).getPropertyValue("--type-code")).toContain("11px");
+    expect(host.shadowRoot?.querySelector("[data-line]")).toBe(line);
+    expect(host.shadowRoot?.querySelector("style[data-unsafe-css]")?.textContent).toContain(
+      "font-size: calc(var(--diffs-font-size) - 1px)",
     );
   } finally {
     style.remove();
@@ -193,5 +206,28 @@ test("Markdown headings, bold, code, links and list markers share the calm palet
         .find((span) => span.textContent?.trim() === text)
         ?.getAttribute("style"),
     ).toContain(`--diffs-${variable}`);
+  }
+});
+
+test("prose defaults and reader overrides resolve through the semantic size token", () => {
+  const style = document.createElement("style");
+  style.textContent = typography;
+  document.head.append(style);
+  try {
+    const { container } = render(
+      <div className="em-app">
+        <p>Read the synthetic writeup</p>
+      </div>,
+    );
+    const root = container.firstElementChild as HTMLElement;
+    expect(getComputedStyle(root).getPropertyValue("--type-prose")).toContain("16px");
+    root.style.setProperty("--type-prose-size", "17px");
+    expect(getComputedStyle(root).getPropertyValue("--type-prose")).toContain("17px");
+    root.style.setProperty("--reader-prose-size", "18px");
+    expect(getComputedStyle(root).getPropertyValue("--type-prose")).toContain("18px");
+    root.style.removeProperty("--reader-prose-size");
+    expect(getComputedStyle(root).getPropertyValue("--type-prose")).toContain("17px");
+  } finally {
+    style.remove();
   }
 });

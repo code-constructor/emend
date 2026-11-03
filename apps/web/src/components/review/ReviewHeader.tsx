@@ -9,6 +9,7 @@ import { Banner } from "../ui/Banner.tsx";
 import { Button } from "../ui/Button.tsx";
 import { Icon } from "../ui/Icon.tsx";
 import { cn } from "../ui/utils.ts";
+import { LayoutControls } from "./LayoutControls.tsx";
 import { RevisionPicker } from "./RevisionPicker.tsx";
 
 export function ReviewHeader({
@@ -44,18 +45,21 @@ export function ReviewHeader({
         phone ? "px-4 py-3" : "px-5 pt-3 pb-2.5",
       )}
     >
-      <div className="flex items-start gap-3">
+      <div className="flex flex-wrap items-start gap-3">
         <h1
           ref={titleRef}
           tabIndex={-1}
-          className="m-0 min-w-0 flex-1 text-pretty wrap-anywhere text-[17px] font-semibold leading-[1.3] tracking-[-0.01em] text-fg-1"
+          className="m-0 min-w-0 flex-[1_1_240px] text-pretty wrap-anywhere text-[17px] font-semibold leading-[1.3] tracking-[-0.01em] text-fg-1"
         >
           {review.title}
         </h1>
         {!phone && (
-          <Button variant="ghost" size="sm" icon={MessageSquarePlus} disabled={!revision} onClick={onCommentReview}>
-            Comment on review
-          </Button>
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            <Button variant="ghost" size="sm" icon={MessageSquarePlus} disabled={!revision} onClick={onCommentReview}>
+              Comment on review
+            </Button>
+            <LayoutControls />
+          </div>
         )}
       </div>
       <div className="flex flex-wrap items-center gap-2 text-fg-3 [font:var(--type-meta)]">

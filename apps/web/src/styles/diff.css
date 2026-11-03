@@ -130,8 +130,7 @@
     --diffs-bg-selection-override: var(--diff-select-bg);
     --diffs-fg-number-override: var(--fg-3);
     --diffs-font-family: var(--font-mono);
-    /* Resolve against --type-code on the wrapper, without duplicating its metrics. */
-    --diffs-font-size: 1em;
+    --diffs-font-size: var(--reader-code-size, var(--type-code-size));
     --diffs-line-height: 1lh;
   }
   .em-diff-comment {

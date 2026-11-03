@@ -1008,3 +1008,60 @@ test.each([false, true])("long menus use available height and scroll vertically 
   expect(menu.classList.contains("relative")).toBe(true);
   expect(within(menu).getAllByRole(radio ? "menuitemradio" : "menuitem")).toHaveLength(150);
 });
+
+function TextSizeMenuExample() {
+  const [prose, setProse] = useState("16");
+  const [code, setCode] = useState("13");
+  return (
+    <Menu
+      label="Text size"
+      items={[
+        { heading: "Writeup and docs" },
+        {
+          radioGroup: {
+            segmented: true,
+            label: "Writeup and docs",
+            value: prose,
+            onValueChange: setProse,
+            items: [15, 16, 17, 18].map((size) => ({ value: String(size), label: `${size} px` })),
+          },
+        },
+        { heading: "Code in diffs" },
+        {
+          radioGroup: {
+            segmented: true,
+            label: "Code in diffs",
+            value: code,
+            onValueChange: setCode,
+            items: [11, 12, 13, 14].map((size) => ({ value: String(size), label: `${size} px` })),
+          },
+        },
+      ]}
+    />
+  );
+}
+
+test("text menu row navigation keeps focus after deferred Radix handlers and starts from the focused option", async () => {
+  mount(<TextSizeMenuExample />);
+  fireEvent.keyDown(screen.getByRole("button", { name: "Text size" }), { key: "ArrowDown" });
+  await screen.findByRole("menu");
+  vi.useFakeTimers();
+  const option = (size: number) => screen.getByRole("menuitemradio", { name: `${size} px` });
+  // Focus and selection differ when moving through the menu without choosing a value.
+  act(() => option(15).focus());
+  fireEvent.keyDown(option(15), { key: "ArrowRight" });
+  await act(() => vi.advanceTimersByTimeAsync(1));
+  expect(document.activeElement).toBe(option(16));
+  expect(option(16).getAttribute("aria-checked")).toBe("true");
+  fireEvent.keyDown(option(16), { key: "End" });
+  await act(() => vi.advanceTimersByTimeAsync(1));
+  expect(document.activeElement).toBe(option(18));
+  expect(option(18).getAttribute("aria-checked")).toBe("true");
+  fireEvent.keyDown(option(18), { key: "Home" });
+  await act(() => vi.advanceTimersByTimeAsync(1));
+  expect(document.activeElement).toBe(option(15));
+  fireEvent.keyDown(option(15), { key: "ArrowLeft" });
+  await act(() => vi.advanceTimersByTimeAsync(1));
+  expect(document.activeElement).toBe(option(18));
+  expect(option(13).getAttribute("aria-checked")).toBe("true");
+});

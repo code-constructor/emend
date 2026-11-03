@@ -1,0 +1,34 @@
+@layer components {
+  .em-resize-handle {
+    position: relative;
+    z-index: 1;
+    flex: 0 0 var(--resize-handle-width);
+    align-self: stretch;
+    cursor: col-resize;
+    touch-action: none;
+  }
+  .em-resize-handle::before {
+    content: "";
+    position: absolute;
+    inset: 0 auto 0 calc((var(--resize-handle-width) - 1px) / 2);
+    width: 1px;
+    background: var(--border-1);
+  }
+  .em-resize-handle:hover::before,
+  .em-resize-handle:focus::before,
+  .em-resize-handle[data-active]::before {
+    left: calc((var(--resize-handle-width) - 3px) / 2);
+    width: 3px;
+    background: var(--accent);
+  }
+  body.em-resizing,
+  body.em-resizing * {
+    /* biome-ignore lint/complexity/noImportantStyles: A captured drag overrides controls beneath the pointer. */
+    cursor: col-resize !important;
+    /* biome-ignore lint/complexity/noImportantStyles: Suppress selection throughout the captured drag. */
+    user-select: none !important;
+  }
+  body.em-resizing iframe {
+    pointer-events: none;
+  }
+}

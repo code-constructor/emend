@@ -1,5 +1,8 @@
 export const diffShadowCSS = `
 /* Trusted app CSS passed to Pierre's shadow root; never derived from reviewed text. */
+[data-column-number] {
+  font-size: calc(var(--diffs-font-size) - 1px);
+}
 [data-line-type="change-addition"] {
   --diffs-computed-diff-line-bg: var(--diff-add-bg);
 }

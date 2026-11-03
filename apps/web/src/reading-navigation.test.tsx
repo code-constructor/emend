@@ -124,7 +124,17 @@ let revisionReply: Promise<Response> | undefined;
 let width = 1280;
 let client: QueryClient;
 let loaded: ReturnType<typeof Promise.withResolvers<void>>;
+const originalBounds = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "getBoundingClientRect");
 beforeEach(() => {
+  // Happy DOM has no layout; dedicated diff tests control positive and hidden measurements.
+  const bounds = HTMLElement.prototype.getBoundingClientRect;
+  Object.defineProperty(HTMLElement.prototype, "getBoundingClientRect", {
+    configurable: true,
+    writable: true,
+    value(this: HTMLElement) {
+      return this.classList.contains("em-diff-pane") ? new DOMRect(0, 0, 900, 600) : bounds.call(this);
+    },
+  });
   client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   width = 1280;
   currentRevision = structuredClone(revision);
@@ -161,6 +171,7 @@ afterEach(async () => {
   client.clear();
   await (window as unknown as Window).happyDOM.abort();
   vi.restoreAllMocks();
+  if (originalBounds) Object.defineProperty(HTMLElement.prototype, "getBoundingClientRect", originalBounds);
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
@@ -191,7 +202,7 @@ test.each([1280, 768, 390])("Files in diff waits for lazy rendering and scrolls 
   await waitFor(() =>
     expect(scroll.mock.calls.some(([node]) => (node as HTMLElement).id === "diff-topic-seed")).toBe(true),
   );
-  if (pixels >= 768) {
+  if (pixels >= 1280) {
     expect(container.querySelector("[data-block-id]")).toBe(block);
     expect(screen.getByTestId("reading-pane")).toBe(reading);
     expect(reading.scrollTop).toBe(80);
@@ -202,9 +213,16 @@ test.each([1280, 768, 390])("Files in diff waits for lazy rendering and scrolls 
       expect(scroll.mock.calls.some(([node]) => (node as HTMLElement).id === "diff-topic-seed")).toBe(true),
     );
   } else {
-    expect(screen.queryByTestId("reading-pane")).toBeNull();
-    expect(screen.getByRole("link", { name: "Diff" }).getAttribute("aria-current")).toBe("page");
-    expect(screen.queryByRole("tabpanel")).toBeNull();
+    if (pixels < 768) {
+      expect(screen.queryByTestId("reading-pane")).toBeNull();
+      expect(screen.getByRole("link", { name: "Diff" }).getAttribute("aria-current")).toBe("page");
+      expect(screen.queryByRole("tabpanel")).toBeNull();
+    } else {
+      expect(screen.getByTestId("reading-pane")).toBe(reading);
+      expect(reading.hidden).toBe(true);
+      expect(screen.getByRole("tab", { name: "Diff" }).getAttribute("aria-selected")).toBe("true");
+      expect(screen.getByRole("tabpanel", { name: "Diff" })).toBeTruthy();
+    }
   }
 });
 
@@ -230,9 +248,10 @@ test.each([1280, 768])(
     expect(docs.getAttribute("aria-selected")).toBe("true");
     expect(writeup.tabIndex).toBe(-1);
     fireEvent.keyDown(docs, { key: "End" });
-    await waitFor(() => expect(history.location.search).toContain("tab=comments"));
-    expect(document.activeElement).toBe(comments);
-    fireEvent.keyDown(comments, { key: "ArrowRight" });
+    const last = pixels < 1280 ? tabs.getByRole("tab", { name: "Diff" }) : comments;
+    await waitFor(() => expect(history.location.search).toContain(pixels < 1280 ? "tab=diff" : "tab=comments"));
+    expect(document.activeElement).toBe(last);
+    fireEvent.keyDown(last, { key: "ArrowRight" });
     await waitFor(() => expect(history.location.search).toContain("tab=writeup"));
     expect(screen.getByRole("tabpanel").getAttribute("aria-labelledby")).toBe(writeup.id);
   },
@@ -428,7 +447,7 @@ test.each(["row", "rail"])(
   async (entry) => {
     docsFixture();
     currentRevision.main = gardenDoc.path;
-    if (entry === "rail") localStorage.setItem("emend.inbox.collapsed", "true");
+    if (entry === "rail") localStorage.setItem("emend.layout.v1", JSON.stringify({ inboxCollapsed: true }));
     const { history } = mount();
     await screen.findByText("Keep growing");
     const inboxLink = () =>
@@ -1578,11 +1597,11 @@ test.each([1280, 768, 390])(
   "R8 Writeup links follow pane visibility at %s px and use reading navigation",
   async (pixels) => {
     width = pixels;
-    const { history } = mount(pixels === 390 ? "?tab=diff&rev=1" : "?tab=writeup&rev=1");
+    const { history } = mount(pixels < 1280 ? "?tab=diff&rev=1" : "?tab=writeup&rev=1");
     await act(async () => loaded.resolve());
     const diff = within(await screen.findByTestId("diff-pane"));
     await diff.findByRole("heading", { name: "Plant a seed" });
-    if (pixels !== 390) {
+    if (pixels >= 1280) {
       expect(diff.queryByRole("link", { name: "Writeup" })).toBeNull();
       fireEvent.click(screen.getByRole("tab", { name: "Comments 2" }));
     }
@@ -2158,4 +2177,62 @@ test("glossary fold choice survives a tab switch and resets for a new revision",
   expect((await screen.findByText("Glossary · 0 terms")).closest("details")?.open).toBe(true);
   await act(async () => history.push(`/r/${id}?tab=writeup&rev=2`));
   await waitFor(() => expect(screen.getByText("Glossary · 0 terms").closest("details")?.open).toBe(false));
+});
+
+test("Tabs preserves reading scroll, expanded regions and selection through Writeup to Diff to Writeup", async () => {
+  width = 900;
+  currentRevision.topics = currentRevision.topics.map((topic) => ({ ...topic, attention: "skim" }));
+  mount();
+  const expand = await screen.findByRole("button", { name: "Topic 1: Plant a seed", expanded: false });
+  fireEvent.click(expand);
+  await act(async () => loaded.resolve());
+  const reading = screen.getByTestId("reading-pane");
+  const text = within(reading).getByText("Keep growing").firstChild;
+  if (!text) throw new Error("Missing reading text");
+  const selection = document.getSelection();
+  const range = document.createRange();
+  range.selectNodeContents(text);
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+  reading.scrollTop = 180;
+  const diff = screen.getByTestId("diff-pane");
+  fireEvent.click(screen.getByRole("tab", { name: "Diff" }));
+  await waitFor(() => expect(reading.hidden).toBe(true));
+  expect(screen.getByTestId("reading-pane")).toBe(reading);
+  expect(diff.hidden).toBe(false);
+  const collapse = within(diff).getByRole("button", { name: "Collapse topic" });
+  fireEvent.click(collapse);
+  diff.scrollTop = 240;
+  fireEvent.click(screen.getByRole("tab", { name: "Writeup" }));
+  await waitFor(() => expect(reading.hidden).toBe(false));
+  expect(screen.getByTestId("reading-pane")).toBe(reading);
+  expect(reading.scrollTop).toBe(180);
+  expect(within(reading).getByText("Keep growing").firstChild).toBe(text);
+  expect(selection?.anchorNode).toBe(text);
+  expect(expand.getAttribute("aria-expanded")).toBe("true");
+  expect(diff.hidden).toBe(true);
+  fireEvent.click(screen.getByRole("tab", { name: "Diff" }));
+  await waitFor(() => expect(diff.hidden).toBe(false));
+  expect(screen.getByTestId("diff-pane")).toBe(diff);
+  expect(diff.scrollTop).toBe(240);
+  expect(within(diff).getByRole("button", { name: "Expand topic" })).toBe(collapse);
+  selection?.removeAllRanges();
+});
+
+test("Tabs retains the selected doc while Diff is visible and gives each panel a unique id", async () => {
+  width = 900;
+  const { container } = mount("?tab=docs&doc=seed.md&rev=1");
+  const heading = await screen.findByRole("heading", { name: "seed.md" });
+  const reading = screen.getByTestId("reading-pane");
+  reading.scrollTop = 90;
+  fireEvent.click(screen.getByRole("tab", { name: "Diff" }));
+  await waitFor(() => expect(reading.hidden).toBe(true));
+  expect(reading.contains(heading)).toBe(true);
+  const panels = [...container.querySelectorAll('[role="tabpanel"]')];
+  expect(panels).toHaveLength(2);
+  expect(new Set(panels.map((panel) => panel.id)).size).toBe(2);
+  fireEvent.click(screen.getByRole("tab", { name: "Docs 2" }));
+  await waitFor(() => expect(reading.hidden).toBe(false));
+  expect(screen.getByRole("heading", { name: "seed.md" })).toBe(heading);
+  expect(reading.scrollTop).toBe(90);
 });

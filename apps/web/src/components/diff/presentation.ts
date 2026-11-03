@@ -1,4 +1,5 @@
 import { type RefObject, useLayoutEffect, useState } from "react";
+import { layoutStore, useLayoutPreferences } from "../../lib/layout-store.ts";
 import type { ParsedDiff } from "./FileDiff.tsx";
 
 export type DiffStyle = "split" | "unified";
@@ -15,47 +16,13 @@ export function diffCounts(diff: ParsedDiff): DiffCounts {
 }
 
 export function useDiffStyle() {
-  const key = "emend.diff.layout";
-  const [style, setStyle] = useState<DiffStyle>(() => {
-    try {
-      return localStorage.getItem(key) === "unified" ? "unified" : "split";
-    } catch {
-      return "split";
-    }
-  });
-  return [
-    style,
-    (next: DiffStyle) => {
-      setStyle(next);
-      try {
-        localStorage.setItem(key, next);
-      } catch {
-        /* Storage may be disabled. */
-      }
-    },
-  ] as const;
+  const { diffStyle } = useLayoutPreferences();
+  return [diffStyle, (next: DiffStyle) => layoutStore.update({ diffStyle: next })] as const;
 }
 
 export function useDiffWrap() {
-  const key = "emend.diff.wrap";
-  const [wrap, setWrap] = useState(() => {
-    try {
-      return localStorage.getItem(key) === "true";
-    } catch {
-      return false;
-    }
-  });
-  return [
-    wrap,
-    (next: boolean) => {
-      setWrap(next);
-      try {
-        localStorage.setItem(key, String(next));
-      } catch {
-        /* Storage may be disabled. */
-      }
-    },
-  ] as const;
+  const { wrap } = useLayoutPreferences();
+  return [wrap, (next: boolean) => layoutStore.update({ wrap: next })] as const;
 }
 
 export function useNarrowDiffPane(root: RefObject<HTMLElement | null>) {
@@ -70,7 +37,11 @@ export function useNarrowDiffPane(root: RefObject<HTMLElement | null>) {
       return;
     }
     // Use the same border-box width initially and on every resize notification.
-    const measure = () => setNarrow(pane.getBoundingClientRect().width < 760);
+    const measure = () => {
+      const width = pane.getBoundingClientRect().width;
+      // Hidden Tabs panes retain their last presentation until shown and measured again.
+      if (width > 0) setNarrow(width < 760);
+    };
     measure();
     const observer = new ResizeObserver((entries) => {
       if (entries.some((entry) => entry.target === pane)) measure();

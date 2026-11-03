@@ -9,6 +9,7 @@
 @import "./styles/reading.css";
 @import "./styles/threads.css";
 @import "./styles/diff.css";
+@import "./styles/layout.css";
 
 @layer components {
   @media (prefers-reduced-motion: no-preference) {
