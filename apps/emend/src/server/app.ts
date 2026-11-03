@@ -70,6 +70,7 @@ export const ENDPOINTS = [
   { method: "GET", path: "/api/v1/reviews/:id/revisions/:seq", scope: "read" },
   { method: "GET", path: "/api/v1/files/:fileId/old", scope: "read" },
   { method: "GET", path: "/api/v1/files/:fileId/new", scope: "read" },
+  { method: "GET", path: "/api/v1/events", scope: "read" },
   { method: "GET", path: "/api/v1/reviews/:id/events", scope: "read" },
   { method: "POST", path: "/api/v1/reviews/:id/threads", scope: "comment" },
   { method: "POST", path: "/api/v1/threads/:id/comments", scope: "comment" },

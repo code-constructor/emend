@@ -5,8 +5,11 @@ import { deliveries, devices, reviews, revisions, sends, tokens } from "../db/sc
 import { error, mailboxFixture } from "./mailbox/test-support.ts";
 
 let f: Awaited<ReturnType<typeof mailboxFixture>>;
+let emitted: string[];
 beforeEach(async () => {
   f = await mailboxFixture();
+  emitted = [];
+  f.deps.events?.subscribe(f.ownerId, null, (event) => emitted.push(event.type));
 });
 afterEach(async () => {
   vi.useRealTimers();
@@ -21,6 +24,7 @@ const invalidate = (kind: "agent" | "reviewer", field: "revokedAt" | "expiresAt"
       .where(and(eq(tokens.ownerId, f.ownerId), eq(tokens.kind, kind))),
   );
 async function noClaims() {
+  expect(emitted).not.toContain("claimed");
   expect(await f.db.read((q) => q.select().from(deliveries).where(eq(deliveries.ownerId, f.ownerId)))).toHaveLength(0);
   expect(
     (await f.db.read((q) => q.select().from(sends).where(eq(sends.ownerId, f.ownerId)))).every(
@@ -35,7 +39,7 @@ test.each(["revokedAt", "expiresAt"] as const)(
     const controller = new AbortController();
     const waiting = f.request(`/reviews/${f.reviewId}/take`, "POST", { waitSeconds: 10 }, "agent", controller.signal);
     try {
-      await vi.waitFor(() => expect(f.deps.events?.agentWaiting(f.reviewId)).toBe(true));
+      await vi.waitFor(() => expect(f.deps.events?.agentWaiting(f.ownerId, f.reviewId)).toBe(true));
       await invalidate("agent", field);
       await f.send({ revision: 1, kind: "go", instruction: "Do not expose this instruction" });
       await error(await waiting, 401, "unauthorized");
@@ -50,7 +54,7 @@ test("the final credential check releases an unreturned claim", async () => {
   const controller = new AbortController();
   const waiting = f.request(`/reviews/${f.reviewId}/take`, "POST", { waitSeconds: 10 }, "agent", controller.signal);
   try {
-    await vi.waitFor(() => expect(f.deps.events?.agentWaiting(f.reviewId)).toBe(true));
+    await vi.waitFor(() => expect(f.deps.events?.agentWaiting(f.ownerId, f.reviewId)).toBe(true));
     const transaction = f.db.transaction;
     f.db.transaction = async (operation, options) => {
       const result = await transaction(operation, options);
@@ -73,7 +77,7 @@ test("a token revoked while the second take queues cannot start a claim", async 
   const waiting = f.request(`/reviews/${f.reviewId}/take`, "POST", { waitSeconds: 10 }, "agent", controller.signal);
   let claims = 0;
   try {
-    await vi.waitFor(() => expect(f.deps.events?.agentWaiting(f.reviewId)).toBe(true));
+    await vi.waitFor(() => expect(f.deps.events?.agentWaiting(f.ownerId, f.reviewId)).toBe(true));
     const transaction = f.db.transaction;
     let calls = 0;
     f.db.transaction = async (operation, options) => {
@@ -98,33 +102,40 @@ test("a token revoked while the second take queues cannot start a claim", async 
     await waiting;
   }
 });
-test.each(["revokedAt", "expiresAt", "device"] as const)(
-  "SSE ends at the keepalive after session %s",
-  async (field) => {
-    vi.useFakeTimers();
-    const controller = new AbortController();
-    const response = await f.request(`/reviews/${f.reviewId}/events`, "GET", undefined, "reviewer", controller.signal);
-    const reader = response.body?.getReader();
-    if (!reader) throw new Error("missing body");
-    try {
-      await reader.read();
-      if (field === "device")
-        await f.db.query((q) =>
-          q
-            .update(devices)
-            .set({ revokedAt: f.deps.now() })
-            .where(and(eq(devices.ownerId, f.ownerId), eq(devices.kind, "browser"))),
-        );
-      else await invalidate("reviewer", field);
-      f.advance(25000);
-      await vi.advanceTimersByTimeAsync(25000);
-      expect(await reader.read()).toEqual({ done: true, value: undefined });
-    } finally {
-      controller.abort();
-      await reader.cancel();
-    }
-  },
-);
+test.each(
+  (["revokedAt", "expiresAt", "device"] as const).flatMap((field) =>
+    (["review", "owner"] as const).map((scope) => ({ field, scope })),
+  ),
+)("$scope SSE ends at the keepalive after session $field", async ({ field, scope }) => {
+  vi.useFakeTimers();
+  const controller = new AbortController();
+  const response = await f.request(
+    scope === "owner" ? "/events" : `/reviews/${f.reviewId}/events`,
+    "GET",
+    undefined,
+    "reviewer",
+    controller.signal,
+  );
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("missing body");
+  try {
+    await reader.read();
+    if (field === "device")
+      await f.db.query((q) =>
+        q
+          .update(devices)
+          .set({ revokedAt: f.deps.now() })
+          .where(and(eq(devices.ownerId, f.ownerId), eq(devices.kind, "browser"))),
+      );
+    else await invalidate("reviewer", field);
+    f.advance(25000);
+    await vi.advanceTimersByTimeAsync(25000);
+    expect(await reader.read()).toEqual({ done: true, value: undefined });
+  } finally {
+    controller.abort();
+    await reader.cancel();
+  }
+});
 test("only 32 takes per owner may wait and abort releases their slots", async () => {
   const events = f.deps.events;
   if (!events) throw new Error("missing events");

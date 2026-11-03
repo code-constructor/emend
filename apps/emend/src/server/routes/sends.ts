@@ -14,7 +14,7 @@ export function sendRoutes(app: Hono<AppEnv>, deps: AppDeps) {
       parseBody(c, SendRequest),
       deps.now(),
     );
-    deps.events?.emit({ type: "send", ...result });
+    deps.events?.emit(c.get("principal").ownerId, { type: "send", ...result });
     return c.json({ sendId: result.sendId }, 201);
   });
 }

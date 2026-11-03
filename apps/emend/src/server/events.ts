@@ -1,24 +1,38 @@
 import { LIMITS, ReviewEvent } from "@emend/contract";
 import { ApiError } from "./http/errors.ts";
 
+const ownedKey = (ownerId: string, id: string) => `${ownerId}\0${id}`;
+
 type Listener = (event: ReviewEvent) => void;
-type Waiting = { active: number; revision: number; until: number; timer?: ReturnType<typeof setTimeout> };
+type Waiting = {
+  ownerId: string;
+  active: number;
+  revision: number;
+  until: number;
+  timer?: ReturnType<typeof setTimeout>;
+};
 
 export class ReviewEvents {
-  private listeners = new Map<string, Set<Listener>>();
+  private listeners = new Map<string, Map<string | null, Set<Listener>>>();
   private waiting = new Map<string, Waiting>();
   private streams = new Map<string, number>();
+  private sessions = new Map<string, Set<() => void>>();
   private waitingByOwner = new Map<string, number>();
   private now: () => number;
   constructor(now: () => number) {
     this.now = now;
   }
 
-  subscribe(reviewId: string, listener: Listener) {
-    let listeners = this.listeners.get(reviewId);
+  subscribe(ownerId: string, reviewId: string | null, listener: Listener) {
+    let reviews = this.listeners.get(ownerId);
+    if (!reviews) {
+      reviews = new Map();
+      this.listeners.set(ownerId, reviews);
+    }
+    let listeners = reviews.get(reviewId);
     if (!listeners) {
       listeners = new Set();
-      this.listeners.set(reviewId, listeners);
+      reviews.set(reviewId, listeners);
     }
     listeners.add(listener);
     let subscribed = true;
@@ -26,36 +40,38 @@ export class ReviewEvents {
       if (!subscribed) return;
       subscribed = false;
       listeners.delete(listener);
-      if (!listeners.size) this.listeners.delete(reviewId);
+      if (!listeners.size) reviews.delete(reviewId);
+      if (!reviews.size) this.listeners.delete(ownerId);
     };
   }
-  emit(value: ReviewEvent) {
+  emit(ownerId: string, value: ReviewEvent) {
     // Strip any accidental content fields even when the caller isn't type checked.
     const event = ReviewEvent.parse(value);
-    const waiting = this.waiting.get(event.reviewId);
-    if (waiting) waiting.revision = Math.max(waiting.revision, event.revision);
-    for (const listener of [...(this.listeners.get(event.reviewId) ?? [])]) listener(event);
+    const waiting = this.waiting.get(ownedKey(ownerId, event.reviewId));
+    if (waiting?.ownerId === ownerId) waiting.revision = Math.max(waiting.revision, event.revision);
+    const reviews = this.listeners.get(ownerId);
+    for (const listener of [...(reviews?.get(null) ?? []), ...(reviews?.get(event.reviewId) ?? [])]) listener(event);
   }
-  agentWaiting(reviewId: string) {
-    const state = this.waiting.get(reviewId);
+  agentWaiting(ownerId: string, reviewId: string) {
+    const state = this.waiting.get(ownedKey(ownerId, reviewId));
     if (!state) return false;
     if (state.active || state.until > this.now()) return true;
     clearTimeout(state.timer);
-    this.waiting.delete(reviewId);
-    this.emit({ type: "waiting", reviewId, revision: state.revision });
+    this.waiting.delete(ownedKey(ownerId, reviewId));
+    this.emit(state.ownerId, { type: "waiting", reviewId, revision: state.revision });
     return false;
   }
   beginWaiting(ownerId: string, reviewId: string, revision: number) {
     const count = this.waitingByOwner.get(ownerId) ?? 0;
     if (count >= LIMITS.waitingTakesPerOwner) throw new ApiError("rate_limited", "waiting_takes");
     this.waitingByOwner.set(ownerId, count + 1);
-    const wasWaiting = this.agentWaiting(reviewId);
-    const state = this.waiting.get(reviewId) ?? { active: 0, revision, until: 0 };
+    const wasWaiting = this.agentWaiting(ownerId, reviewId);
+    const state = this.waiting.get(ownedKey(ownerId, reviewId)) ?? { ownerId, active: 0, revision, until: 0 };
     clearTimeout(state.timer);
     state.active++;
     state.revision = Math.max(state.revision, revision);
-    this.waiting.set(reviewId, state);
-    if (!wasWaiting) this.emit({ type: "waiting", reviewId, revision: state.revision });
+    this.waiting.set(ownedKey(ownerId, reviewId), state);
+    if (!wasWaiting) this.emit(ownerId, { type: "waiting", reviewId, revision: state.revision });
     let ended = false;
     return () => {
       if (ended) return;
@@ -67,7 +83,7 @@ export class ReviewEvents {
       if (!state.active) {
         state.until = this.now() + 35000;
         const expire = () => {
-          if (this.agentWaiting(reviewId) && !state.active) {
+          if (this.agentWaiting(ownerId, reviewId) && !state.active) {
             state.timer = setTimeout(expire, Math.max(1, state.until - this.now()));
             state.timer.unref();
           }
@@ -77,10 +93,10 @@ export class ReviewEvents {
       }
     };
   }
-  waitForSend(reviewId: string, seconds: number, signal?: AbortSignal) {
+  waitForSend(ownerId: string, reviewId: string, seconds: number, signal?: AbortSignal) {
     let finish = () => {};
     const promise = new Promise<void>((resolve) => {
-      const unsubscribe = this.subscribe(reviewId, (event) => {
+      const unsubscribe = this.subscribe(ownerId, reviewId, (event) => {
         if (event.type === "send") finish();
       });
       const timer = setTimeout(() => finish(), seconds * 1000);
@@ -95,9 +111,13 @@ export class ReviewEvents {
     });
     return { promise, cancel: () => finish() };
   }
+  closeSession(ownerId: string, tokenId: string) {
+    for (const stop of [...(this.sessions.get(ownedKey(ownerId, tokenId)) ?? [])]) stop();
+  }
   stream(
     ownerId: string,
-    reviewId: string,
+    reviewId: string | null,
+    tokenId: string,
     signal?: AbortSignal,
     isLive: () => Promise<boolean> = async () => true,
   ): ReadableStream<Uint8Array> {
@@ -110,13 +130,15 @@ export class ReviewEvents {
       {
         start: (controller) => {
           let closed = false;
-          const unsubscribe = this.subscribe(reviewId, (event) => {
+          let ready = false;
+          const unsubscribe = this.subscribe(ownerId, reviewId, (event) => {
             const { type, ...data } = event;
+            if (!ready) return;
             enqueue(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
           });
           let checking = false;
           const keepalive = async () => {
-            if (checking || closed) return;
+            if (checking || closed || !ready) return;
             checking = true;
             try {
               if (await isLive()) enqueue(": keepalive\n\n");
@@ -137,10 +159,19 @@ export class ReviewEvents {
               controller.close();
             }
           };
+          const sessionKey = ownedKey(ownerId, tokenId);
+          let stops = this.sessions.get(sessionKey);
+          if (!stops) {
+            stops = new Set();
+            this.sessions.set(sessionKey, stops);
+          }
+          stops.add(stop);
           cleanup = () => {
             if (closed) return;
             closed = true;
             unsubscribe();
+            stops.delete(stop);
+            if (!stops.size) this.sessions.delete(sessionKey);
             clearInterval(interval);
             signal?.removeEventListener("abort", stop);
             const remaining = (this.streams.get(ownerId) ?? 1) - 1;
@@ -156,7 +187,17 @@ export class ReviewEvents {
           };
           signal?.addEventListener("abort", stop, { once: true });
           if (signal?.aborted) stop();
-          else enqueue(": connected\n\n");
+          else
+            void isLive()
+              .then((live) => {
+                if (closed) return;
+                if (!live) stop();
+                else {
+                  ready = true;
+                  enqueue(": connected\n\n");
+                }
+              })
+              .catch(stop);
         },
         cancel: () => cleanup(),
       },

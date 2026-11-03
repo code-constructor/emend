@@ -154,7 +154,7 @@ test("ready Banner reloads the newer revision without changing on its own", () =
   const { onRevisionChange } = mount({ seq: 1, loaded: { ...revision, seq: 1 } });
   expect(screen.getByRole("status").textContent).toContain("Revision 2 is ready.");
   expect(onRevisionChange).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "Reload" }));
+  fireEvent.click(screen.getByRole("button", { name: "Show" }));
   expect(onRevisionChange).toHaveBeenCalledExactlyOnceWith(2);
 });
 

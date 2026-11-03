@@ -113,7 +113,7 @@ async function inbox(ownerId: string, q: Queries, deps: AppDeps, reviewId?: stri
     unsentCount: draftCounts.get(review.id) ?? 0,
     openThreads: openCounts.get(review.id) ?? 0,
     pendingSend: pendingIds.has(review.id),
-    agentWaiting: (deps.events?.agentWaiting(review.id) ?? false) || waitingIds.has(review.id),
+    agentWaiting: (deps.events?.agentWaiting(ownerId, review.id) ?? false) || waitingIds.has(review.id),
     updatedAt: new Date(review.updatedAt).toISOString(),
     movedTo: review.movedToUrl,
     importedAt: review.importedAt === null ? null : new Date(review.importedAt).toISOString(),

@@ -15,7 +15,7 @@ export function threadRoutes(app: Hono<AppEnv>, deps: AppDeps) {
       { blobs: deps.blobs, executor: deps.publishExecutor, signal: c.req.raw.signal },
       deps.now,
     );
-    deps.events?.emit({ type: "thread", ...result });
+    deps.events?.emit(c.get("principal").ownerId, { type: "thread", ...result });
     return c.json({ threadId: result.threadId, commentId: result.commentId }, 201);
   });
   app.post("/api/v1/threads/:id/comments", async (c) => {
@@ -26,7 +26,7 @@ export function threadRoutes(app: Hono<AppEnv>, deps: AppDeps) {
       parseBody(c, AddCommentRequest).body,
       deps.now(),
     );
-    deps.events?.emit({ type: "thread", ...result });
+    deps.events?.emit(c.get("principal").ownerId, { type: "thread", ...result });
     return c.json({ commentId: result.commentId }, 201);
   });
   for (const [path, action] of [
@@ -35,7 +35,7 @@ export function threadRoutes(app: Hono<AppEnv>, deps: AppDeps) {
   ] as const) {
     app.post(`/api/v1/threads/:id/${path}`, async (c) => {
       const result = await action(c.get("principal").ownerId, deps.db, c.req.param("id"), deps.now());
-      deps.events?.emit({ type: "thread", ...result });
+      deps.events?.emit(c.get("principal").ownerId, { type: "thread", ...result });
       return c.body(null, 204);
     });
   }

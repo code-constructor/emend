@@ -32,6 +32,16 @@ function cssUrls(css: string) {
   return matches.map((match) => match[2]?.trim() ?? "");
 }
 
+test("inbox arrival fades the accent tint for one second only when reduced motion is not requested", () => {
+  const css = readFileSync(join(webSource, "styles.css"), "utf8");
+  expect(css).toMatch(
+    /@media\s*\(prefers-reduced-motion:\s*no-preference\)\s*\{\s*\.em-inbox-new\s*\{\s*animation:\s*inbox-arrival 1s ease-out;/,
+  );
+  expect(css).toMatch(
+    /@keyframes inbox-arrival\s*\{\s*from\s*\{\s*background-color:\s*var\(--accent-tint\);\s*\}\s*to\s*\{\s*background-color:\s*transparent;/,
+  );
+});
+
 test("change bars define their base and continuation offsets in the components stylesheet", () => {
   const css = readFileSync(join(webSource, "styles/reading.css"), "utf8");
   expect(css).toMatch(/^@layer components\s*\{/);

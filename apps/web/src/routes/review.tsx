@@ -23,7 +23,7 @@ import { Button } from "../components/ui/Button.tsx";
 import { claimDraft } from "../lib/composer-owner.ts";
 import type { NavigateDiff } from "../lib/diff-navigation.ts";
 import { draftKey, hasDraft, type SavedDraft, saveDraft, subscribeDrafts } from "../lib/drafts.ts";
-import { useReviewEvents } from "../lib/events.ts";
+import { usePublishedRevision } from "../lib/events.tsx";
 import { useInboxCollapsed, useLayout } from "../lib/layout.ts";
 import { openingView } from "../lib/opening-view.ts";
 import { revealReadingTarget } from "../lib/reading-reveal.ts";
@@ -523,7 +523,7 @@ function LoadedReview({
 export function ReviewPage() {
   const { reviewId } = useParams({ from: "/r/$reviewId" });
   const query = useQuery(reviewQuery(reviewId));
-  const published = useReviewEvents(reviewId);
+  const published = usePublishedRevision(reviewId);
   const [collapsed, setCollapsed] = useInboxCollapsed();
   const previousReviewId = useRef(reviewId);
   const pendingFocus = useRef(false);

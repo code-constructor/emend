@@ -25,6 +25,7 @@ export default defineConfig({
           root: "apps/web",
           environment: "happy-dom",
           globalSetup,
+          setupFiles: [fileURLToPath(new URL("./apps/web/src/test/setup.ts", import.meta.url))],
           include: ["src/**/*.test.{ts,tsx}", isolationTest],
         },
       },

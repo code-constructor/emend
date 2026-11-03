@@ -15,7 +15,9 @@ export function sessionRoutes(app: Hono<AppEnv>, deps: AppDeps, redemptions: Ret
     return c.body(null, 204);
   });
   app.delete("/api/v1/session", async (c) => {
-    await revokeSession(deps.db, c.get("principal"), deps.now());
+    const principal = c.get("principal");
+    const revoked = await revokeSession(deps.db, principal, deps.now());
+    for (const token of revoked) deps.events?.closeSession(principal.ownerId, token.id);
     writeSessionCookie(c, "", secureSessionRequest(c, deps.config.secureCookieHost), true);
     return c.body(null, 204);
   });

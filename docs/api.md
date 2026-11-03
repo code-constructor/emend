@@ -96,6 +96,7 @@ a machine token reaches only reviews from its own instance.
 | GET | `/api/v1/reviews/:id/revisions/:seq` | Reviewer | Read one revision. |
 | GET | `/api/v1/files/:fileId/old` | Reviewer | Read the old file side. |
 | GET | `/api/v1/files/:fileId/new` | Reviewer | Read the new file side. |
+| GET | `/api/v1/events` | Reviewer | Subscribe to owner-wide review events using SSE. |
 | GET | `/api/v1/reviews/:id/events` | Reviewer | Subscribe to review events using SSE. |
 | POST | `/api/v1/reviews/:id/threads` | Reviewer | Create a thread and user comment. |
 | POST | `/api/v1/threads/:id/comments` | Reviewer | Add a user comment to a thread. |
@@ -642,9 +643,15 @@ receive `401 unauthorized` and leave no delivery claimed by that request.
 Confirm takes no body and returns 204, with no JSON response. Only a live unconfirmed lease can
 be confirmed: a late or repeated confirm returns `404 not_found`.
 
-SSE uses `text/event-stream`, `Cache-Control: no-store` and a comment keepalive every 25 seconds.
-`ReviewEventName` is `publish | send | thread | waiting`. `ReviewEvent` has a `type` discriminator
-and the same fields as its SSE payload. The SSE `event` line supplies `type`; the JSON `data` is:
+`GET /api/v1/events` delivers every event for every review owned by the authenticated
+reviewer's owner, with no review lookup. `GET /api/v1/reviews/:id/events` stays for
+compatibility and delivers only that owned review's events. Both require the same reviewer
+principal and scope; `HEAD` returns headers only and allocates no stream. Both SSE
+endpoints use `text/event-stream`, `Cache-Control: no-store` and a comment keepalive every
+25 seconds. `ReviewEventName` is
+`publish | send | thread | waiting | claimed | confirmed`. `ReviewEvent` has a `type`
+discriminator and the same fields as its SSE payload. The SSE `event` line supplies
+`type`; the JSON `data` is:
 
 | Event | Payload |
 | --- | --- |
@@ -652,13 +659,22 @@ and the same fields as its SSE payload. The SSE `event` line supplies `type`; th
 | `send` | `{ reviewId, revision, sendId }` |
 | `thread` | `{ reviewId, revision, threadId, commentId? }` |
 | `waiting` | `{ reviewId, revision }` |
+| `claimed` | `{ reviewId, revision }` |
+| `confirmed` | `{ reviewId, revision, deliveryId }` |
 
-Events contain ids and a positive revision sequence only, never text bodies or instructions.
-The waiting event signals a change: `agentWaiting(reviewId)` stays true during an open take
-and for 35 seconds after the last waiting take ends. Views also include unexpired direct waits,
-which do not emit waiting events. Each owner may open 32 streams; additional
-streams return `429 rate_limited`. A stream buffering over 100 events is closed.
-At each 25-second keepalive, the session is rechecked; revocation or expiry closes the stream.
+Events contain ids and a positive revision sequence only, never text bodies or
+instructions. `claimed` follows a successful take; `confirmed` follows a successful
+delivery confirmation. Both are emitted after the transaction commits. Events have no
+replay ids; clients refresh their cached state on every connection, including the first.
+The waiting event signals a change: `agentWaiting(ownerId, reviewId)` stays true during an
+open take and for 35 seconds after the last waiting take ends. Views also include
+unexpired direct waits, which do not emit waiting events. Each owner may open 32 streams
+across both endpoints combined; additional streams return `429 rate_limited`. A stream
+buffering over 100 events is closed. Device revocation and session logout close that
+device's session streams immediately after the revocation commits, across both endpoints.
+Other sessions remain open. The session is also rechecked when a stream starts and at each
+25-second keepalive; expiry or revocation outside these routes closes the stream at that
+check.
 
 `ThreadState` is `open`, `sent`, `answered` or `resolved`. `Outcome` is `fixed`, `explained`,
 `held` or `declined`; `resolved` is never an agent outcome.

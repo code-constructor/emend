@@ -9,49 +9,83 @@ afterEach(() => {
 test("repeated unsubscribe cannot detach a newer listener for the same review", () => {
   const events = new ReviewEvents(Date.now);
   const reviewId = randomUUID();
-  const unsubscribe = events.subscribe(reviewId, () => {});
+  const unsubscribe = events.subscribe("owner", reviewId, () => {});
   unsubscribe();
   const listener = vi.fn();
-  const newer = events.subscribe(reviewId, listener);
+  const newer = events.subscribe("owner", reviewId, listener);
   unsubscribe();
-  events.emit({ type: "publish", reviewId, revision: 1 });
+  events.emit("owner", { type: "publish", reviewId, revision: 1 });
   expect(listener).toHaveBeenCalledOnce();
   newer();
+});
+test("owner subscriptions and Send waiters cannot hear a different owner even for the same review id", async () => {
+  const events = new ReviewEvents(Date.now);
+  const reviewId = randomUUID();
+  const owner = vi.fn();
+  const review = vi.fn();
+  const stopOwner = events.subscribe("owner", null, owner);
+  const stopReview = events.subscribe("owner", reviewId, review);
+  const wait = events.waitForSend("owner", reviewId, 25);
+  const woke = vi.fn();
+  void wait.promise.then(woke);
+  try {
+    events.emit("foreign", { type: "send", reviewId, revision: 1, sendId: randomUUID() });
+    await Promise.resolve();
+    expect(owner).not.toHaveBeenCalled();
+    expect(review).not.toHaveBeenCalled();
+    expect(woke).not.toHaveBeenCalled();
+    events.emit("owner", { type: "send", reviewId, revision: 1, sendId: randomUUID() });
+    await wait.promise;
+    expect(owner).toHaveBeenCalledOnce();
+    expect(review).toHaveBeenCalledOnce();
+    expect(woke).toHaveBeenCalledOnce();
+  } finally {
+    wait.cancel();
+    stopOwner();
+    stopReview();
+  }
 });
 test("waiting covers concurrent takes and 35 seconds of grace, emitting only transitions", async () => {
   vi.useFakeTimers();
   const events = new ReviewEvents(Date.now);
   const id = randomUUID();
   const changes: unknown[] = [];
-  events.subscribe(id, (event) => changes.push(event));
+  events.subscribe("owner", id, (event) => changes.push(event));
+  const owner = vi.fn();
+  const foreign = vi.fn();
+  events.subscribe("owner", null, owner);
+  events.subscribe("foreign", null, foreign);
   const endOne = events.beginWaiting("owner", id, 1);
   const endTwo = events.beginWaiting("owner", id, 1);
-  expect(events.agentWaiting(id)).toBe(true);
+  expect(events.agentWaiting("owner", id)).toBe(true);
   endOne();
   await vi.advanceTimersByTimeAsync(35000);
-  expect(events.agentWaiting(id)).toBe(true);
+  expect(events.agentWaiting("owner", id)).toBe(true);
   endTwo();
   await vi.advanceTimersByTimeAsync(34999);
-  expect(events.agentWaiting(id)).toBe(true);
+  expect(events.agentWaiting("owner", id)).toBe(true);
   await vi.advanceTimersByTimeAsync(1);
-  expect(events.agentWaiting(id)).toBe(false);
+  expect(events.agentWaiting("owner", id)).toBe(false);
   expect(changes).toEqual([
     { type: "waiting", reviewId: id, revision: 1 },
     { type: "waiting", reviewId: id, revision: 1 },
   ]);
+  expect(owner.mock.calls.map(([event]) => event)).toEqual(changes);
+  expect(foreign).not.toHaveBeenCalled();
 });
-test("streams cap each owner at 32 and release slots on cancellation and abort", async () => {
+test("both stream kinds share the 32-stream owner cap and release slots on cancellation and abort", async () => {
   const f = await mailboxFixture();
   const responses: Response[] = [];
   try {
     for (let i = 0; i < 32; i++) {
-      const response = await f.request(`/reviews/${f.reviewId}/events`, "GET");
+      const response = await f.request(i % 2 ? `/reviews/${f.reviewId}/events` : "/events", "GET");
       expect(response.status).toBe(200);
       expect(response.headers.get("Content-Type")).toContain("text/event-stream");
       expect(response.headers.get("Cache-Control")).toBe("no-store");
       responses.push(response);
     }
     await error(await f.request(`/reviews/${f.reviewId}/events`, "GET"), 429, "rate_limited");
+    await error(await f.request("/events", "GET"), 429, "rate_limited");
     await responses.pop()?.body?.cancel();
     const controller = new AbortController();
     const response = await f.request(`/reviews/${f.reviewId}/events`, "GET", undefined, "reviewer", controller.signal);
@@ -65,23 +99,60 @@ test("streams cap each owner at 32 and release slots on cancellation and abort",
     await f.cleanup();
   }
 });
-test("slow streams are dropped after 100 buffered events; keepalives run every 25 seconds", async () => {
+test("waiting state and expiry are independent for the same review id under two owners", async () => {
   vi.useFakeTimers();
   const events = new ReviewEvents(Date.now);
   const id = randomUUID();
-  const stream = events.stream("owner", id);
-  const reader = stream.getReader();
-  expect(new TextDecoder().decode((await reader.read()).value)).toMatch(/^:/);
-  await vi.advanceTimersByTimeAsync(25000);
-  expect(new TextDecoder().decode((await reader.read()).value)).toMatch(/^:/);
-  for (let i = 0; i < 101; i++) events.emit({ type: "publish", reviewId: id, revision: i + 1 });
-  await expect(reader.read()).rejects.toThrow();
-  // The dropped stream has released its owner slot and event subscription.
-  const streams = Array.from({ length: 32 }, () => events.stream("owner", id));
-  const anotherOwner = events.stream("another-owner", randomUUID());
-  await anotherOwner.cancel();
-  await Promise.all(streams.map((s) => s.cancel()));
+  const a = vi.fn();
+  const b = vi.fn();
+  events.subscribe("a", null, a);
+  events.subscribe("b", null, b);
+  const endA = events.beginWaiting("a", id, 1);
+  expect(events.agentWaiting("b", id)).toBe(false);
+  const endB = events.beginWaiting("b", id, 2);
+  events.emit("a", { type: "publish", reviewId: id, revision: 3 });
+  endA();
+  await vi.advanceTimersByTimeAsync(35000);
+  expect(events.agentWaiting("a", id)).toBe(false);
+  expect(events.agentWaiting("b", id)).toBe(true);
+  expect(a).toHaveBeenLastCalledWith({ type: "waiting", reviewId: id, revision: 3 });
+  expect(b).toHaveBeenCalledOnce();
+  endB();
+  await vi.advanceTimersByTimeAsync(35000);
+  expect(events.agentWaiting("b", id)).toBe(false);
+  expect(b).toHaveBeenLastCalledWith({ type: "waiting", reviewId: id, revision: 2 });
 });
+
+test("revocation during the initial session check closes the stream before any event can escape", async () => {
+  const events = new ReviewEvents(Date.now);
+  const check = Promise.withResolvers<boolean>();
+  const stream = events.stream("owner", null, "session", undefined, () => check.promise);
+  const reader = stream.getReader();
+  events.closeSession("owner", "session");
+  events.emit("owner", { type: "publish", reviewId: randomUUID(), revision: 1 });
+  check.resolve(true);
+  expect(await reader.read()).toEqual({ done: true, value: undefined });
+});
+test.each(["review", "owner"])(
+  "%s streams drop after 100 buffered events; keepalives run every 25 seconds",
+  async (scope) => {
+    vi.useFakeTimers();
+    const events = new ReviewEvents(Date.now);
+    const id = randomUUID();
+    const stream = events.stream("owner", scope === "owner" ? null : id, "session");
+    const reader = stream.getReader();
+    expect(new TextDecoder().decode((await reader.read()).value)).toMatch(/^:/);
+    await vi.advanceTimersByTimeAsync(25000);
+    expect(new TextDecoder().decode((await reader.read()).value)).toMatch(/^:/);
+    for (let i = 0; i < 101; i++) events.emit("owner", { type: "publish", reviewId: id, revision: i + 1 });
+    await expect(reader.read()).rejects.toThrow();
+    // The dropped stream has released its owner slot and event subscription.
+    const streams = Array.from({ length: 32 }, () => events.stream("owner", id, "session"));
+    const anotherOwner = events.stream("another-owner", randomUUID(), "session");
+    await anotherOwner.cancel();
+    await Promise.all(streams.map((s) => s.cancel()));
+  },
+);
 
 test("empty take polls do not wait behind the writer queue", async () => {
   const f = await mailboxFixture();
@@ -131,14 +202,14 @@ test("a 25-second take wakes within one second of Send, without blocking other w
     const events = f.deps.events;
     expect(events).toBeDefined();
     const waiting = f.take(25);
-    await vi.waitFor(() => expect(events?.agentWaiting(f.reviewId)).toBe(true));
+    await vi.waitFor(() => expect(events?.agentWaiting(f.ownerId, f.reviewId)).toBe(true));
     const start = performance.now();
     await f.send({ revision: 1, kind: "go", instruction: "Wake" });
     expect(await waiting).toMatchObject({ kind: "go", instructions: ["Wake"] });
     expect(performance.now() - start).toBeLessThan(1000);
-    expect(events?.agentWaiting(f.reviewId)).toBe(true);
+    expect(events?.agentWaiting(f.ownerId, f.reviewId)).toBe(true);
     f.advance(35000);
-    expect(events?.agentWaiting(f.reviewId)).toBe(false);
+    expect(events?.agentWaiting(f.ownerId, f.reviewId)).toBe(false);
   } finally {
     await f.cleanup();
   }
@@ -153,12 +224,12 @@ test("a take timeout returns pending and an aborted take releases waiting state"
     abort.abort();
     await waiting;
     f.advance(35000);
-    expect(f.deps.events?.agentWaiting(f.reviewId)).toBe(false);
+    expect(f.deps.events?.agentWaiting(f.ownerId, f.reviewId)).toBe(false);
   } finally {
     await f.cleanup();
   }
 });
-test("all four SSE events carry ids and revisions, never comments or instructions", async () => {
+test("all six SSE events carry ids and revisions, never comments or instructions", async () => {
   const f = await mailboxFixture();
   const controller = new AbortController();
   try {
@@ -176,7 +247,14 @@ test("all four SSE events carry ids and revisions, never comments or instruction
     const sendEvent = new TextDecoder().decode((await reader.read()).value);
     expect(sendEvent).toContain("event: send");
     expect(sendEvent).not.toContain("Secret");
-    await f.take();
+    const taken = await f.take();
+    expect(new TextDecoder().decode((await reader.read()).value)).toContain("event: claimed");
+    if (taken.kind === "pending") throw new Error("missing delivery");
+    expect((await f.request(`/deliveries/${taken.deliveryId}/confirm`, "POST", undefined, "agent")).status).toBe(204);
+    const confirmed = new TextDecoder().decode((await reader.read()).value);
+    expect(confirmed).toContain("event: confirmed");
+    expect(confirmed).toContain(taken.deliveryId);
+    expect(confirmed).not.toContain("Secret");
     const waiting = f.take(0.05);
     expect(new TextDecoder().decode((await reader.read()).value)).toContain("event: waiting");
     await waiting;

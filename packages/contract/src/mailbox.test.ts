@@ -58,15 +58,23 @@ test("thread and comment requests validate bodies and targets", () => {
   expect(SendCreated.parse({ sendId: id })).toEqual({ sendId: id });
 });
 test("events contain only their discriminator, ids and revision sequence", () => {
-  for (const type of ["publish", "send", "thread", "waiting"]) {
+  for (const type of ["publish", "send", "thread", "waiting", "claimed", "confirmed"]) {
     const value = {
       type,
       reviewId: id,
       revision: 1,
       ...(type === "send" ? { sendId: id } : {}),
       ...(type === "thread" ? { threadId: id, commentId: id } : {}),
+      ...(type === "confirmed" ? { deliveryId: id } : {}),
     };
-    expect(ReviewEvent.parse({ ...value, body: "private text", instruction: "private text" })).toEqual(value);
-    expect(ReviewEvent.safeParse({ ...value, revision: 0 }).success).toBe(false);
+    expect(ReviewEvent.parse({ ...value, body: "text", instruction: "text", path: "file.md", title: "text" })).toEqual(
+      value,
+    );
+    for (const revision of [0, -1, 1.5, "1"]) expect(ReviewEvent.safeParse({ ...value, revision }).success).toBe(false);
+    expect(ReviewEvent.safeParse({ ...value, reviewId: "invalid" }).success).toBe(false);
+    if (type === "confirmed") {
+      expect(ReviewEvent.safeParse({ ...value, deliveryId: "invalid" }).success).toBe(false);
+      expect(ReviewEvent.safeParse({ ...value, deliveryId: undefined }).success).toBe(false);
+    }
   }
 });

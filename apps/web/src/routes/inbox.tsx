@@ -9,6 +9,7 @@ import { IconButton } from "../components/ui/IconButton.tsx";
 import { Select } from "../components/ui/Select.tsx";
 import { TextField } from "../components/ui/TextField.tsx";
 import { plural } from "../lib/count.ts";
+import { useInboxArrivals } from "../lib/inbox-arrivals.tsx";
 
 export function Inbox({
   compact = false,
@@ -41,6 +42,7 @@ export function Inbox({
       (!machineFilter || review.origin.id === machineFilter) &&
       [review.title, review.branch, review.origin.name].some((value) => value?.toLocaleLowerCase().includes(needle)),
   );
+  const highlighted = useInboxArrivals(items);
   const attention = items.filter(needsAttention).length;
   return (
     <div className={compact ? "flex min-h-0 flex-1 flex-col" : "mx-auto w-full max-w-[760px] px-5 pt-8 pb-20"}>
@@ -115,7 +117,13 @@ export function Inbox({
         {query.data && (
           <ul>
             {filtered.map((review) => (
-              <ReviewRow key={review.id} review={review} now={now} onOpen={onOpen} />
+              <ReviewRow
+                key={review.id}
+                review={review}
+                now={now}
+                onOpen={onOpen}
+                highlight={highlighted.has(review.id)}
+              />
             ))}
           </ul>
         )}

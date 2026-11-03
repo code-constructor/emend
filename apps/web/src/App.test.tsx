@@ -6,12 +6,13 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import type { Window } from "happy-dom";
 import { afterEach, beforeEach, expect, expectTypeOf, test, vi } from "vitest";
 import { App } from "./App.tsx";
-import { reviewQuery } from "./api/queries.ts";
+import { inboxQuery, reviewQuery } from "./api/queries.ts";
 import type { PhoneTabs } from "./components/layout/PhoneTabs.tsx";
 import type { ReviewTabs, ReviewTabsProps } from "./components/layout/ReviewTabs.tsx";
 import { draftKey, editDraftKey } from "./lib/drafts.ts";
 import { rememberPairingSecret, takePairingSecret } from "./lib/pairing-secret.ts";
 import { validateReviewSearch } from "./router.tsx";
+import { Events } from "./test/events.ts";
 
 const id = "11111111-1111-4111-8111-111111111111";
 const item: InboxItem = {
@@ -55,19 +56,6 @@ const revision = {
   threads: [],
   changedBlocks: [],
 };
-class Events extends EventTarget {
-  static opened: Events[] = [];
-  close = vi.fn();
-  url: string;
-  constructor(url: string) {
-    super();
-    this.url = url;
-    Events.opened.push(this);
-  }
-  emit(type: string, data: object) {
-    this.dispatchEvent(new MessageEvent(type, { data: JSON.stringify(data) }));
-  }
-}
 let width = 1280;
 const mediaQueries = new Set<{ media: string; matches: boolean; events: EventTarget }>();
 function matchesWidth(query: string) {
@@ -125,11 +113,9 @@ beforeEach(() => {
   width = 1280;
   mediaQueries.clear();
   newest = 1;
-  Events.opened = [];
   localStorage.clear();
   window.dispatchEvent(new StorageEvent("storage", { key: null, storageArea: localStorage }));
   window.history.replaceState(null, "", "/");
-  vi.stubGlobal("EventSource", Events);
   vi.stubGlobal(
     "matchMedia",
     vi.fn((query: string) => {
@@ -482,7 +468,7 @@ test("publish announces the next revision without switching or refetching the cu
   expect(screen.getByRole("button", { name: /^Revision 1(?: of|,)/ })).toBeTruthy();
   expect(fetchMock.mock.calls.filter(([path]) => path.endsWith("/revisions/1"))).toHaveLength(before);
   expect(Events.opened).toHaveLength(1);
-  fireEvent.click(screen.getByRole("button", { name: "Reload" }));
+  fireEvent.click(screen.getByRole("button", { name: "Show" }));
   await waitFor(() => expect(history.location.search).toContain("rev=2"));
   await screen.findByRole("button", { name: "Revision 2 of 2" });
   unmount();
@@ -566,33 +552,198 @@ test("hides Docs without docs, defaults bad search values, and keeps diff visibl
   expect(history.location.search).not.toContain("rev=-1");
 });
 
-test("thread and Send events refresh comments as well as metadata, ignore invalid messages and close on navigation", async () => {
-  mount(`/r/${id}`);
+test("one owner stream survives navigation from inbox through review and devices, closing on unmount", async () => {
+  const { history, unmount } = mount();
+  await screen.findByRole("heading", { name: "Inbox", level: 1 });
+  expect(Events.opened).toHaveLength(1);
+  expect(Events.opened[0]?.url).toBe("/api/v1/events");
+  act(() => history.push(`/r/${id}`));
   await screen.findByText("Overview");
-  const invalidate = vi.spyOn(client, "invalidateQueries");
-  act(() => {
-    Events.opened[0]?.emit("publish", { reviewId: "22222222-2222-4222-8222-222222222222", revision: 4 });
-    Events.opened[0]?.emit("publish", { reviewId: id, revision: -1 });
-    Events.opened[0]?.dispatchEvent(new MessageEvent("publish", { data: "not json" }));
-  });
-  expect(invalidate).not.toHaveBeenCalled();
-  for (const type of ["send", "thread", "waiting"]) {
-    act(() => Events.opened[0]?.emit(type, { reviewId: id, revision: 1, sendId: id, threadId: id }));
-  }
-  expect(invalidate.mock.calls.map(([options]) => options?.queryKey)).toEqual([
-    ["inbox"],
-    ["review", id],
-    ["revision", id],
-    ["inbox"],
-    ["review", id],
-    ["revision", id],
-    ["inbox"],
-    ["review", id],
-  ]);
-  fireEvent.click(screen.getByRole("link", { name: "Devices" }));
+  act(() => history.push("/devices"));
   await screen.findByRole("heading", { name: "Devices" });
+  expect(Events.opened).toHaveLength(1);
+  expect(Events.opened[0]?.close).not.toHaveBeenCalled();
+  unmount();
   expect(Events.opened[0]?.close).toHaveBeenCalledOnce();
 });
+
+test("pairing starts the owner stream only after sign-in succeeds", async () => {
+  rememberPairingSecret("synthetic-pairing-secret");
+  const paired = Promise.withResolvers<Response>();
+  const fallback = fetchMock.getMockImplementation();
+  fetchMock.mockImplementation((path, init) =>
+    path === "/api/v1/session" ? paired.promise : (fallback?.(path, init) as Promise<Response>),
+  );
+  mount("/pair");
+  await screen.findByText("Pairing…");
+  expect(Events.opened).toHaveLength(0);
+  await act(async () => paired.resolve(new Response(null, { status: 204 })));
+  await screen.findByRole("heading", { name: "Inbox", level: 1 });
+  expect(Events.opened).toHaveLength(1);
+  expect(Events.opened[0]?.url).toBe("/api/v1/events");
+});
+
+test("one page load fetches the review payload once when the stream opens during loading", async () => {
+  const ready = Promise.withResolvers<void>();
+  const fallback = fetchMock.getMockImplementation();
+  fetchMock.mockImplementation(async (path, init) => {
+    await ready.promise;
+    return fallback?.(path, init) as Promise<Response>;
+  });
+  mount(`/r/${id}`);
+  await waitFor(() => expect(Events.opened).toHaveLength(1));
+  const invalidate = vi.spyOn(client, "invalidateQueries");
+  expect(invalidate).not.toHaveBeenCalled();
+  act(() => Events.opened[0]?.open());
+  ready.resolve();
+  await screen.findByText("Overview");
+  await waitFor(() => expect(invalidate).toHaveBeenCalledOnce());
+  await act(async () => {
+    await invalidate.mock.results[0]?.value;
+  });
+  for (const path of ["/api/v1/reviews", `/api/v1/reviews/${id}`, `/api/v1/reviews/${id}/revisions/1`])
+    expect(fetchMock.mock.calls.filter(([url]) => url === path)).toHaveLength(1);
+});
+
+test("the first stream open recovers a publication after the initial inbox snapshot", async () => {
+  vi.stubGlobal("navigator", {});
+  const arrival = { ...item, id: "22222222-2222-4222-8222-222222222222", title: "Published before subscription" };
+  let items = [item];
+  const fallback = fetchMock.getMockImplementation();
+  fetchMock.mockImplementation((path, init) =>
+    path === "/api/v1/reviews"
+      ? Promise.resolve(Response.json({ items }))
+      : (fallback?.(path, init) as Promise<Response>),
+  );
+  mount();
+  await screen.findByText(item.title);
+  expect(screen.queryByText(arrival.title)).toBeNull();
+  items = [item, arrival];
+  // No event can arrive before subscription; the first open must fetch the missed publication.
+  act(() => Events.opened[0]?.open());
+  await screen.findByText(arrival.title);
+});
+
+test("the first inbox response establishes the baseline even when a stale cache was shown first", async () => {
+  const arrival = { ...item, id: "22222222-2222-4222-8222-222222222222", title: "Already present at first response" };
+  client.setQueryData(["inbox"], { items: [item] });
+  const response = Promise.withResolvers<Response>();
+  const fallback = fetchMock.getMockImplementation();
+  fetchMock.mockImplementation((path, init) =>
+    path === "/api/v1/reviews" ? response.promise : (fallback?.(path, init) as Promise<Response>),
+  );
+  const { container } = mount();
+  await screen.findByText(item.title);
+  expect(container.querySelector(".em-inbox-new")).toBeNull();
+  await act(async () => response.resolve(Response.json({ items: [item, arrival] })));
+  await screen.findByText(arrival.title);
+  expect(container.querySelector(".em-inbox-new")).toBeNull();
+});
+
+test("a review published while away highlights once on return, including after a background inbox fetch", async () => {
+  const arrival = { ...item, id: "22222222-2222-4222-8222-222222222222", title: "Published while on devices" };
+  let items = [item];
+  const fallback = fetchMock.getMockImplementation();
+  fetchMock.mockImplementation((path, init) =>
+    path === "/api/v1/reviews"
+      ? Promise.resolve(Response.json({ items }))
+      : (fallback?.(path, init) as Promise<Response>),
+  );
+  const { history, container } = mount();
+  await screen.findByText(item.title);
+  expect(container.querySelector(".em-inbox-new")).toBeNull();
+  act(() => history.push("/devices"));
+  await screen.findByRole("heading", { name: "Devices" });
+  items = [item, arrival];
+  act(() => Events.opened[0]?.emit("publish", { reviewId: arrival.id, revision: 1 }));
+  await act(async () => {
+    await client.fetchQuery(inboxQuery());
+  });
+  act(() => history.push("/"));
+  await screen.findByText(arrival.title);
+  await waitFor(() =>
+    expect(screen.getByText(arrival.title).closest("a")?.classList.contains("em-inbox-new")).toBe(true),
+  );
+  act(() => history.push("/devices"));
+  await screen.findByRole("heading", { name: "Devices" });
+  act(() => history.push("/"));
+  await screen.findByText(arrival.title);
+  expect(container.querySelector(".em-inbox-new")).toBeNull();
+});
+
+test("an arrival hidden by a filter consumes its highlight before the filter is cleared", async () => {
+  const arrival = { ...item, id: "22222222-2222-4222-8222-222222222222", title: "Hidden arrival" };
+  const { container } = mount();
+  await screen.findByText(item.title);
+  fireEvent.change(screen.getByRole("textbox", { name: "Filter reviews" }), { target: { value: item.title } });
+  vi.useFakeTimers();
+  try {
+    await act(async () => {
+      client.setQueryData(["inbox"], { items: [item, arrival] });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(screen.queryByText(arrival.title)).toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "Filter reviews" }), { target: { value: "" } });
+    expect(screen.getByText(arrival.title)).toBeTruthy();
+    expect(container.querySelector(".em-inbox-new")).toBeNull();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test.each([false, true])(
+  "inbox highlights only first-seen arrivals for one second (initially empty: %s)",
+  async (empty) => {
+    if (empty) {
+      const fallback = fetchMock.getMockImplementation();
+      fetchMock.mockImplementation((path, init) =>
+        path === "/api/v1/reviews"
+          ? Promise.resolve(Response.json({ items: [] }))
+          : (fallback?.(path, init) as Promise<Response>),
+      );
+    }
+    const { container } = mount();
+    if (empty) await screen.findByText("No reviews yet.");
+    else await screen.findByText(item.title);
+    expect(container.querySelector(".em-inbox-new")).toBeNull();
+    const arrival = { ...item, id: "22222222-2222-4222-8222-222222222222", title: "New synthetic review" };
+    const initial = empty ? [] : [item];
+    vi.useFakeTimers();
+    try {
+      async function items(values: InboxItem[]) {
+        await act(async () => {
+          client.setQueryData(["inbox"], { items: values });
+          await vi.advanceTimersByTimeAsync(0);
+        });
+      }
+      await items([...initial, arrival]);
+      expect(screen.getByText(arrival.title).closest("a")?.classList.contains("em-inbox-new")).toBe(true);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+      await items([...initial, { ...arrival, unsentCount: 3 }]);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(499);
+      });
+      expect(container.querySelectorAll(".em-inbox-new")).toHaveLength(1);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+      expect(container.querySelector(".em-inbox-new")).toBeNull();
+      await items(initial);
+      await items([...initial, arrival]);
+      expect(container.querySelector(".em-inbox-new")).toBeNull();
+      fireEvent.change(screen.getByRole("textbox", { name: "Filter reviews" }), { target: { value: "nothing" } });
+      fireEvent.change(screen.getByRole("textbox", { name: "Filter reviews" }), { target: { value: "" } });
+      expect(container.querySelector(".em-inbox-new")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);
 
 test("review route saves a selected doc span, refreshes its thread, sends it, then enables approval", async () => {
   const block = {
@@ -2292,7 +2443,7 @@ test("a published revision blocks stale actions even before review metadata catc
       .map((key) => document.getElementById(key)?.textContent);
     expect(descriptions).toContain(reason);
   }
-  fireEvent.click(screen.getByRole("button", { name: "Reload" }));
+  fireEvent.click(screen.getByRole("button", { name: "Show" }));
   await waitFor(() =>
     expect((screen.getByRole("button", { name: "Send 2" }) as HTMLButtonElement).disabled).toBe(false),
   );

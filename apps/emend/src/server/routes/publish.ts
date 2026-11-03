@@ -18,7 +18,11 @@ export function publishRoutes(app: Hono<AppEnv>, deps: AppDeps) {
       executor: deps.publishExecutor,
       signal: c.req.raw.signal,
     });
-    deps.events?.emit({ type: "publish", reviewId: result.reviewId, revision: result.revision });
+    deps.events?.emit(c.get("principal").ownerId, {
+      type: "publish",
+      reviewId: result.reviewId,
+      revision: result.revision,
+    });
     return c.json(result);
   });
 }

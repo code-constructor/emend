@@ -11,6 +11,19 @@
 @import "./styles/diff.css";
 
 @layer components {
+  @media (prefers-reduced-motion: no-preference) {
+    .em-inbox-new {
+      animation: inbox-arrival 1s ease-out;
+    }
+  }
+  @keyframes inbox-arrival {
+    from {
+      background-color: var(--accent-tint);
+    }
+    to {
+      background-color: transparent;
+    }
+  }
   .review-input {
     width: 100%;
     border: 1px solid var(--border-1);

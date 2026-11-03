@@ -13,7 +13,17 @@ export function needsAttention(review: InboxItem) {
   return review.state === "open" && !review.movedTo && (review.agentWaiting || review.unsentCount > 0);
 }
 
-export function ReviewRow({ review, now, onOpen }: { review: InboxItem; now: number; onOpen?: () => void }) {
+export function ReviewRow({
+  review,
+  now,
+  onOpen,
+  highlight = false,
+}: {
+  review: InboxItem;
+  now: number;
+  onOpen?: () => void;
+  highlight?: boolean;
+}) {
   const attention = needsAttention(review);
   const agent = agentStatusOf(review);
   const contents = (
@@ -80,8 +90,10 @@ export function ReviewRow({ review, now, onOpen }: { review: InboxItem; now: num
       )}
     </>
   );
-  const className =
-    "group relative grid w-full grid-cols-[minmax(0,1fr)_auto] grid-rows-[auto_auto_auto] gap-x-2 gap-y-[3px] rounded-sm px-2.5 pt-2 pb-[9px] text-left text-fg-2 no-underline";
+  const className = cn(
+    "group relative grid w-full grid-cols-[minmax(0,1fr)_auto] grid-rows-[auto_auto_auto] gap-x-2 gap-y-[3px] rounded-sm px-2.5 pt-2 pb-[9px] text-left text-fg-2 no-underline",
+    highlight && "em-inbox-new",
+  );
   return (
     <li>
       {review.movedTo ? (

@@ -25,6 +25,9 @@ async function request(path: string, init?: RequestInit, redirect = true) {
 export async function get<T>(path: string, schema: { parse(value: unknown): T }, signal?: AbortSignal): Promise<T> {
   return schema.parse(await (await request(path, { signal })).json());
 }
+export async function head(path: string, signal?: AbortSignal) {
+  await request(path, { method: "HEAD", signal });
+}
 export async function change(path: string, method: "POST" | "PATCH" | "DELETE", body?: unknown) {
   await request(path, {
     method,

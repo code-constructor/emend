@@ -61,13 +61,37 @@ export function revokeSession(db: Db, principal: Principal, now: number) {
     const row = await q
       .update(tokens)
       .set({ revokedAt: now })
-      .where(and(eq(tokens.ownerId, principal.ownerId), eq(tokens.id, principal.tokenId), eq(tokens.kind, "reviewer")))
+      .where(
+        and(
+          eq(tokens.ownerId, principal.ownerId),
+          eq(tokens.id, principal.tokenId),
+          eq(tokens.kind, "reviewer"),
+          isNull(tokens.revokedAt),
+        ),
+      )
       .returning({ deviceId: tokens.deviceId })
       .get();
-    if (row?.deviceId)
-      await q
-        .update(devices)
-        .set({ revokedAt: now })
-        .where(and(eq(devices.ownerId, principal.ownerId), eq(devices.id, row.deviceId)));
+    if (!row) return [];
+    const closed = [{ id: principal.tokenId }];
+    if (!row.deviceId) return closed;
+    await q
+      .update(devices)
+      .set({ revokedAt: now })
+      .where(and(eq(devices.ownerId, principal.ownerId), eq(devices.id, row.deviceId)));
+    // Logout revokes the browser device too, so close every session bound to it.
+    const siblings = await q
+      .update(tokens)
+      .set({ revokedAt: now })
+      .where(
+        and(
+          eq(tokens.ownerId, principal.ownerId),
+          eq(tokens.deviceId, row.deviceId),
+          eq(tokens.kind, "reviewer"),
+          isNull(tokens.revokedAt),
+          gt(tokens.expiresAt, now),
+        ),
+      )
+      .returning({ id: tokens.id });
+    return [...closed, ...siblings];
   });
 }

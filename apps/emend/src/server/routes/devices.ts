@@ -38,7 +38,7 @@ export function deviceRoutes(app: Hono<AppEnv>, deps: AppDeps) {
     const { ownerId } = c.get("principal");
     const id = c.req.param("id");
     const now = deps.now();
-    await deps.db.transaction(async (q) => {
+    const revoked = await deps.db.transaction(async (q) => {
       const device = await q
         .update(devices)
         .set({ revokedAt: now })
@@ -46,11 +46,13 @@ export function deviceRoutes(app: Hono<AppEnv>, deps: AppDeps) {
         .returning({ id: devices.id })
         .get();
       if (!device) throw new ApiError("not_found");
-      await q
+      return q
         .update(tokens)
         .set({ revokedAt: now })
-        .where(and(eq(tokens.ownerId, ownerId), eq(tokens.deviceId, id), isNull(tokens.revokedAt)));
+        .where(and(eq(tokens.ownerId, ownerId), eq(tokens.deviceId, id), isNull(tokens.revokedAt)))
+        .returning({ id: tokens.id });
     });
+    for (const token of revoked) deps.events?.closeSession(ownerId, token.id);
     return c.body(null, 204);
   });
 }

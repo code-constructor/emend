@@ -108,7 +108,7 @@ export function ReviewHeader({
         </p>
       )}
       {ready > seq && (
-        <Banner tone="info" actionLabel="Reload" onAction={() => onRevisionChange(ready)}>
+        <Banner tone="info" actionLabel="Show" onAction={() => onRevisionChange(ready)}>
           Revision {ready} is ready.
         </Banner>
       )}

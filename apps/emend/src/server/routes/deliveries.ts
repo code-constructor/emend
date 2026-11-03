@@ -24,7 +24,10 @@ export function deliveryRoutes(app: Hono<AppEnv>, deps: AppDeps) {
     });
     // Subscribe before the initial take so a Send between its empty read and wait
     // cannot be missed. Only mark waiting if that take actually finds no delivery.
-    const wait = waitSeconds > 0 ? deps.events?.waitForSend(reviewId, waitSeconds, c.req.raw.signal) : undefined;
+    const wait =
+      waitSeconds > 0
+        ? deps.events?.waitForSend(principal.ownerId, reviewId, waitSeconds, c.req.raw.signal)
+        : undefined;
     let endWaiting: (() => void) | undefined;
     try {
       let result = await takeDelivery(deps.db, principal, reviewId, deps.now(), wait ? authorize : undefined, maxBytes);
@@ -43,6 +46,7 @@ export function deliveryRoutes(app: Hono<AppEnv>, deps: AppDeps) {
           throw error;
         }
       }
+      if (result) deps.events?.emit(principal.ownerId, { type: "claimed", reviewId, revision: result.revision });
       return c.json(result ?? { kind: "pending", reviewId, waitedSeconds: Math.max(0, (deps.now() - start) / 1000) });
     } finally {
       wait?.cancel();
@@ -50,8 +54,10 @@ export function deliveryRoutes(app: Hono<AppEnv>, deps: AppDeps) {
     }
   });
   app.post("/api/v1/deliveries/:id/confirm", async (c) => {
-    if (!(await confirmDelivery(deps.db, c.get("principal"), c.req.param("id"), deps.now())))
-      throw new ApiError("not_found");
+    const principal = c.get("principal");
+    const result = await confirmDelivery(deps.db, principal, c.req.param("id"), deps.now());
+    if (!result) throw new ApiError("not_found");
+    deps.events?.emit(principal.ownerId, { type: "confirmed", ...result });
     return c.body(null, 204);
   });
 }

@@ -136,12 +136,6 @@ beforeEach(() => {
   loading.rendering = "normal";
   localStorage.clear();
   window.dispatchEvent(new StorageEvent("storage", { key: null, storageArea: localStorage }));
-  vi.stubGlobal(
-    "EventSource",
-    class extends EventTarget {
-      close() {}
-    },
-  );
   vi.stubGlobal("matchMedia", (query: string) => ({
     matches: width >= Number(query.match(/\d+/)?.[0] ?? Infinity),
     addEventListener() {},

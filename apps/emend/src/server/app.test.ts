@@ -178,7 +178,10 @@ test("every documented API endpoint enforces its scope even before its handler e
         await error(response, "forbidden", endpoint.method === "HEAD");
       else if (path === "/api/v1/pairings") expect(response.status).toBe(201);
       else if (path === "/api/v1/reviews" || path === "/api/v1/devices") expect(response.status).toBe(200);
-      else if (
+      else if (path === "/api/v1/events") {
+        expect(response.status).toBe(200);
+        await response.body?.cancel();
+      } else if (
         path === "/api/v1/publish" ||
         path.startsWith("/api/v1/blobs/") ||
         (endpoint.method === "POST" && /\/(threads|comments|sends|reply)$/.test(path)) ||

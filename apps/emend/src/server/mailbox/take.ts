@@ -236,7 +236,7 @@ export async function takeDelivery(
   });
 }
 
-export function confirmDelivery(db: Db, principal: Principal, deliveryId: string, now: number): Promise<boolean> {
+export function confirmDelivery(db: Db, principal: Principal, deliveryId: string, now: number) {
   const ownerId = principal.ownerId;
   return db.transaction(async (q) => {
     const delivery = await q
@@ -259,7 +259,9 @@ export function confirmDelivery(db: Db, principal: Principal, deliveryId: string
       )
       .returning({ id: deliveries.id })
       .get();
-    return Boolean(confirmed);
+    if (!confirmed) return false;
+    const revision = await newestRevision(ownerId, q, delivery.reviewId);
+    return { reviewId: delivery.reviewId, revision: revision.seq, deliveryId };
   });
 }
 
