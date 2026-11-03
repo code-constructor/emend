@@ -38,12 +38,28 @@ The CLI runs inside repos under review, so treat those repos as hostile.
   takes `--filters` or `--textconv`.
 - Read only what the manifest names: the manifest itself, the changed paths through git, the doc
   sources and the assets inside each HTML doc's folder. Resolve real paths, read regular files
-  only, skip symlinks that leave the doc's folder, and enforce the size limits. A path behind a
-  symlinked folder is absent, as git sees it, and no read lands inside the git folder or the
-  common git folder.
-- stdout is a contract: `emend publish` prints one JSON line; `emend wait` and `emend feedback`
-  print one JSON object with `kind` `go`, `approve` or `pending` and exit 0. Any error prints one
-  line on stderr, nothing on stdout, and exits 1.
+  only, skip symlinks that leave the doc's folder, and enforce the size, file-count and revision
+  limits. A path behind a symlinked folder is absent, as git sees it, and no read or listing
+  lands inside the git folder or the common git folder.
+- `emend publish <path>...` builds that manifest from its arguments: each file argument, and the
+  Markdown and HTML docs found by listing each folder argument. `--main` only picks one of those
+  docs. Every source still sits in the worktree or a `docRoots` folder.
+- The listing skips dotfiles and `node_modules`, checks each entry's type, and a regular file's
+  extension, before any other call on it, and stops at the entry and folder limits; an asset
+  whose reference or real path passes through `node_modules` is skipped too. It opens each folder
+  with `O_DIRECTORY | O_NOFOLLOW`, checks device and inode against `lstat`, and lists only that
+  descriptor: `/proc/self/fd/<fd>` on Linux, `/dev/fd/<fd>` on macOS. After listing, it checks
+  the folder's identity and source rules again; on Linux it also checks the descriptor's real
+  path before and after. Other platforms refuse a folder argument.
+- A listed symlink is resolved only to check confinement and is never followed: it is skipped
+  with a warning, and one that resolves outside the folder refuses the publish. A walked doc keeps
+  its folder as a boundary at the read and at the upload recheck. In the shortcut, an asset must
+  satisfy every doc that references it, at the preflight and on the opened file. Walk errors name
+  only the caller's argument or a fixed reason.
+- stdout is a contract: `emend publish --manifest` prints one JSON line; `emend publish <path>...`
+  prints the review URL alone, escaped, or that JSON line with `--json`; `emend wait` and
+  `emend feedback` print one JSON object with `kind` `go`, `approve` or `pending` and exit 0. Any
+  error prints one line on stderr, nothing on stdout, and exits 1.
 - Tokens come from the state directory (`agent.token`, `admin.token`, `hub.token`). Never print a
   token, and never send it anywhere but the server it belongs to.
 - When the hub is down, or the server or the hub rejects the token, print one line on stderr and
