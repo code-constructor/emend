@@ -1,0 +1,72 @@
+---
+name: emend-publish
+description: Publish a standalone Markdown or HTML document (report, plan, analysis, cheatsheet) with `emend publish <path>` and return its review URL. Use only when the user asks to publish or share a document with emend, or to read it in emend on a phone or another device. Use emend-review for code review.
+---
+
+# Publish a document with emend
+
+This skill needs the `emend` command on `PATH`.
+If `emend` is not found, skip publishing, keep the local file and tell the user why.
+Do not try to install emend.
+
+## Steps
+
+1. Write the document into the repository when it belongs there.
+   Otherwise write it into a folder the user allowed as a doc root.
+   Prefer one Markdown file or one self-contained HTML file.
+   emend renders Markdown on its server: GFM tables, code colours, and ```` ```mermaid ```` fences become diagrams.
+   An HTML document's own scripts never run, and nothing loads from other hosts.
+   Use no CDN scripts, styles or fonts.
+   In an HTML document, keep images and styles beside the file and reference them with relative paths.
+   Markdown documents show no local images yet, so use HTML when the document needs images.
+   Keep the document out of hidden folders, because a folder publish skips dotfiles and hidden folders.
+   Tell the user the path of the file you wrote.
+2. Publish it with the command under "Publish" below.
+   Stdout is the review URL alone.
+3. Give the URL to the user on its own line.
+4. After a change, publish the same path again.
+   The review keeps its URL and gets a new revision.
+   Use `--key <name>` when a regenerated document lands at a new path each run.
+   Use `--new` to start a separate review.
+   A folder bundles its documents and the assets its HTML documents reference.
+   `--main <path>` picks the document that opens first.
+5. If publishing fails, keep the file, tell the user where it is and carry on with the main task.
+   Publishing never blocks the work.
+
+## Publish
+
+Run the command from the repository that holds the document.
+Or give a path under a folder the user allowed as a doc root.
+Use a short, plain title. A title that starts with `--` is refused.
+
+If an emend error line mentions an agent sandbox, show the user that line and stop.
+Do not run emend another way, retry it outside the sandbox, ask for escalated permissions,
+change sandbox or agent settings, or touch emend's state folder.
+
+Publish the document with:
+
+```sh
+emend publish <path> --title "<title>"
+```
+
+When publish prints `source is outside the allowed doc roots`, stop and ask the user to run `emend config add docRoots <folder>` for that folder, or to move the doc into the repository. Never run `emend config` or edit emend's configuration yourself.
+
+Pass every `emend:` note on stderr to the user.
+Examples are skipped files, documents that could not render, or a stopped server.
+When the server is stopped, publish still saves the review and prints its URL.
+
+Do not publish a hunk-review HTML writeup with emend yet.
+Its Markdown sits in script elements that emend does not run, so its sections show empty.
+
+## Never publish
+
+Do not publish secrets, credentials, API keys, tokens or `.env` content.
+Check the file or folder before publishing.
+Ask the user first before publishing anything they marked confidential.
+
+## Feedback
+
+No agent waits on this review.
+The reviewer's comments reach an agent later through the emend-feedback skill, with the review id.
+The review id is the last segment of the URL, `/r/<review-id>`.
+For example, `http://127.0.0.1:3636/r/<review-id>`.

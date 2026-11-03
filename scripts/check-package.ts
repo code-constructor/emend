@@ -54,6 +54,7 @@ try {
     "dist/web/licenses/martian-mono-OFL.txt",
     "dist/skills/emend-review/SKILL.md",
     "dist/skills/emend-feedback/SKILL.md",
+    "dist/skills/emend-publish/SKILL.md",
   ]) {
     check = `tarball includes ${name}`;
     assert(entries.has(`package/${name}`));
@@ -143,7 +144,7 @@ try {
   check = "skills link into installed package";
   assert.equal(
     output,
-    ["emend-feedback", "emend-review"]
+    ["emend-feedback", "emend-publish", "emend-review"]
       .map(
         (name) =>
           `would link ${join(skills, name)} -> ${join(work, "lib/node_modules/@shllg/emend/dist/skills", name)}\n`,

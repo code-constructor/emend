@@ -25,11 +25,14 @@ import { PublishManifest, WaitResult } from "../packages/contract/src/index.ts";
 const repo = fileURLToPath(new URL("..", import.meta.url));
 const read = (path: string) => readFileSync(join(repo, path), "utf8");
 const json = (path: string) => JSON.parse(read(path));
-const names = ["emend-review", "emend-feedback"];
+const waitSkills = ["emend-review", "emend-feedback"];
+const names = [...waitSkills, "emend-publish"];
 const skillFiles = [
-  ...names.map((name) => `plugin/skills/${name}/SKILL.md`),
+  ...waitSkills.map((name) => `plugin/skills/${name}/SKILL.md`),
   "plugin/skills/emend-review/references/manifest.md",
 ];
+const publishSkill = "plugin/skills/emend-publish/SKILL.md";
+const docSkills = [...skillFiles, publishSkill];
 const gitTest = test.skipIf(!existsSync(join(repo, ".git")));
 const exec = promisify(execFile);
 const surfaces = [
@@ -97,7 +100,7 @@ const gitFiles = (...args: string[]) =>
 const fixedWaitRedirect =
   /\d*>(?:>|\|)?[ \t]*(?:"(?:[^"\r\n]*\/)?wait\.json"|'(?:[^'\r\n]*\/)?wait\.json'|(?:[^\s"'|;]*\/)?wait\.json(?=$|[\s;)]))/m;
 
-test.each(skillFiles)("%s asks the user to configure doc roots and forbids doing it itself", (path) => {
+test.each(docSkills)("%s asks the user to configure doc roots and forbids doing it itself", (path) => {
   const text = read(path);
   expect(text).toContain(
     "When publish prints `source is outside the allowed doc roots`, stop and ask the user to run `emend config add docRoots <folder>` for that folder, or to move the doc into the repository. Never run `emend config` or edit emend's configuration yourself.",
@@ -257,7 +260,9 @@ test.each(names)("%s stops on a sandbox error before running another command", (
   const lead =
     name === "emend-review"
       ? "Run publish from the repository being reviewed:"
-      : "When no saved `go` needs handling, fetch feedback with:";
+      : name === "emend-publish"
+        ? "Publish the document with:"
+        : "When no saved `go` needs handling, fetch feedback with:";
   expect(text.split(guidance)).toHaveLength(2);
   expect(text).toContain(["", guidance, lead, "```sh\nemend "].join("\n\n"));
 });
@@ -326,7 +331,22 @@ gitTest("every indexed skill file has safe metadata and no command markers", () 
   }
 });
 
-test.each(skillFiles)("%s has no command markers", (path) => {
+test("emend-publish stays small, publishes without waiting and names its trigger", () => {
+  const text = read(publishSkill);
+  expect(Buffer.byteLength(text)).toBeLessThan(5120);
+  expect(text).toContain("emend publish <path> --title");
+  expect(text).toContain("Never publish");
+  expect(text).toContain("Publishing never blocks the work");
+  expect(text).toContain("emend-feedback");
+  expect(text).toContain("Stdout is the review URL alone.");
+  expect(text).not.toContain("emend wait");
+  expect(text).not.toContain("emend feedback");
+  const description = /^description: (.*)$/m.exec(text)?.[1] ?? "";
+  expect(description).toContain("Use only when the user asks to publish or share a document with emend");
+  expect(description).toContain("emend-review");
+});
+
+test.each(docSkills)("%s has no command markers", (path) => {
   expect(hasSkillCommands(read(path)), path).toBe(false);
 });
 
@@ -491,7 +511,7 @@ gitTest("the whole index contains the complete safe plugin layout with no untrac
   expect(forbidden, `Forbidden plugin entries: ${forbidden.join(", ")}`).toEqual([]);
   const paths = entries.map((entry) => entry.slice(entry.indexOf("\t") + 1));
   expect(paths).toEqual(
-    expect.arrayContaining([".claude-plugin/marketplace.json", "plugin/.claude-plugin/plugin.json", ...skillFiles]),
+    expect.arrayContaining([".claude-plugin/marketplace.json", "plugin/.claude-plugin/plugin.json", ...docSkills]),
   );
   const folders = [
     ...new Set(paths.filter((path) => path.startsWith("plugin/skills/")).map((path) => path.split("/")[2])),

@@ -15,7 +15,7 @@ vi.mock("../runtime.ts", async (original) => {
   return { ...actual, cliRuntime: vi.fn(actual.cliRuntime) };
 });
 
-const names = ["emend-feedback", "emend-review"] as const;
+const names = ["emend-feedback", "emend-publish", "emend-review"] as const;
 let root: string;
 let home: string;
 let source: string;
