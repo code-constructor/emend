@@ -1,5 +1,5 @@
 type Reader = { blocks: Map<string, Range>[]; activeThreadId?: string };
-type Card = { threadId: string; hovered: boolean };
+type Card = { threadId: string | null; hovered: boolean; active: boolean; onActivity?: (active: boolean) => void };
 const readers = new Set<Reader>();
 const cards = new Map<HTMLElement, Card>();
 let activeCardThreads = new Set<string>();
@@ -19,7 +19,16 @@ export function supportsCommentHighlights() {
 function reconcileCards() {
   const next = new Set<string>();
   for (const [card, state] of cards) {
-    if (state.hovered || card.contains(card.ownerDocument.activeElement)) next.add(state.threadId);
+    const focused = card.contains(card.ownerDocument.activeElement);
+    // Chromium can lose :focus-within on slotted ancestors when Pierre replaces
+    // the slot, even though the light-DOM descendant retains actual focus.
+    if (card.classList.contains("em-card")) card.toggleAttribute("data-focus-within", focused);
+    const active = state.hovered || focused;
+    if (active && state.threadId !== null) next.add(state.threadId);
+    if (active !== state.active) {
+      state.active = active;
+      state.onActivity?.(active);
+    }
   }
   activeCardThreads = next;
 }
@@ -91,7 +100,7 @@ export function registerCommentRanges(blocks: Map<string, Range>[]) {
   };
 }
 
-function cardActivityChanged() {
+export function refreshCommentCards() {
   const before = activeThreadIds();
   reconcileCards();
   const after = activeThreadIds();
@@ -99,34 +108,41 @@ function cardActivityChanged() {
 }
 
 /** Each card copy owns its hover/focus state; leaving one cannot clear another. */
-export function trackCommentCard(card: HTMLElement, threadId: string) {
-  if (!supportsCommentHighlights()) return;
-  const state = { threadId, hovered: false };
-  if (!cards.size) document.addEventListener("focusin", cardActivityChanged, true);
+export function trackCommentCard(card: HTMLElement, threadId: string | null, onActivity?: (active: boolean) => void) {
+  // Every card needs focus styling, including composers without thread highlights
+  // or diff-line activity. Null ids still never enter the writeup active set.
+  if (!card.classList.contains("em-card") && (threadId === null || !supportsCommentHighlights()) && !onActivity) return;
+  const state: Card = { threadId, hovered: false, active: false, onActivity };
+  if (!cards.size) document.addEventListener("focusin", refreshCommentCards, true);
   cards.set(card, state);
-  const enter = () => {
+  const enter = (event: PointerEvent) => {
+    if (event.pointerType === "touch") return;
     state.hovered = true;
-    cardActivityChanged();
+    refreshCommentCards();
   };
   const leave = () => {
     state.hovered = false;
-    cardActivityChanged();
+    refreshCommentCards();
   };
   const focusOut = (event: FocusEvent) => {
     // A transfer within the card will be reconciled by document focusin.
     if (event.relatedTarget instanceof Node && card.contains(event.relatedTarget)) return;
-    cardActivityChanged();
+    refreshCommentCards();
+    // activeElement can still name the departing control during focusout.
+    card.removeAttribute("data-focus-within");
   };
   card.addEventListener("pointerenter", enter);
   card.addEventListener("pointerleave", leave);
   card.addEventListener("focusout", focusOut);
-  cardActivityChanged();
+  refreshCommentCards();
   return () => {
     card.removeEventListener("pointerenter", enter);
     card.removeEventListener("pointerleave", leave);
     card.removeEventListener("focusout", focusOut);
     cards.delete(card);
-    if (!cards.size) document.removeEventListener("focusin", cardActivityChanged, true);
-    cardActivityChanged();
+    card.removeAttribute("data-focus-within");
+    if (state.active) onActivity?.(false);
+    if (!cards.size) document.removeEventListener("focusin", refreshCommentCards, true);
+    refreshCommentCards();
   };
 }

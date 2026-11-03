@@ -47,6 +47,9 @@ export const diffShadowCSS = `
   --diffs-computed-hovered-line-bg: var(--diff-select-bg);
   color: var(--fg-1);
 }
+[data-column-number][data-comment-active] {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
 [data-gutter-utility-slot] {
   z-index: 4;
   right: -20px;

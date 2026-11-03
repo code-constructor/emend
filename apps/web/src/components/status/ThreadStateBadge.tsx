@@ -16,9 +16,7 @@ const dots = {
 };
 export function ThreadStateBadge({ state }: { state: ShownThreadState }) {
   return (
-    <span
-      className={`inline-flex items-center gap-[5px] whitespace-nowrap text-[11.5px] font-medium leading-none ${state === "resolved" ? "text-fg-3" : "text-fg-2"}`}
-    >
+    <span className="em-card__pill" data-state={state}>
       <span aria-hidden="true" className={`size-[7px] shrink-0 rounded-full ${dots[state]}`} />
       {labels[state]}
     </span>

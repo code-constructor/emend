@@ -35,7 +35,7 @@ export function DraftList({
             : { label: "Unreadable target", icon: MessageSquare };
         return (
           <article key={draft.key} className="rounded-lg border border-line-1 bg-surface px-3 py-2">
-            <div className="em-thread__target" title={label}>
+            <div className="em-card__target" title={label}>
               <Icon icon={icon} size={13} />
               <span>{label}</span>
             </div>

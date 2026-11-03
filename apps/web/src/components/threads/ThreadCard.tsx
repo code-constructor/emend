@@ -12,9 +12,8 @@ import {
   Unlink,
   User,
 } from "lucide-react";
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { mutationMessage, useReviewMutation } from "../../api/mutations.ts";
-import { trackCommentCard } from "../../lib/comment-highlights.ts";
 import { claimDraft, useDraftClaim, useEditComposer, useReplyComposer } from "../../lib/composer-owner.ts";
 import {
   clearDraft,
@@ -26,7 +25,9 @@ import {
   subscribeDrafts,
 } from "../../lib/drafts.ts";
 import { useThreadActionFocus } from "../../lib/thread-action-focus.ts";
+import { useThreadJump } from "../../lib/thread-jump.ts";
 import type { ReviewSearch } from "../../router.tsx";
+import { useCommentCard } from "../diff/comment-lines.ts";
 import { targetLabel } from "../diff/targets.ts";
 import { ChangedMarker } from "../status/ChangedMarker.tsx";
 import { OutcomeBadge } from "../status/OutcomeBadge.tsx";
@@ -95,10 +96,10 @@ export function ThreadCard({
   showInPlace,
   surface = "reading",
 }: ThreadProps) {
-  const highlightCard = useCallback(
-    (card: HTMLElement | null) => (card ? trackCommentCard(card, thread.id) : undefined),
-    [thread.id],
-  );
+  const location = thread.placement.status === "placed" ? thread.placement.location : null;
+  const highlightCard = useCommentCard(thread.id, surface === "diff" ? location : null);
+  const cardId = `${surface === "diff" ? "diff-thread" : "thread"}-${thread.id}`;
+  const jump = useThreadJump(cardId);
   const mutation = useReviewMutation(reviewId);
   const key = draftKey(reviewId, thread.target, thread.id);
   const keys = [key, ...thread.comments.map((comment) => editDraftKey(reviewId, comment.id))];
@@ -113,7 +114,6 @@ export function ThreadCard({
       setCollapsed(false);
     }
   }, [claim]);
-  const location = thread.placement.status === "placed" ? thread.placement.location : null;
   const changed =
     location && "blockId" in location ? changedBlocks.find((change) => change.blockId === location.blockId) : undefined;
   const showChanged = changed && location && "blockId" in location && answeredBefore(thread, changed.revision);
@@ -125,13 +125,15 @@ export function ThreadCard({
     <article
       ref={highlightCard}
       data-thread-card
-      id={`${surface === "diff" ? "diff-thread" : "thread"}-${thread.id}`}
-      className="em-thread"
+      id={cardId}
+      className="em-card em-thread"
+      data-state={shownThreadState(thread)}
+      data-jump={jump ? "" : undefined}
       data-resolved={resolved ? "" : undefined}
       data-collapsed={collapsed ? "" : undefined}
     >
-      <header className="em-thread__head">
-        <span className="em-thread__target" title={label}>
+      <header className="em-card__head em-thread__head">
+        <span className="em-card__target" title={label}>
           <Icon icon={icon} size={13} />
           <span>{label}</span>
         </span>
@@ -188,72 +190,74 @@ export function ThreadCard({
               </span>
             </div>
           )}
-          {"quote" in thread.target && (
-            <p className="em-thread-quote">
-              <mark>{thread.target.quote}</mark>
-            </p>
-          )}
-          <ol className="em-thread__comments">
-            {thread.comments.map((comment) => (
-              <Comment
-                key={comment.id}
-                comment={comment}
-                reviewId={reviewId}
-                revision={revision}
-                thread={thread}
-                topics={topics}
-                surface={surface}
-              />
-            ))}
-          </ol>
-          {mutation.error && (
-            <p className="px-3" role="alert">
-              {mutationMessage(mutation.error)}
-            </p>
-          )}
-          {(canReply || resolved) && (
-            <footer className="flex items-center gap-1.5 pt-0 pr-2 pb-2 pl-11">
-              {canReply && !replyOpen && (
-                <Button
-                  ref={replyButton.ref}
-                  variant="ghost"
-                  size="sm"
-                  icon={Reply}
-                  onClick={() => {
-                    claimDraft(key, surface);
-                  }}
-                >
-                  Reply
-                </Button>
+          <div className="em-card__body">
+            {"quote" in thread.target && (
+              <p className="em-thread-quote">
+                <mark>{thread.target.quote}</mark>
+              </p>
+            )}
+            <ol className="em-thread__comments">
+              {thread.comments.map((comment) => (
+                <Comment
+                  key={comment.id}
+                  comment={comment}
+                  reviewId={reviewId}
+                  revision={revision}
+                  thread={thread}
+                  topics={topics}
+                  surface={surface}
+                />
+              ))}
+            </ol>
+            {mutation.error && <p role="alert">{mutationMessage(mutation.error)}</p>}
+          </div>
+          {(canReply || resolved || replyOpen) && (
+            <footer className="em-card__foot" data-reply-open={replyOpen ? "" : undefined}>
+              {(canReply || resolved) && (
+                <div className={replyOpen ? "em-card__foot" : "contents"}>
+                  {canReply && !replyOpen && (
+                    <Button
+                      ref={replyButton.ref}
+                      variant="ghost"
+                      size="sm"
+                      icon={Reply}
+                      onClick={() => {
+                        claimDraft(key, surface);
+                      }}
+                    >
+                      Reply
+                    </Button>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    icon={resolved ? RotateCcw : Check}
+                    disabled={mutation.isPending}
+                    onClick={() =>
+                      mutation.mutate({
+                        path: `/api/v1/threads/${encodeURIComponent(thread.id)}/${resolved ? "reopen" : "resolve"}`,
+                      })
+                    }
+                  >
+                    {resolved ? "Reopen" : "Resolve"}
+                  </Button>
+                </div>
               )}
-              <Button
-                variant="ghost"
-                size="sm"
-                icon={resolved ? RotateCcw : Check}
-                disabled={mutation.isPending}
-                onClick={() =>
-                  mutation.mutate({
-                    path: `/api/v1/threads/${encodeURIComponent(thread.id)}/${resolved ? "reopen" : "resolve"}`,
-                  })
-                }
-              >
-                {resolved ? "Reopen" : "Resolve"}
-              </Button>
+              {replyOpen && (
+                <Composer
+                  embedded
+                  surface={surface}
+                  reviewId={reviewId}
+                  revision={revision}
+                  target={thread.target}
+                  topics={topics}
+                  threadId={thread.id}
+                  onSaved={closeReply}
+                  onCancel={closeReply}
+                  returnFocus={replyButton.returnFocus}
+                />
+              )}
             </footer>
-          )}
-          {replyOpen && (
-            <Composer
-              surface={surface}
-              reviewId={reviewId}
-              revision={revision}
-              target={thread.target}
-              topics={topics}
-              threadId={thread.id}
-              onSaved={closeReply}
-              onCancel={closeReply}
-              returnFocus={replyButton.returnFocus}
-              wrap={(editor) => <div className="m-3">{editor}</div>}
-            />
           )}
         </>
       )}
@@ -353,6 +357,7 @@ function Comment({
       <div>
         {editable && editing ? (
           <Composer
+            embedded
             surface={surface}
             reviewId={reviewId}
             revision={revision}

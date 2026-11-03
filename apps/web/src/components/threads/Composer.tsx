@@ -15,6 +15,7 @@ import {
 } from "../../lib/drafts.ts";
 import { useLayout } from "../../lib/layout.ts";
 import { clipText } from "../../lib/selection.ts";
+import { useCommentCard } from "../diff/comment-lines.ts";
 import { targetLabel } from "../diff/targets.ts";
 import { Button } from "../ui/Button.tsx";
 import { Icon } from "../ui/Icon.tsx";
@@ -35,6 +36,7 @@ export function Composer({
   surface = "reading",
   wrap,
   placeholder = true,
+  embedded = false,
 }: {
   reviewId: string;
   revision: number;
@@ -46,6 +48,7 @@ export function Composer({
   surface?: string;
   wrap?: (editor: ReactNode) => ReactNode;
   placeholder?: boolean;
+  embedded?: boolean;
   onSaved?: () => void;
   onCancel?: () => void;
   onDismiss?: () => void;
@@ -88,6 +91,7 @@ export function Composer({
       target={target}
       topics={topics}
       phone={phone}
+      embedded={embedded}
       threadId={threadId}
       commentId={commentId}
       onSaved={onSaved}
@@ -114,6 +118,7 @@ export function Composer({
 }
 function DraftComposer({
   phone,
+  embedded,
   inputRef,
   onFocus,
   storageKey,
@@ -128,6 +133,7 @@ function DraftComposer({
   onDismiss,
 }: {
   phone: boolean;
+  embedded: boolean;
   inputRef: RefObject<HTMLTextAreaElement | null>;
   onFocus: () => void;
   storageKey: string;
@@ -147,9 +153,14 @@ function DraftComposer({
   const { label, icon } = targetLabel(target, topics);
   const saveLabel = commentId ? "Save changes" : "Save comment";
   const shortcut = /Mac|iPhone|iPad|iPod/.test(navigator.platform) ? "⌘↵" : "Ctrl ↵";
+  const bare = embedded && !phone;
+  const highlightCard = useCommentCard(null, !bare && !phone ? target : null);
   return (
     <form
-      className="em-composer"
+      ref={highlightCard}
+      className={`em-composer ${phone ? "em-composer--sheet" : bare ? "em-composer--inline" : "em-card"}`}
+      data-state="draft"
+      data-reply={bare && !commentId ? "" : undefined}
       onKeyDown={(event) => {
         if (event.key === "Escape" && onDismiss && !phone) {
           event.preventDefault();
@@ -189,41 +200,46 @@ function DraftComposer({
         );
       }}
     >
-      <div className="em-composer__target">
-        <Icon icon={icon} size={13} />
-        <span>
-          {commentId ? "Edit · " : threadId ? "Reply · " : ""}
-          {label}
-        </span>
+      {!bare && (
+        <header className="em-card__head">
+          <span className="em-card__target em-composer__target" title={label}>
+            <Icon icon={icon} size={13} />
+            <span>
+              {commentId ? "Edit · " : threadId ? "Reply · " : ""}
+              {label}
+            </span>
+          </span>
+          <span className="em-card__pill" data-state="draft">
+            {commentId ? "Editing" : threadId ? "Reply" : "New comment"}
+          </span>
+        </header>
+      )}
+      <div className="em-card__body">
+        {!bare && "quote" in target && (
+          <p className="em-thread-quote line-clamp-3">
+            <mark>{target.quote}</mark>
+          </p>
+        )}
+        <label htmlFor={field} className="sr-only">
+          {commentId ? "Edit comment" : threadId ? "Reply" : "Comment"}
+        </label>
+        <textarea
+          ref={inputRef}
+          onFocus={onFocus}
+          id={field}
+          data-reply-composer={threadId ? true : undefined}
+          className="em-composer__input"
+          placeholder={commentId ? undefined : "Comment. Saved as unsent until you press Send."}
+          maxLength={LIMITS.commentBodyChars}
+          value={body}
+          onChange={(event) => {
+            const next = clipText(event.target.value, LIMITS.commentBodyChars);
+            saveDraft(storageKey, next);
+          }}
+        />
+        {mutation.error && <p role="alert">{mutationMessage(mutation.error)}</p>}
       </div>
-      {"quote" in target && (
-        <p className="em-thread-quote line-clamp-3">
-          <mark>{target.quote}</mark>
-        </p>
-      )}
-      <label htmlFor={field} className="sr-only">
-        {commentId ? "Edit comment" : threadId ? "Reply" : "Comment"}
-      </label>
-      <textarea
-        ref={inputRef}
-        onFocus={onFocus}
-        id={field}
-        data-reply-composer={threadId ? true : undefined}
-        className="em-composer__input"
-        placeholder={commentId ? undefined : "Comment. Saved as unsent until you press Send."}
-        maxLength={LIMITS.commentBodyChars}
-        value={body}
-        onChange={(event) => {
-          const next = clipText(event.target.value, LIMITS.commentBodyChars);
-          saveDraft(storageKey, next);
-        }}
-      />
-      {mutation.error && (
-        <p className="px-3" role="alert">
-          {mutationMessage(mutation.error)}
-        </p>
-      )}
-      <div className="em-composer__foot">
+      <div className="em-card__foot em-composer__foot">
         <span className="em-composer__hint">
           <Icon icon={Lock} size={12} />
           Draft kept in this browser

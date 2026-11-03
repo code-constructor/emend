@@ -17,6 +17,7 @@ import { Composer } from "../threads/Composer.tsx";
 import { ThreadCard } from "../threads/ThreadCard.tsx";
 import { Button } from "../ui/Button.tsx";
 import { annotationExpansions } from "./annotation-expansion.ts";
+import { CommentLinesContext, createCommentLines } from "./comment-lines.ts";
 import { FileHeader } from "./FileHeader.tsx";
 import { GutterComment } from "./GutterComment.tsx";
 import { LineComposer } from "./LineComposer.tsx";
@@ -28,6 +29,7 @@ import type { FileLocation } from "./targets.ts";
 import { diffTheme } from "./theme.ts";
 
 export type ParsedDiff = FileDiffMetadata;
+export type DiffPostRender = NonNullable<FileDiffOptions<ReactElement, undefined>["onPostRender"]>;
 type Annotation = DiffLineAnnotation<ReactElement>;
 type BodyState = { diff?: ParsedDiff; blocked: boolean };
 type SlotState = { names: Set<string>; rendered: boolean };
@@ -62,14 +64,16 @@ export function DiffView({
   selected: SelectedLineRange | null;
   onSlots?: (slots: SlotState) => void;
 }) {
+  const [commentLines] = useState(createCommentLines);
   const hoveredLine = useRef<GetHoveredLineResult<"diff"> | undefined>(undefined);
   const expansionState = useRef<{
-    instance: Parameters<NonNullable<FileDiffOptions<ReactElement, undefined>["onPostRender"]>>[1];
+    instance: Parameters<DiffPostRender>[1];
     diff: ParsedDiff;
     counts: Map<string, number>;
   } | null>(null);
-  const onPostRender = useCallback<NonNullable<FileDiffOptions<ReactElement, undefined>["onPostRender"]>>(
+  const onPostRender = useCallback<DiffPostRender>(
     (node, instance, phase) => {
+      commentLines.postRender(node, instance, phase);
       if (phase === "unmount") expansionState.current = null;
       // The initial mount callback can precede async rendering. Once code exists,
       // Pierre has committed its annotation slots in the same render as the lines.
@@ -97,51 +101,53 @@ export function DiffView({
         ),
       });
     },
-    [onSlots, fileDiff, annotations],
+    [onSlots, fileDiff, annotations, commentLines],
   );
   return (
     <div className="em-diff-code">
-      <PierreFileDiff<ReactElement>
-        className="em-diff-host"
-        style={{ colorScheme: "inherit" }}
-        fileDiff={fileDiff}
-        options={{
-          preferredHighlighter: "shiki-js",
-          tokenizeMaxLength: 1000,
-          diffStyle,
-          theme: diffTheme.name,
-          themeType: "system",
-          lineDiffType: "word",
-          diffIndicators: "classic",
-          hunkSeparators: "line-info",
-          lineHoverHighlight: "both",
-          enableGutterUtility: true,
-          onLineEnter: ({ lineNumber, annotationSide, numberElement }) => {
-            hoveredLine.current = { lineNumber, side: annotationSide };
-            // 1.6.1 pins the utility to a selection's end. This pointer affordance
-            // belongs to the hovered row even while another composer is open.
-            const root = numberElement.getRootNode();
-            const utility = root instanceof ShadowRoot ? root.querySelector("[data-gutter-utility-slot]") : null;
-            if (utility) numberElement.append(utility);
-          },
-          onLineLeave: () => {
-            hoveredLine.current = undefined;
-          },
-          unsafeCSS: diffShadowCSS,
-          overflow,
-          disableFileHeader: true,
-          enableLineSelection: true,
-          expandUnchanged: false,
-          onLineSelectionEnd: onSelect,
-          onPostRender,
-        }}
-        selectedLines={selected}
-        lineAnnotations={annotations}
-        renderAnnotation={(annotation) => annotation.metadata}
-        renderGutterUtility={(getHoveredLine) => (
-          <GutterComment getHoveredLine={() => hoveredLine.current ?? getHoveredLine()} onSelect={onSelect} />
-        )}
-      />
+      <CommentLinesContext value={commentLines}>
+        <PierreFileDiff<ReactElement>
+          className="em-diff-host"
+          style={{ colorScheme: "inherit" }}
+          fileDiff={fileDiff}
+          options={{
+            preferredHighlighter: "shiki-js",
+            tokenizeMaxLength: 1000,
+            diffStyle,
+            theme: diffTheme.name,
+            themeType: "system",
+            lineDiffType: "word",
+            diffIndicators: "classic",
+            hunkSeparators: "line-info",
+            lineHoverHighlight: "both",
+            enableGutterUtility: true,
+            onLineEnter: ({ lineNumber, annotationSide, numberElement }) => {
+              hoveredLine.current = { lineNumber, side: annotationSide };
+              // 1.6.1 pins the utility to a selection's end. This pointer affordance
+              // belongs to the hovered row even while another composer is open.
+              const root = numberElement.getRootNode();
+              const utility = root instanceof ShadowRoot ? root.querySelector("[data-gutter-utility-slot]") : null;
+              if (utility) numberElement.append(utility);
+            },
+            onLineLeave: () => {
+              hoveredLine.current = undefined;
+            },
+            unsafeCSS: diffShadowCSS,
+            overflow,
+            disableFileHeader: true,
+            enableLineSelection: true,
+            expandUnchanged: false,
+            onLineSelectionEnd: onSelect,
+            onPostRender,
+          }}
+          selectedLines={selected}
+          lineAnnotations={annotations}
+          renderAnnotation={(annotation) => annotation.metadata}
+          renderGutterUtility={(getHoveredLine) => (
+            <GutterComment getHoveredLine={() => hoveredLine.current ?? getHoveredLine()} onSelect={onSelect} />
+          )}
+        />
+      </CommentLinesContext>
     </div>
   );
 }

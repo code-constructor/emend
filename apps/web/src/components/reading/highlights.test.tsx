@@ -7,7 +7,9 @@ import { type ReactNode, StrictMode } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { renderWriteup } from "../../../../../packages/core/src/render/writeup.ts";
 import * as blockRanges from "../../lib/block-ranges.ts";
-import { trackCommentCard } from "../../lib/comment-highlights.ts";
+import { registerCommentRanges, trackCommentCard } from "../../lib/comment-highlights.ts";
+import { draftKey } from "../../lib/drafts.ts";
+import { Composer } from "../threads/Composer.tsx";
 import { ThreadCard } from "../threads/ThreadCard.tsx";
 import { ToastProvider } from "../ui/Toast.tsx";
 import { BlockReader } from "./BlockReader.tsx";
@@ -92,6 +94,29 @@ test("an unsent writeup thread marks exactly its quote, and unmount deletes both
   expect(view.container.querySelector("[data-block-id]")?.contains(ranges()[0]?.startContainer ?? null)).toBe(true);
   view.unmount();
   expect(highlights.size).toBe(0);
+});
+
+test("composer hover and focus never add a draft key to the writeup active set", () => {
+  const key = draftKey(reviewId, thread.target);
+  const view = mount(<Composer reviewId={reviewId} revision={1} target={thread.target} />);
+  const input = view.getByRole("textbox");
+  const form = required(input.closest("form"));
+  const range = document.createRange();
+  range.selectNodeContents(form);
+  // A sentinel under the actual draft key reveals any accidental active-set entry.
+  const reader = required(registerCommentRanges([new Map([[key, range]])]));
+  const set = vi.spyOn(highlights, "set");
+  try {
+    fireEvent.pointerEnter(form, { pointerType: "mouse" });
+    expect(ranges(true)).toEqual([]);
+    act(() => input.focus());
+    fireEvent.pointerLeave(form, { pointerType: "mouse" });
+    expect(ranges(true)).toEqual([]);
+    expect(ranges()).toEqual([range]);
+    expect(set).not.toHaveBeenCalled();
+  } finally {
+    reader.unregister();
+  }
 });
 
 test.each(["resolved", "unplaced", "wrong-kind", "missing-block", "outside", "mismatch", "diagram"])(

@@ -1,5 +1,8 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { LIMITS, type Target, type ThreadView, type UnplacedReason } from "@emend/contract";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from "@tanstack/react-router";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { type ReactNode, useState } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
@@ -55,6 +58,203 @@ function card(thread = base) {
   return <ThreadCard reviewId={id} revision={2} thread={thread} changedBlocks={[]} />;
 }
 
+test.each(["unsent", "open", "sent", "answered", "resolved"] as const)(
+  "%s cards share the head, body, footer and state pill",
+  (state) => {
+    const thread: ThreadView = {
+      ...base,
+      state: state === "unsent" ? "open" : state,
+      comments:
+        state === "unsent"
+          ? base.comments.map((comment) => ({ ...comment, sent: false, sentOn: null }))
+          : state === "answered"
+            ? [...base.comments, { id: "agent", author: "agent", body: "A reply", sent: false, sentOn: null }]
+            : base.comments,
+    };
+    mount(card(thread));
+    const element = screen.getByRole("article");
+    expect(element.classList.contains("em-card")).toBe(true);
+    expect(element.dataset.state).toBe(state);
+    for (const part of ["head", "body"]) expect(element.querySelector(`:scope > .em-card__${part}`)).toBeTruthy();
+    expect(!!element.querySelector(":scope > .em-card__foot")).toBe(state !== "unsent");
+    expect(element.querySelector(".em-card__head .em-card__pill")?.textContent).toBe(
+      state[0]?.toUpperCase() + state.slice(1),
+    );
+    expect(element.querySelector(".em-card__body > .em-thread-quote")).toBeTruthy();
+    expect(element.querySelector(".em-card__body > .em-thread__comments")).toBeTruthy();
+  },
+);
+
+test.each([
+  { pill: "New comment", prefix: "", props: {} },
+  { pill: "Reply", prefix: "Reply · ", props: { threadId: id } },
+  { pill: "Editing", prefix: "Edit · ", props: { commentId: id } },
+])("standalone $pill composer shares the card anatomy", ({ pill, prefix, props }) => {
+  mount(<Composer reviewId={id} revision={2} target={target} {...props} />);
+  const form = screen.getByRole("textbox").closest("form");
+  expect(form?.classList.contains("em-card")).toBe(true);
+  expect(form?.dataset.state).toBe("draft");
+  for (const part of ["head", "body", "foot"]) expect(form?.querySelector(`:scope > .em-card__${part}`)).toBeTruthy();
+  expect(form?.querySelector(".em-card__pill")?.textContent).toBe(pill);
+  expect(form?.querySelector(".em-composer__target")?.textContent).toBe(`${prefix}Writeup · Overview`);
+});
+
+test.each([
+  { pill: "New comment", props: {} },
+  { pill: "Reply", props: { threadId: id } },
+  { pill: "Editing", props: { commentId: id } },
+])("phone $pill composer keeps the anatomy inside its Sheet without a card border", ({ pill, props }) => {
+  width = 390;
+  mount(<Composer embedded reviewId={id} revision={2} target={target} {...props} />);
+  const form = within(screen.getByRole("dialog")).getByRole("textbox").closest("form");
+  expect(form?.classList.contains("em-composer--sheet")).toBe(true);
+  expect(form?.classList.contains("em-card")).toBe(false);
+  expect(form?.dataset.state).toBe("draft");
+  for (const part of ["head", "body", "foot"]) expect(form?.querySelector(`:scope > .em-card__${part}`)).toBeTruthy();
+  expect(form?.querySelector(".em-card__pill")?.textContent).toBe(pill);
+});
+
+test("card CSS distinguishes idle composer, hover, focus and jump, and respects reduced motion", () => {
+  const css = readFileSync(resolve(import.meta.dirname, "../../styles/threads.css"), "utf8");
+  const rule = (selector: string) => css.slice(css.indexOf(`\n  ${selector}`)).split("}")[0];
+  expect(rule(".em-composer {")).not.toContain("box-shadow");
+  expect(rule(".em-card.em-composer {")).toContain("0 0 0 3px var(--accent-tint)");
+  expect(rule(".em-card.em-composer {")).not.toContain("--accent-tint-2");
+  expect(css).toMatch(
+    /\.em-card:focus-within,\s*\.em-card\[data-focus-within\],\s*\.em-card\[data-jump\]\s*\{[^}]*--accent-tint-2/,
+  );
+  expect(css).toMatch(/prefers-reduced-motion: reduce[\s\S]*?transition: none/);
+  expect(rule(".em-card__foot {")).toContain("justify-content: flex-end");
+  expect(rule(".em-card__foot {")).toContain("padding: 6px 8px 8px 12px");
+  expect(rule(".em-card::before {")).toContain("width: 3px");
+  expect(rule('.em-card[data-state="sent"] {')).toContain("--thread-sent");
+  expect(rule('.em-card[data-state="answered"] {')).toContain("--thread-answered");
+  expect(css).not.toContain('.em-card[data-state="resolved"]');
+});
+
+test.each(["composer", "thread"])(
+  "%s card focus events work without highlights and preserve internal transfers",
+  (kind) => {
+    vi.stubGlobal("CSS", {});
+    mount(
+      <>
+        <button type="button">Outside</button>
+        {kind === "composer" ? <Composer reviewId={id} revision={2} target={target} /> : card()}
+      </>,
+    );
+    const first = kind === "composer" ? screen.getByRole("textbox") : screen.getByRole("button", { name: "Reply" });
+    if (kind === "composer") fireEvent.change(first, { target: { value: "A focused draft" } });
+    const second = screen.getByRole("button", { name: kind === "composer" ? "Save comment" : "Resolve" });
+    const element = first.closest(".em-card");
+    if (!element) throw new Error("Missing card");
+    expect(element.hasAttribute("data-focus-within")).toBe(false);
+    act(() => first.focus());
+    expect(element.hasAttribute("data-focus-within")).toBe(true);
+    const changes = new MutationObserver(() => {});
+    changes.observe(element, { attributes: true, attributeFilter: ["data-focus-within"] });
+    try {
+      fireEvent.focusOut(first, { relatedTarget: second });
+      expect(element.hasAttribute("data-focus-within")).toBe(true);
+      act(() => second.focus());
+      expect(element.hasAttribute("data-focus-within")).toBe(true);
+      expect(changes.takeRecords()).toEqual([]);
+      const outside = screen.getByRole("button", { name: "Outside" });
+      // During focusout activeElement can still be the departing control.
+      fireEvent.focusOut(second, { relatedTarget: outside });
+      expect(element.hasAttribute("data-focus-within")).toBe(false);
+      act(() => outside.focus());
+      expect(element.hasAttribute("data-focus-within")).toBe(false);
+      act(() => first.focus());
+      fireEvent.focusOut(first, { relatedTarget: null });
+      expect(element.hasAttribute("data-focus-within")).toBe(false);
+    } finally {
+      changes.disconnect();
+    }
+  },
+);
+
+test("draft targets use the shared path styling", () => {
+  saveDraft(draftKey(id, target), "A draft");
+  mount(<DraftList reviewId={id} onResume={() => {}} />);
+  const label = screen.getByText("Writeup · Overview").parentElement;
+  expect(label?.classList.contains("em-card__target")).toBe(true);
+  expect(label?.classList.contains("em-thread__target")).toBe(false);
+  expect(label?.querySelector("svg")).toBeTruthy();
+});
+
+test("an unsent thread has no empty footer but retains a resumed reply editor", () => {
+  mount(card({ ...base, comments: base.comments.map((comment) => ({ ...comment, sent: false, sentOn: null })) }));
+  const element = screen.getByRole("article");
+  expect(element.querySelector(":scope > footer")).toBeNull();
+  act(() => claimDraft(draftKey(id, target, id), "reading"));
+  const foot = element.querySelector(":scope > .em-card__foot");
+  expect(foot?.contains(screen.getByRole("textbox", { name: "Reply" }))).toBe(true);
+  expect(foot?.querySelector(":scope > .em-card__foot")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(element.querySelector(":scope > footer")).toBeNull();
+});
+
+test("collapsed resolved cards keep their flat shadow and surface head", () => {
+  const css = readFileSync(resolve(import.meta.dirname, "../../styles/threads.css"), "utf8");
+  expect(css).toMatch(/\.em-thread\[data-collapsed\]\s*\{\s*box-shadow: none;/);
+  expect(css).toMatch(/\.em-thread\[data-collapsed\] \.em-thread__head\s*\{[^}]*background: var\(--bg-surface\)/);
+});
+
+test("only hover-capable pointers get the card hover glow", () => {
+  const css = readFileSync(resolve(import.meta.dirname, "../../styles/threads.css"), "utf8");
+  const hover = css.match(/@media \(hover: hover\)\s*\{\s*\.em-card:hover\s*\{[^}]*\}\s*\}/)?.[0];
+  expect(hover).toContain("0 0 0 3px var(--accent-tint)");
+  expect(css.replace(hover ?? "", "")).not.toContain(".em-card:hover");
+});
+
+test.each(["new", "reply", "edit", "phone"])("textarea focus ring is suppressed only inside a card (%s)", (mode) => {
+  const css = readFileSync(resolve(import.meta.dirname, "../../styles/threads.css"), "utf8");
+  const baseCss = readFileSync(resolve(import.meta.dirname, "../../styles/base.css"), "utf8");
+  const selector = ".em-card .em-composer__input";
+  expect(css).toMatch(/\.em-card \.em-composer__input:focus-visible\s*\{\s*box-shadow: none;\s*\}/);
+  expect(baseCss).toMatch(/:focus-visible\s*\{[^}]*box-shadow: var\(--focus-ring\)/);
+  if (mode === "reply") {
+    mount(card());
+    fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+  } else if (mode === "edit") {
+    mount(card({ ...base, comments: base.comments.map((comment) => ({ ...comment, sent: false })) }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  } else {
+    if (mode === "phone") width = 390;
+    mount(<Composer reviewId={id} revision={2} target={target} />);
+  }
+  expect(screen.getByRole("textbox").matches(selector)).toBe(mode !== "phone");
+  expect(
+    screen.getByRole("button", { name: mode === "edit" ? "Save changes" : "Save comment" }).matches(selector),
+  ).toBe(false);
+  if (mode === "phone") expect(within(screen.getByRole("dialog")).getByRole("textbox")).toBeTruthy();
+});
+
+test("router hash replacement transfers the persistent jump marker between card surfaces", async () => {
+  const root = createRootRoute({
+    component: () => (
+      <QueryClientProvider client={client}>
+        {card()}
+        <ThreadCard reviewId={id} revision={2} thread={base} changedBlocks={[]} surface="diff" />
+      </QueryClientProvider>
+    ),
+  });
+  const router = createRouter({
+    routeTree: root,
+    history: createMemoryHistory({ initialEntries: [`/#thread-${id}`] }),
+  });
+  const view = render(<RouterProvider router={router} />);
+  await waitFor(() => expect(view.container.querySelector("[data-jump]")?.id).toBe(`thread-${id}`));
+  const reading = document.getElementById(`thread-${id}`);
+  fireEvent.pointerLeave(reading as HTMLElement);
+  expect(reading?.hasAttribute("data-jump")).toBe(true);
+  await act(() => router.navigate({ hash: `diff-thread-${id}`, replace: true }));
+  expect(reading?.hasAttribute("data-jump")).toBe(false);
+  expect(view.container.querySelector("[data-jump]")?.id).toBe(`diff-thread-${id}`);
+  await act(() => router.navigate({ hash: "", replace: true }));
+  expect(view.container.querySelector("[data-jump]")).toBeNull();
+});
+
 test.each(["unsent", "open", "sent", "answered", "resolved"] as const)("thread badge labels %s", (state) => {
   const { container } = render(<ThreadStateBadge state={state} />);
   expect(screen.getByText(state[0]?.toUpperCase() + state.slice(1))).toBeTruthy();
@@ -106,7 +306,11 @@ test("Reply focuses one editor; Cancel keeps its draft under Unsaved comments; a
   const input = screen.getByRole("textbox", { name: "Reply" });
   expect(document.activeElement).toBe(input);
   expect(screen.queryByRole("button", { name: "Reply" })).toBeNull();
-  expect(screen.getByText("Reply · Writeup · Overview")).toBeTruthy();
+  expect(input.closest("form")?.querySelector(".em-card__head")).toBeNull();
+  expect(input.closest("form")?.classList.contains("em-card")).toBe(false);
+  expect(input.closest(".em-card")).toBe(screen.getByRole("article"));
+  expect(screen.getByRole("article").querySelector(".em-card")).toBeNull();
+  expect(screen.getByRole("article").querySelector(":scope > .em-card__foot")?.contains(input)).toBe(true);
   fireEvent.change(input, { target: { value: "Follow-up draft" } });
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   expect(screen.queryByRole("textbox")).toBeNull();
@@ -218,12 +422,13 @@ test.each([{ metaKey: true }, { ctrlKey: true }])(
     expect(cancel).toHaveBeenCalledOnce();
   },
 );
-test("editing changes the target prefix and save label, and Cancel discards the edit", () => {
+test("editing uses a bare editor and save label, and Cancel discards the edit", () => {
   mount(card({ ...base, comments: base.comments.map((comment) => ({ ...comment, sent: false, sentOn: null })) }));
   fireEvent.click(screen.getByRole("button", { name: "Edit" }));
   const input = screen.getByRole("textbox", { name: "Edit comment" });
   expect(input.getAttribute("placeholder")).toBeNull();
-  expect(screen.getByText("Edit · Writeup · Overview")).toBeTruthy();
+  expect(input.closest("form")?.querySelector(".em-card__head")).toBeNull();
+  expect(input.closest("form")?.classList.contains("em-card")).toBe(false);
   expect(screen.getByRole("button", { name: "Save changes" })).toBeTruthy();
   fireEvent.change(input, { target: { value: "An edit" } });
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
