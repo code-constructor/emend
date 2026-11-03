@@ -33,6 +33,7 @@ import { sendRoutes } from "./routes/sends.ts";
 import { serverRoutes } from "./routes/server.ts";
 import { sessionRoutes } from "./routes/session.ts";
 import { threadRoutes } from "./routes/threads.ts";
+import { viewedRoutes } from "./routes/viewed.ts";
 
 export interface AppDeps {
   db: Db;
@@ -68,6 +69,7 @@ export const ENDPOINTS = [
   { method: "GET", path: "/api/v1/reviews", scope: "read" },
   { method: "GET", path: "/api/v1/reviews/:id", scope: "read" },
   { method: "GET", path: "/api/v1/reviews/:id/revisions/:seq", scope: "read" },
+  { method: "PUT", path: "/api/v1/reviews/:id/viewed", scope: "comment" },
   { method: "GET", path: "/api/v1/files/:fileId/old", scope: "read" },
   { method: "GET", path: "/api/v1/files/:fileId/new", scope: "read" },
   { method: "GET", path: "/api/v1/events", scope: "read" },
@@ -111,14 +113,15 @@ export function createApp(deps: AppDeps) {
       (c.req.method === "HEAD"
         ? endpointMatchers.find((entry) => entry.method === "GET" && entry.match.test(c.req.path))
         : undefined);
-    const json = endpoint && ["POST", "PATCH"].includes(c.req.method);
+    const blobUpload = c.req.method === "PUT" && c.req.path.startsWith("/api/v1/blobs/");
+    const json = endpoint && ["POST", "PATCH", "PUT"].includes(c.req.method) && !blobUpload;
     const limit = ["/api/v1/publish", "/api/v1/import"].includes(c.req.path)
       ? LIMITS.publishJsonBytes
       : ["/api/v1/session", "/api/v1/machines"].includes(c.req.path)
         ? LIMITS.publicJsonBytes
         : LIMITS.requestJsonBytes;
     if (json) checkContentLength(c, limit);
-    if (c.req.method === "PUT" && c.req.path.startsWith("/api/v1/blobs/")) checkContentLength(c, LIMITS.htmlDocBytes);
+    if (blobUpload) checkContentLength(c, LIMITS.htmlDocBytes);
     if (endpoint?.scope !== "public") {
       const authorization = c.req.header("Authorization");
       let principal = authorization !== undefined ? await verifyBearer(deps.db, authorization, deps.now()) : null;
@@ -150,6 +153,7 @@ export function createApp(deps: AppDeps) {
   blobRoutes(app, deps);
   publishRoutes(app, deps);
   reviewRoutes(app, deps);
+  viewedRoutes(app, deps);
   fileRoutes(app, deps);
   threadRoutes(app, deps);
   commentRoutes(app, deps);

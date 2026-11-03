@@ -3,9 +3,11 @@ import { useQuery } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import { type MouseEvent, type Ref, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { placeSpan } from "../../../../packages/core/src/place/span.ts";
+import { mutationMessage, useViewedErrors, useViewedMutation, useViewedRevision } from "../api/mutations.ts";
 import { reviewQuery, revisionQuery } from "../api/queries.ts";
 import { LazyDiffPane } from "../components/diff/LazyDiffPane.tsx";
 import { isDiffTarget } from "../components/diff/targets.ts";
+import { FilesView } from "../components/files/FilesView.tsx";
 import { AppFrame } from "../components/layout/AppFrame.tsx";
 import { Panes } from "../components/layout/Panes.tsx";
 import { PhoneTabs } from "../components/layout/PhoneTabs.tsx";
@@ -22,6 +24,7 @@ import { Composer } from "../components/threads/Composer.tsx";
 import { ThreadList } from "../components/threads/ThreadList.tsx";
 import { Button } from "../components/ui/Button.tsx";
 import { claimDraft } from "../lib/composer-owner.ts";
+import { useDiffCounts } from "../lib/diff-counts.ts";
 import type { NavigateDiff } from "../lib/diff-navigation.ts";
 import { draftKey, hasDraft, type SavedDraft, saveDraft, subscribeDrafts } from "../lib/drafts.ts";
 import { usePublishedRevision } from "../lib/events.tsx";
@@ -178,6 +181,10 @@ function LoadedReview({
     [review.id, seq],
   );
   const query = useQuery(revisionQuery(review.id, seq));
+  const viewedMutation = useViewedMutation(review.id);
+  const viewedErrors = useViewedErrors(review.id);
+  const onViewed = (paths: string[], viewed: boolean) => viewedMutation.mutate({ revision: seq, paths, viewed });
+  const { counts: diffCounts } = useDiffCounts();
   const navigate = useNavigate({ from: "/r/$reviewId" });
   const layout = useLayout();
   const paneMode = usePaneMode();
@@ -190,7 +197,8 @@ function LoadedReview({
     navigateDiff.current = navigate;
   }, []);
   const [currentTopic, setCurrentTopic] = useState<string>();
-  const revision = query.data;
+  const revision = useViewedRevision(review.id, query.data);
+  const diffFiles = revision?.files.filter((file) => file.role === "diff") ?? [];
   const [resumed, setResumed] = useState<(SavedDraft & { tab: NonNullable<ReviewSearch["tab"]> }) | null>(null);
   const resumedPlacement = resumed && revision ? draftPlacement(resumed, revision) : undefined;
   const resumedBlockId =
@@ -212,7 +220,9 @@ function LoadedReview({
   const hasWriteup =
     (!!revision && (!revision.writeupEmpty || revision.main === "writeup")) || resumed?.tab === "writeup";
   const opening = revision ? openingView(revision) : { tab: "writeup" as const };
-  const useOpening = !search.tab || !{ writeup: hasWriteup, diff: hasDiff, docs: hasDocs, comments: true }[search.tab];
+  const useOpening =
+    !search.tab ||
+    !{ writeup: hasWriteup, files: diffFiles.length > 0, diff: hasDiff, docs: hasDocs, comments: true }[search.tab];
   const tab = useOpening ? opening.tab : (search.tab ?? opening.tab);
   const [lastReadingTab, setLastReadingTab] = useState<Exclude<ReviewSearch["tab"], "diff">>();
   if (tab !== "diff" && lastReadingTab !== tab) setLastReadingTab(tab);
@@ -441,6 +451,8 @@ function LoadedReview({
     hasDiff,
     hasWriteup,
     unsentCount: review.unsentCount,
+    filesCount: diffFiles.length,
+    viewedCount: diffFiles.filter((file) => file.viewed === "viewed").length,
   };
   const ready = Math.max(published, review.newestRevision);
   return (
@@ -465,18 +477,32 @@ function LoadedReview({
             />
           }
           header={
-            (layout !== "phone" || tab !== "diff") && (
-              <ReviewHeader
-                review={review}
-                revision={revision}
-                seq={seq}
-                ready={ready}
-                phone={layout === "phone"}
-                titleRef={titleRef}
-                onRevisionChange={setRevision}
-                onCommentReview={commentOnReview}
-              />
-            )
+            <>
+              {viewedErrors.errors.map((failure) => (
+                <div key={failure.id} role="alert" className="px-4 py-2 text-danger-fg">
+                  <p>
+                    {failure.error && mutationMessage(failure.error)} <bdi>{failure.failedPaths?.[0]}</bdi>
+                    {(failure.failedPaths?.length ?? 0) > 1 &&
+                      ` and ${(failure.failedPaths?.length ?? 1) - 1} other files`}
+                  </p>
+                  <Button size="sm" variant="ghost" onClick={() => viewedErrors.dismiss(failure.id)}>
+                    Dismiss
+                  </Button>
+                </div>
+              ))}
+              {(layout !== "phone" || tab !== "diff") && (
+                <ReviewHeader
+                  review={review}
+                  revision={revision}
+                  seq={seq}
+                  ready={ready}
+                  phone={layout === "phone"}
+                  titleRef={titleRef}
+                  onRevisionChange={setRevision}
+                  onCommentReview={commentOnReview}
+                />
+              )}
+            </>
           }
           reading={
             <div className="contents">
@@ -502,25 +528,39 @@ function LoadedReview({
                 )}
                 {revision && (
                   <ReadingFoldContext value={readingFolds}>
-                    <Reading
-                      key={`${seq}:${readingTab}`}
-                      reviewId={review.id}
-                      revision={revision}
-                      tab={readingTab}
-                      visible={paneMode === "split" || tab !== "diff" || !hasDiff}
-                      search={search}
-                      openDoc={openDoc}
-                      targeted={!!hash || !!search.thread}
-                      activeThreadId={currentIntent.threadId}
-                      threadJump={threadJump?.navigation === currentIntent.navigation ? threadJump : undefined}
-                      onOpenDoc={(path) => navigateReading({ ...search, tab: "docs", doc: path, thread: undefined })}
-                      phone={layout === "phone"}
-                      onResume={resume}
-                      htmlNavigation={htmlNavigation}
-                      composingPath={resumed?.target?.kind === "html-span" ? resumed.target.path : undefined}
-                      resumedBlockId={resumedBlockId}
-                      onCurrentTopic={layout !== "phone" && hasDiff ? setCurrentTopic : undefined}
-                    />
+                    {readingTab === "files" ? (
+                      <FilesView
+                        revision={revision}
+                        counts={diffCounts}
+                        onViewed={onViewed}
+                        onNavigate={(file) =>
+                          navigateReading(
+                            { ...search, tab: paneMode === "tabs" ? "diff" : "files", thread: undefined },
+                            `diff-file-${file.id}`,
+                          )
+                        }
+                      />
+                    ) : (
+                      <Reading
+                        key={`${seq}:${readingTab}`}
+                        reviewId={review.id}
+                        revision={revision}
+                        tab={readingTab}
+                        visible={paneMode === "split" || tab !== "diff" || !hasDiff}
+                        search={search}
+                        openDoc={openDoc}
+                        targeted={!!hash || !!search.thread}
+                        activeThreadId={currentIntent.threadId}
+                        threadJump={threadJump?.navigation === currentIntent.navigation ? threadJump : undefined}
+                        onOpenDoc={(path) => navigateReading({ ...search, tab: "docs", doc: path, thread: undefined })}
+                        phone={layout === "phone"}
+                        onResume={resume}
+                        htmlNavigation={htmlNavigation}
+                        composingPath={resumed?.target?.kind === "html-span" ? resumed.target.path : undefined}
+                        resumedBlockId={resumedBlockId}
+                        onCurrentTopic={layout !== "phone" && hasDiff ? setCurrentTopic : undefined}
+                      />
+                    )}
                   </ReadingFoldContext>
                 )}
                 {resumed?.target && !isDiffTarget(resumed.target) && (
@@ -567,6 +607,7 @@ function LoadedReview({
                   currentTopic={currentTopic}
                   writeupVisible={readingTab === "writeup" && paneMode === "split"}
                   search={search}
+                  onViewed={onViewed}
                 />
               ) : (
                 <p role={query.isError ? "alert" : "status"} className="p-5">

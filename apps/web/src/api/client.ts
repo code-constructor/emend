@@ -28,7 +28,7 @@ export async function get<T>(path: string, schema: { parse(value: unknown): T },
 export async function head(path: string, signal?: AbortSignal) {
   await request(path, { method: "HEAD", signal });
 }
-export async function change(path: string, method: "POST" | "PATCH" | "DELETE", body?: unknown) {
+export async function change(path: string, method: "POST" | "PATCH" | "DELETE" | "PUT", body?: unknown) {
   await request(path, {
     method,
     ...(body === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),

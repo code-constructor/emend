@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { LIMITS } from "./limits.ts";
+import { FilePath } from "./review.ts";
 
 export const API_PREFIX = "/api/v1";
 export const MIN_CLIENT_VERSION = "0.1.0";
@@ -21,6 +22,13 @@ export const Capabilities = z.object({
   features: z.array(z.string().max(LIMITS.featureChars)).max(LIMITS.featuresCount),
 });
 export type Capabilities = z.infer<typeof Capabilities>;
+
+export const ViewedRequest = z.object({
+  revision: z.int().positive(),
+  paths: z.array(FilePath).min(1).max(LIMITS.filesPerRevision),
+  viewed: z.boolean(),
+});
+export type ViewedRequest = z.infer<typeof ViewedRequest>;
 
 export const ServerStopRequest = z.strictObject({});
 export const ServerStopping = z.object({ stopping: z.literal(true) });

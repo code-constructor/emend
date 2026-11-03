@@ -172,7 +172,7 @@ test("every documented API endpoint enforces its scope even before its handler e
         path,
         endpoint.method,
         credential,
-        ["POST", "PATCH"].includes(endpoint.method) ? {} : undefined,
+        ["POST", "PATCH", "PUT"].includes(endpoint.method) ? {} : undefined,
       );
       if (!(SCOPES_BY_KIND[kind] as readonly string[]).includes(endpoint.scope))
         await error(response, "forbidden", endpoint.method === "HEAD");
@@ -184,6 +184,7 @@ test("every documented API endpoint enforces its scope even before its handler e
       } else if (
         path === "/api/v1/publish" ||
         path.startsWith("/api/v1/blobs/") ||
+        (endpoint.method === "PUT" && path.endsWith("/viewed")) ||
         (endpoint.method === "POST" && /\/(threads|comments|sends|reply)$/.test(path)) ||
         (endpoint.method === "PATCH" && path.startsWith("/api/v1/comments/"))
       )

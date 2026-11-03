@@ -80,6 +80,7 @@ test("migrations apply to an empty file and a second run applies nothing", async
       "threads",
       "tokens",
       "topics",
+      "viewed_files",
       "writeups",
     ]);
   } finally {

@@ -8,11 +8,21 @@ import type {
 } from "@pierre/diffs";
 import { FileDiff as PierreFileDiff, WorkerPoolContextProvider } from "@pierre/diffs/react";
 import DiffWorker from "@pierre/diffs/worker/worker.js?worker";
-import { useQuery } from "@tanstack/react-query";
-import { type ReactElement, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  type ReactElement,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { splitLines } from "../../../../../packages/core/src/place/linemap.ts";
 import { getText } from "../../api/client.ts";
 import { plural } from "../../lib/count.ts";
+import { diffLoads } from "../../lib/diff-loads.ts";
 import { Composer } from "../threads/Composer.tsx";
 import { ThreadCard } from "../threads/ThreadCard.tsx";
 import { Button } from "../ui/Button.tsx";
@@ -31,7 +41,7 @@ import { diffTheme } from "./theme.ts";
 export type ParsedDiff = FileDiffMetadata;
 export type DiffPostRender = NonNullable<FileDiffOptions<ReactElement, undefined>["onPostRender"]>;
 type Annotation = DiffLineAnnotation<ReactElement>;
-type BodyState = { diff?: ParsedDiff; blocked: boolean };
+type BodyState = { diff?: ParsedDiff; blocked: boolean; loading?: boolean };
 type SlotState = { names: Set<string>; rendered: boolean };
 const poolOptions = { workerFactory: () => new DiffWorker(), poolSize: 2 };
 const highlighterOptions = {
@@ -183,6 +193,7 @@ export type DiffContext = {
   overflow?: "scroll" | "wrap";
   counts: Map<string, DiffCounts>;
   onParsed: (id: string, counts: DiffCounts) => void;
+  onViewed?: (paths: string[], viewed: boolean) => void;
   collapsedFiles: Set<string>;
   toggleFile: (id: string) => void;
   revealedFile?: string;
@@ -195,13 +206,19 @@ export function FileDiff({
 }: DiffContext & { file: FileView; topicCollapsed: boolean }) {
   const ref = useRef<HTMLElement>(null);
   const [near, setNear] = useState(false);
+  const [viewportKnown, setViewportKnown] = useState(false);
+  const loads = diffLoads(useQueryClient());
   const [height, setHeight] = useState(200);
   const [expanded, setExpanded] = useState(false);
   const [slotState, setSlots] = useState<SlotState>({ names: new Set(), rendered: false });
   const slots = slotState.names;
   const [bodyState, setBodyState] = useState<BodyState>({ blocked: false });
   const onBodyState = useCallback((next: BodyState) => {
-    setBodyState((previous) => (previous.diff === next.diff && previous.blocked === next.blocked ? previous : next));
+    setBodyState((previous) =>
+      previous.diff === next.diff && previous.blocked === next.blocked && previous.loading === next.loading
+        ? previous
+        : next,
+    );
   }, []);
   const onSlots = useCallback(
     (next: SlotState) =>
@@ -228,6 +245,7 @@ export function FileDiff({
         if (!entry) return;
         if (!entry.isIntersecting) setHeight(Math.max(200, element.getBoundingClientRect().height));
         setNear(entry.isIntersecting);
+        setViewportKnown(true);
       },
       { root: element.closest("[data-diff-scroll]"), rootMargin: "800px" },
     );
@@ -247,6 +265,13 @@ export function FileDiff({
   const lockfile = lockfiles.has(file.path.split("/").at(-1) ?? "");
   const collapsed = context.collapsedFiles.has(file.id);
   const { onContentRendered } = context;
+  const foreground =
+    !collapsed &&
+    !topicCollapsed &&
+    !file.flag &&
+    (!lockfile || expanded) &&
+    (!viewportKnown || (mounted && (bodyState.loading ?? true)));
+  useLayoutEffect(() => (foreground ? loads.hold() : undefined), [foreground, loads]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: Navigation retries after the fallback or annotation DOM commits.
   useEffect(() => onContentRendered(), [onContentRendered, slotState, bodyState, mounted, expanded]);
   const slotPending = (side: "old" | "new", end: number) => {
@@ -274,6 +299,7 @@ export function FileDiff({
         threads={fileThreads.length + lineThreads.length}
         onToggle={() => context.toggleFile(file.id)}
         onComment={() => context.onActive({ kind: "file", path: file.path })}
+        onViewed={context.onViewed}
       />
       <div className="em-diff-discussion">
         {active?.kind === "file" && context.fileForTarget(active)?.id === file.id && (
@@ -313,6 +339,9 @@ export function FileDiff({
           />
         </div>
       )}
+      {(collapsed || topicCollapsed) && !file.flag && !lockfile && !context.counts.has(file.id) && (
+        <FileCounts file={file} parser={context.parser} onParsed={context.onParsed} />
+      )}
       {!collapsed && !topicCollapsed && (
         <div className="em-diff-body">
           {file.flag ? (
@@ -349,6 +378,69 @@ function Summary({ text, onExpand }: { text: string; onExpand: () => void }) {
     </div>
   );
 }
+function fileSideQuery(file: FileView, side: "old" | "new") {
+  return {
+    queryKey: ["file", file.id, side],
+    queryFn: ({ signal }: { signal: AbortSignal }) =>
+      getText(`/api/v1/files/${encodeURIComponent(file.id)}/${side}`, signal),
+    staleTime: Infinity,
+  };
+}
+function parsedFileQuery(file: FileView, old: string, next: string, parser: DiffParser | undefined) {
+  return {
+    queryKey: ["file-diff", file.id],
+    staleTime: Infinity,
+    queryFn: ({ signal }: { signal: AbortSignal }) =>
+      (parser ?? parseOffThread)(
+        {
+          oldFile: file.hasOld ? { name: file.oldPath ?? file.path, contents: old, cacheKey: `${file.id}:old` } : null,
+          newFile: file.hasNew ? { name: file.path, contents: next, cacheKey: `${file.id}:new` } : null,
+        },
+        signal,
+      ),
+  };
+}
+function useParsedFile(
+  file: FileView,
+  parser: DiffParser | undefined,
+  expanded: boolean,
+  onParsed: DiffContext["onParsed"],
+) {
+  const old = useQuery({ ...fileSideQuery(file, "old"), enabled: file.hasOld });
+  const next = useQuery({ ...fileSideQuery(file, "new"), enabled: file.hasNew });
+  const ready = (!file.hasOld || old.isSuccess) && (!file.hasNew || next.isSuccess);
+  const lines = ready ? splitLines(old.data ?? "").length + splitLines(next.data ?? "").length : 0;
+  const collapsed = !expanded && lines > 20000;
+  const parsed = useQuery({
+    ...parsedFileQuery(file, old.data ?? "", next.data ?? "", parser),
+    enabled: ready && !collapsed,
+  });
+  useEffect(() => {
+    if (parsed.data) onParsed(file.id, diffCounts(parsed.data));
+  }, [file.id, parsed.data, onParsed]);
+  return { old, next, parsed, collapsed, lines };
+}
+function FileCounts({ file, parser, onParsed }: Pick<DiffContext, "parser" | "onParsed"> & { file: FileView }) {
+  const client = useQueryClient();
+  const { data } = useQuery({
+    queryKey: ["file-counts", file.id],
+    staleTime: Infinity,
+    queryFn: ({ signal }) =>
+      diffLoads(client).run(signal, async () => {
+        const old = file.hasOld ? await client.fetchQuery(fileSideQuery(file, "old")) : "";
+        signal.throwIfAborted();
+        const next = file.hasNew ? await client.fetchQuery(fileSideQuery(file, "new")) : "";
+        signal.throwIfAborted();
+        if (splitLines(old).length + splitLines(next).length > 20000) return null;
+        const parsed = await client.fetchQuery(parsedFileQuery(file, old, next, parser));
+        return diffCounts(parsed);
+      }),
+  });
+  useEffect(() => {
+    if (data) onParsed(file.id, data);
+  }, [data, file.id, onParsed]);
+  return null;
+}
 function FileBody({
   file,
   expanded,
@@ -365,40 +457,11 @@ function FileBody({
   onBodyState: (state: BodyState) => void;
   onExpand: () => void;
 }) {
-  const sideQuery = (side: "old" | "new", exists: boolean) => ({
-    queryKey: ["file", file.id, side],
-    queryFn: ({ signal }: { signal: AbortSignal }) =>
-      getText(`/api/v1/files/${encodeURIComponent(file.id)}/${side}`, signal),
-    staleTime: Infinity,
-    enabled: exists,
-  });
-  const old = useQuery(sideQuery("old", file.hasOld));
-  const next = useQuery(sideQuery("new", file.hasNew));
-  const ready = (!file.hasOld || old.isSuccess) && (!file.hasNew || next.isSuccess);
-  const lines = ready ? splitLines(old.data ?? "").length + splitLines(next.data ?? "").length : 0;
-  const collapsed = !expanded && lines > 20000;
-  const parsed = useQuery({
-    queryKey: ["file-diff", file.id],
-    staleTime: Infinity,
-    enabled: ready && !collapsed,
-    queryFn: ({ signal }) =>
-      (context.parser ?? parseOffThread)(
-        {
-          oldFile: file.hasOld
-            ? { name: file.oldPath ?? file.path, contents: old.data ?? "", cacheKey: `${file.id}:old` }
-            : null,
-          newFile: file.hasNew ? { name: file.path, contents: next.data ?? "", cacheKey: `${file.id}:new` } : null,
-        },
-        signal,
-      ),
-  });
-  const { onParsed } = context;
+  const { old, next, parsed, collapsed, lines } = useParsedFile(file, context.parser, expanded, context.onParsed);
+  const loading = !old.isError && !next.isError && !parsed.isError && !collapsed && !parsed.isSuccess;
   useEffect(() => {
-    onBodyState({ diff: parsed.data, blocked: collapsed });
-  }, [onBodyState, parsed.data, collapsed]);
-  useEffect(() => {
-    if (parsed.data) onParsed(file.id, diffCounts(parsed.data));
-  }, [file.id, parsed.data, onParsed]);
+    onBodyState({ diff: parsed.data, blocked: collapsed, loading });
+  }, [onBodyState, parsed.data, collapsed, loading]);
   const [error, setError] = useState("");
   const active = context.active;
   const selected = active?.kind === "lines" && context.fileForTarget(active)?.id === file.id ? active : null;

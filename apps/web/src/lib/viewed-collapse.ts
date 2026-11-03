@@ -1,0 +1,83 @@
+import type { RevisionView } from "@emend/contract";
+import { useQueryClient } from "@tanstack/react-query";
+import { type SetStateAction, useMemo, useState } from "react";
+import { useViewedChanges } from "../api/mutations.ts";
+
+/** Server refetches update marks, never the reader's current fold choices. */
+export function useViewedCollapse(reviewId: string, revision: RevisionView) {
+  const changes = useViewedChanges(reviewId);
+  const client = useQueryClient();
+  const initial = () => {
+    const server = client.getQueryData<RevisionView>(["revision", reviewId, revision.seq]) ?? revision;
+    const folded = new Set(server.files.filter((file) => file.viewed === "viewed").map((file) => file.id));
+    const pending = new Map<number, Set<string>>();
+    for (const change of changes) {
+      if (change.body.revision !== revision.seq || !change.body.viewed || change.status === "error") continue;
+      const paths = new Set(change.body.paths);
+      const ids = revision.files.filter((file) => file.role === "diff" && paths.has(file.path)).map((file) => file.id);
+      if (change.status === "pending") pending.set(change.id, new Set(ids));
+      else for (const id of ids) folded.add(id);
+    }
+    return { seq: revision.seq, changes, seen: new Set(changes.map((change) => change.id)), folded, pending };
+  };
+  const [state, setState] = useState(initial);
+  if (state.seq !== revision.seq) setState(initial());
+  else if (state.changes !== changes) {
+    const next = {
+      ...state,
+      changes,
+      seen: new Set(state.seen),
+      folded: new Set(state.folded),
+      pending: new Map(state.pending),
+    };
+    for (const change of changes) {
+      if (!next.seen.has(change.id)) {
+        next.seen.add(change.id);
+        if (change.status !== "error" && change.body.viewed && change.body.revision === revision.seq) {
+          const paths = new Set(change.body.paths);
+          next.pending.set(
+            change.id,
+            new Set(
+              revision.files.filter((file) => file.role === "diff" && paths.has(file.path)).map((file) => file.id),
+            ),
+          );
+        }
+      }
+      const files = next.pending.get(change.id);
+      if (files && change.status !== "pending") {
+        if (change.status === "success") for (const id of files) next.folded.add(id);
+        next.pending.delete(change.id);
+      }
+    }
+    // Confirmed successes leave the overlay after the fetch commits to the cache.
+    const remaining = new Set(changes.map((change) => change.id));
+    for (const [id, files] of next.pending)
+      if (!remaining.has(id)) {
+        for (const file of files) next.folded.add(file);
+        next.pending.delete(id);
+      }
+    setState(next);
+  }
+  const collapsed = (value: typeof state) =>
+    new Set([...value.folded, ...[...value.pending.values()].flatMap((files) => [...files])]);
+  const changeCollapsed = (action: SetStateAction<Set<string>>) =>
+    setState((previous) => {
+      const before = collapsed(previous);
+      const after = typeof action === "function" ? action(before) : action;
+      const folded = new Set(previous.folded);
+      const pending = new Map([...previous.pending].map(([id, files]) => [id, new Set(files)]));
+      for (const id of new Set([...before, ...after])) {
+        if (before.has(id) === after.has(id)) continue;
+        if (after.has(id)) folded.add(id);
+        else folded.delete(id);
+        // A manual fold or navigation supersedes any pending automatic fold.
+        for (const files of pending.values()) files.delete(id);
+      }
+      return { ...previous, folded, pending };
+    });
+  const files = useMemo(
+    () => new Set([...state.folded, ...[...state.pending.values()].flatMap((files) => [...files])]),
+    [state.folded, state.pending],
+  );
+  return [files, changeCollapsed] as const;
+}

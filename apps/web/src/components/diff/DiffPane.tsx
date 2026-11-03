@@ -1,10 +1,13 @@
-import { type FileView, OTHER_TOPIC, type RevisionView, type Target, type TopicMeta } from "@emend/contract";
+import { type FileView, OTHER_TOPIC, type RevisionView, type Target } from "@emend/contract";
 import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from "react";
 import { claimDraft } from "../../lib/composer-owner.ts";
+import { useDiffCounts } from "../../lib/diff-counts.ts";
+import { diffGroups } from "../../lib/diff-groups.ts";
 import { DiffNavigation, type NavigateDiff } from "../../lib/diff-navigation.ts";
 import { draftKey, type SavedDraft } from "../../lib/drafts.ts";
 import { useLayout } from "../../lib/layout.ts";
 import { rankedTopics } from "../../lib/topics.ts";
+import { useViewedCollapse } from "../../lib/viewed-collapse.ts";
 import type { ReviewSearch } from "../../router.tsx";
 import { Composer } from "../threads/Composer.tsx";
 import { ThreadCard } from "../threads/ThreadCard.tsx";
@@ -25,6 +28,8 @@ export type DiffPaneProps = {
   currentTopic?: string;
   writeupVisible?: boolean;
   search?: ReviewSearch;
+  onParsed?: (id: string, counts: DiffCounts) => void;
+  onViewed?: (paths: string[], viewed: boolean) => void;
 };
 export function DiffPane({
   reviewId,
@@ -37,13 +42,15 @@ export function DiffPane({
   currentTopic,
   writeupVisible = true,
   search = {},
+  onParsed: reportParsed,
+  onViewed,
 }: DiffPaneProps) {
   const layout = useLayout();
   const [style, setStyle] = useDiffStyle();
   const [wrap, setWrap] = useDiffWrap();
   const [collapsedTopics, setCollapsedTopics] = useState(new Set<string>());
-  const [collapsedFiles, setCollapsedFiles] = useState(new Set<string>());
-  const [counts, setCounts] = useState(new Map<string, DiffCounts>());
+  const [collapsedFiles, setCollapsedFiles] = useViewedCollapse(reviewId, revision);
+  const { counts, onParsed: saveCounts } = useDiffCounts();
   const [jump, setJump] = useState<FileView | null>(null);
   const [revealedFile, setRevealedFile] = useState<string>();
   const [, setRendered] = useState(0);
@@ -56,14 +63,11 @@ export function DiffPane({
   const narrow = useNarrowDiffPane(root);
   const diffStyle = layout === "phone" || narrow ? "unified" : style;
   const onParsed = useCallback(
-    (id: string, count: DiffCounts) =>
-      setCounts((previous) => {
-        const old = previous.get(id);
-        return old?.additions === count.additions && old.deletions === count.deletions
-          ? previous
-          : new Map(previous).set(id, count);
-      }),
-    [],
+    (id: string, count: DiffCounts) => {
+      reportParsed?.(id, count);
+      saveCounts(id, count);
+    },
+    [reportParsed, saveCounts],
   );
   const toggle = (previous: Set<string>, key: string) => {
     const next = new Set(previous);
@@ -85,17 +89,7 @@ export function DiffPane({
     if (resume && (!target || draftKey(reviewId, target) !== resume.key)) onResumeEnd?.();
     setActive(target);
   };
-  const groups = new Map<string, { topic: TopicMeta; files: FileView[] }>();
-  for (const topic of revision.topics.toSorted((a, b) => a.importance - b.importance))
-    groups.set(topic.slug, { topic, files: [] });
-  const other = groups.get(OTHER_TOPIC.slug) ?? { topic: { ...OTHER_TOPIC, importance: 0, summary: "" }, files: [] };
-  other.topic = { ...other.topic, title: OTHER_TOPIC.title };
-  groups.delete(OTHER_TOPIC.slug);
-  for (const file of revision.files.filter((file) => file.role === "diff").toSorted((a, b) => a.order - b.order)) {
-    (groups.get(file.topic ?? "") ?? other).files.push(file);
-  }
-  if (other.files.length || revision.topics.some((topic) => topic.slug === OTHER_TOPIC.slug))
-    groups.set(OTHER_TOPIC.slug, other);
+  const groups = diffGroups(revision);
   const resolved = new Map<FileLocation, FileView | undefined>();
   const fileForTarget = (target: FileLocation) => {
     if (!resolved.has(target)) resolved.set(target, resolveFile(revision.files, target));
@@ -189,6 +183,7 @@ export function DiffPane({
     overflow: layout === "phone" || wrap ? ("wrap" as const) : ("scroll" as const),
     counts,
     onParsed,
+    onViewed,
     collapsedFiles,
     revealedFile,
     onContentRendered,

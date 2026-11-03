@@ -12,6 +12,8 @@ export interface ReviewTabsProps {
   hasWriteup: boolean;
   hasDiff: boolean;
   unsentCount: number;
+  filesCount?: number;
+  viewedCount?: number;
 }
 
 export function ReviewTabs({
@@ -21,6 +23,8 @@ export function ReviewTabs({
   hasWriteup,
   hasDiff,
   unsentCount,
+  filesCount = 0,
+  viewedCount = 0,
   docsCount,
   idBase,
 }: ReviewTabsProps & { docsCount: number; idBase: string }) {
@@ -29,7 +33,13 @@ export function ReviewTabs({
   const { reading } = useLayoutPreferences();
   const showDiff = usePaneMode() === "tabs" && hasDiff;
   const active =
-    search.tab === "diff" && !showDiff ? (hasWriteup ? "writeup" : hasDocs ? "docs" : "comments") : search.tab;
+    (search.tab === "diff" && !showDiff) || (search.tab === "files" && !filesCount)
+      ? hasWriteup
+        ? "writeup"
+        : hasDocs
+          ? "docs"
+          : "comments"
+      : search.tab;
   const value = active ?? (hasWriteup ? "writeup" : hasDocs ? "docs" : "comments");
   return (
     <div className="em-review-tabs sticky top-0 z-(--z-sticky) flex shrink-0 items-center border-b border-line-1 bg-surface">
@@ -40,12 +50,13 @@ export function ReviewTabs({
         value={value}
         items={[
           { id: "writeup", label: "Writeup", hidden: !hasWriteup },
+          { id: "files", label: `Files ${viewedCount}/${filesCount}`, hidden: !filesCount },
           { id: "docs", label: "Docs", hidden: !hasDocs, count: docsCount },
           { id: "comments", label: "Comments", count: unsentCount, accent: true },
           { id: "diff", label: "Diff", hidden: !showDiff },
         ].map((item) => ({ ...item, "aria-controls": `${idBase}-${item.id === "diff" ? "diff" : "reading"}-panel` }))}
         onChange={(tab) => {
-          if (tab !== "writeup" && tab !== "docs" && tab !== "comments" && tab !== "diff") return;
+          if (tab !== "writeup" && tab !== "files" && tab !== "docs" && tab !== "comments" && tab !== "diff") return;
           void navigate({
             to: "/r/$reviewId",
             params: { reviewId: id },

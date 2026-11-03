@@ -107,6 +107,8 @@ export const FileView = z.object({
   flag: FileFlag.nullable(),
   hasOld: z.boolean(),
   hasNew: z.boolean(),
+  viewed: z.enum(["viewed", "stale"]).optional(),
+  viewedOn: z.int().positive().optional(),
 });
 export type FileView = z.infer<typeof FileView>;
 export const ThreadView = z.object({

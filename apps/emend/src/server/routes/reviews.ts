@@ -1,5 +1,5 @@
 import { InboxList, LIMITS, ReviewView, RevisionView, type ThreadView } from "@emend/contract";
-import { and, count, desc, eq, gt, inArray, isNull, lte, max, ne, sql } from "drizzle-orm";
+import { and, count, desc, eq, getTableColumns, gt, inArray, isNull, lte, max, ne, sql } from "drizzle-orm";
 import type { Hono } from "hono";
 import type { Queries } from "../../db/client.ts";
 import {
@@ -16,6 +16,7 @@ import {
   sends,
   threads,
   topics,
+  viewedFiles,
   writeups,
 } from "../../db/schema.ts";
 import type { AppDeps } from "../app.ts";
@@ -128,6 +129,25 @@ async function revisionView(ownerId: string, q: Queries, deps: AppDeps, reviewId
     .get();
   if (!revision) throw new ApiError("not_found");
   const revisionId = revision.id;
+  const marks = await q
+    .select({ ...getTableColumns(viewedFiles), fileId: files.id, flag: files.flag, oldPath: files.oldPath })
+    .from(viewedFiles)
+    // LEFT JOIN preserves the mark-first query plan: other reviews' files are never scanned.
+    .leftJoin(
+      revisions,
+      and(eq(revisions.ownerId, ownerId), eq(revisions.reviewId, reviewId), eq(revisions.seq, viewedFiles.revisionSeq)),
+    )
+    .leftJoin(
+      files,
+      and(
+        eq(files.ownerId, ownerId),
+        eq(files.revisionId, revisions.id),
+        eq(files.path, viewedFiles.path),
+        eq(files.role, "diff"),
+      ),
+    )
+    .where(and(eq(viewedFiles.ownerId, ownerId), eq(viewedFiles.reviewId, reviewId)));
+  const marksByPath = new Map(marks.filter((mark) => mark.fileId !== null).map((mark) => [mark.path, mark]));
   const fileRows = await q
     .select()
     .from(files)
@@ -261,19 +281,34 @@ async function revisionView(ownerId: string, q: Queries, deps: AppDeps, reviewId
         ? {}
         : { blastRadius: { scope: topic.blastScope, note: topic.blastNote } }),
     })),
-    files: fileRows.map((file) => ({
-      id: file.id,
-      path: file.path,
-      oldPath: file.oldPath,
-      role: file.role,
-      status: file.status,
-      topic: file.topicSlug,
-      order: file.ord,
-      mediaType: file.mediaType,
-      flag: file.flag,
-      hasOld: file.oldBlob !== null,
-      hasNew: file.newBlob !== null,
-    })),
+    files: fileRows.map((file) => {
+      const mark = file.role === "diff" ? marksByPath.get(file.path) : undefined;
+      return {
+        id: file.id,
+        path: file.path,
+        oldPath: file.oldPath,
+        role: file.role,
+        status: file.status,
+        topic: file.topicSlug,
+        order: file.ord,
+        mediaType: file.mediaType,
+        flag: file.flag,
+        hasOld: file.oldBlob !== null,
+        hasNew: file.newBlob !== null,
+        ...(mark
+          ? {
+              viewed: (
+                mark.flag !== null || file.flag !== null
+                  ? mark.revisionSeq === seq
+                  : mark.oldBlob === file.oldBlob && mark.newBlob === file.newBlob && mark.oldPath === file.oldPath
+              )
+                ? "viewed"
+                : "stale",
+              viewedOn: mark.revisionSeq,
+            }
+          : {}),
+      };
+    }),
     writeup: rendered,
     docs,
     threads: threadRows.map(({ thread, createdOn, placement }) => ({

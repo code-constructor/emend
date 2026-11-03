@@ -779,12 +779,14 @@ test("file +/- counts come from changed hunk lines, persist after collapse, and 
   );
   const value = file();
   const binary = file("binary", { flag: "binary" });
-  await mount(revision([value, binary]));
+  const onParsed = vi.fn();
+  await mount(revision([value, binary]), { onParsed });
   const header = document.getElementById(`diff-file-${value.id}`) as HTMLElement;
   expect(within(header).queryByText(/^\+/)).toBeNull();
   near("source.ts");
   expect(await within(header).findByText("+2")).toBeTruthy();
   expect(within(header).getByText("−1")).toBeTruthy();
+  expect(onParsed).toHaveBeenCalledWith(value.id, { additions: 2, deletions: 1 });
   fireEvent.click(within(header).getByRole("button", { name: "Collapse file" }));
   expect(within(header).getByText("+2")).toBeTruthy();
   expect(within(document.getElementById(`diff-file-${binary.id}`) as HTMLElement).queryByText(/^[+−]\d/)).toBeNull();
@@ -885,4 +887,89 @@ test("a diff starting hidden waits for its first positive measurement then mount
   act(() => resizePane(900));
   near("source.ts");
   expect((await screen.findByTestId("rendered-diff")).getAttribute("data-style")).toBe("split");
+});
+
+test("a viewed file parses counts while collapsed without rendering its body, and counts survive a remount", async () => {
+  fetchMock.mockImplementation(async (path: string) => new Response(path.endsWith("/old") ? "old\n" : "new\nextra\n"));
+  const value = file("counted.ts", { viewed: "viewed", viewedOn: 1 });
+  const onParsed = vi.fn();
+  const mounted = await mount(revision([value]), { onParsed });
+  const header = within(document.getElementById(`diff-file-${value.id}`) as HTMLElement);
+  expect(await header.findByText("+2")).toBeTruthy();
+  expect(header.getByText("−1")).toBeTruthy();
+  expect(header.getByRole("button", { name: "Expand file" })).toBeTruthy();
+  expect(screen.queryByTestId("rendered-diff")).toBeNull();
+  expect(onParsed).toHaveBeenCalledWith(value.id, { additions: 2, deletions: 1 });
+  expect(parser).toHaveBeenCalledOnce();
+  mounted.unmount();
+  client.removeQueries({ queryKey: ["file-diff", value.id] });
+  await mount(revision([value]));
+  expect(screen.getByText("+2")).toBeTruthy();
+  expect(parser).toHaveBeenCalledOnce();
+});
+
+test("counts-only loading respects the line limit, lockfiles and flagged content", async () => {
+  const large = file("large.ts", { viewed: "viewed", viewedOn: 2 });
+  const lock = file("pnpm-lock.yaml", { viewed: "viewed", viewedOn: 2 });
+  const flagged = file("binary.dat", { viewed: "viewed", viewedOn: 2, flag: "binary" });
+  fetchMock.mockImplementation(
+    async (path: string) => new Response(path.endsWith("/old") ? "line\n".repeat(20001) : ""),
+  );
+  await mount(revision([large, lock, flagged]));
+  await waitFor(() => expect(client.getQueryState(["file-counts", large.id])?.status).toBe("success"));
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  expect(fetchMock.mock.calls.every(([path]) => String(path).includes(large.id))).toBe(true);
+  expect(parser).not.toHaveBeenCalled();
+  expect(screen.queryByTestId("rendered-diff")).toBeNull();
+  expect(client.getQueryData(["file-counts", large.id])).toBeNull();
+});
+
+test("counts wait for visible diffs and never exceed three concurrent background loads", async () => {
+  const visible = file("visible.ts");
+  const background = Array.from({ length: 40 }, (_, index) =>
+    file(`file-${index}.ts`, { viewed: "viewed", viewedOn: 2 }),
+  );
+  const visibleLoads: (() => void)[] = [];
+  const loads: (() => void)[] = [];
+  let active = 0,
+    maximum = 0;
+  fetchMock.mockImplementation(
+    (path: string) =>
+      new Promise<Response>((resolve) => {
+        const body = path.endsWith("/old") ? "before\n" : "after\n";
+        if (path.includes(visible.id)) visibleLoads.push(() => resolve(new Response(body)));
+        else {
+          active++;
+          maximum = Math.max(maximum, active);
+          loads.push(() => {
+            active--;
+            resolve(new Response(body));
+          });
+        }
+      }),
+  );
+  await mount(revision([visible, ...background]));
+  near(visible.path);
+  await waitFor(() => expect(visibleLoads).toHaveLength(2));
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+  expect(loads).toHaveLength(0);
+  await act(async () => {
+    for (const release of visibleLoads) release();
+  });
+  await screen.findByTestId("rendered-diff");
+  await waitFor(() => expect(loads).toHaveLength(3));
+  let released = 0;
+  while (released < background.length * 2) {
+    await waitFor(() => expect(loads.length).toBeGreaterThan(released));
+    await act(async () => {
+      const next = loads.length;
+      for (const release of loads.slice(released, next)) release();
+      released = next;
+    });
+  }
+  await waitFor(() => expect(parser).toHaveBeenCalledTimes(background.length + 1));
+  expect(maximum).toBe(3);
+  expect(active).toBe(0);
 });

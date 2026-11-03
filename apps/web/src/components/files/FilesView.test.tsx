@@ -1,0 +1,108 @@
+import type { FileView, RevisionView } from "@emend/contract";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, expect, test, vi } from "vitest";
+import { FilesView } from "./FilesView.tsx";
+
+afterEach(cleanup);
+const file = (path: string, order: number, topic: string | null = null): FileView => ({
+  id: crypto.randomUUID(),
+  path,
+  order,
+  topic,
+  oldPath: null,
+  role: "diff",
+  status: "modified",
+  mediaType: "text/plain",
+  flag: null,
+  hasOld: true,
+  hasNew: true,
+});
+
+test("Files groups match diff order, render counts, old-side threads, stale marks and hostile paths as text", () => {
+  const hostile = "<img src=x onerror=alert(1)>/a.ts";
+  const first = {
+    ...file(hostile, 1, "first"),
+    status: "renamed" as const,
+    oldPath: "old/a.ts",
+    viewed: "stale" as const,
+    viewedOn: 1,
+  };
+  const last = { ...file("tail.ts", 0, "last"), viewed: "viewed" as const, viewedOn: 2 };
+  const other = file("misc.ts", 2);
+  const view: RevisionView = {
+    seq: 3,
+    base: null,
+    head: null,
+    main: null,
+    writeupEmpty: true,
+    files: [last, other, first, { ...file("doc.md", 3), role: "doc" }],
+    topics: [
+      { slug: "last", title: "Last", importance: 20, summary: "" },
+      { slug: "first", title: "First", importance: 10, summary: "" },
+    ],
+    threads: [
+      {
+        id: crypto.randomUUID(),
+        target: { kind: "file", path: first.path },
+        state: "open",
+        createdOn: 1,
+        comments: [],
+        placement: { status: "placed", location: { kind: "lines", path: "old/a.ts", side: "old", start: 1, end: 1 } },
+      },
+    ],
+    docs: [],
+    writeup: { sections: [] },
+    changedBlocks: [],
+  };
+  const onViewed = vi.fn(),
+    onNavigate = vi.fn();
+  const counts = new Map([[first.id, { additions: 2, deletions: 1 }]]);
+  const { container, rerender } = render(
+    <FilesView revision={view} counts={counts} onViewed={onViewed} onNavigate={onNavigate} />,
+  );
+  expect(screen.getAllByRole("region").map((group) => group.getAttribute("aria-label"))).toEqual([
+    "First",
+    "Last",
+    "Other files",
+  ]);
+  const group = within(screen.getByRole("region", { name: "First" }));
+  expect(group.getByText("01")).toBeTruthy();
+  expect(group.getByText("0/1")).toBeTruthy();
+  expect(group.getByText("R")).toBeTruthy();
+  expect(group.getByText("+2")).toBeTruthy();
+  expect(group.getByText("−1")).toBeTruthy();
+  expect(group.getByText("1 thread")).toBeTruthy();
+  const path = group.getByTitle(hostile);
+  expect(path.querySelector("bdi")?.textContent).toBe(hostile);
+  expect(path.querySelector(".em-files-row__dir")?.textContent).toBe("<img src=x onerror=alert(1)>/");
+  expect(container.querySelector("img, script")).toBeNull();
+  expect(group.getByText("changed")).toBeTruthy();
+  const toggle = group.getByRole("button", {
+    name: `Viewed in revision 1; this revision differs. Mark ${hostile} as viewed`,
+  });
+  expect(toggle.hasAttribute("data-stale")).toBe(true);
+  expect(toggle.title).toBe(`Viewed in revision 1; this revision differs. Mark ${hostile} as viewed`);
+  expect(toggle.getAttribute("aria-pressed")).toBe("false");
+  expect(screen.getByText("1 of 3 viewed")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Open diff for misc.ts, modified" })).toBeTruthy();
+  expect(screen.getByRole("progressbar").getAttribute("value")).toBe("1");
+  const row = group.getByRole("button", { name: `Open diff for ${hostile}, renamed, 2 added, 1 removed, 1 thread` });
+  fireEvent.click(row);
+  expect(onNavigate).toHaveBeenCalledWith(first);
+  expect(row.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(row.tabIndex).toBe(0);
+  expect(toggle.tabIndex).toBe(0);
+  fireEvent.click(toggle);
+  expect(onViewed).toHaveBeenCalledWith([hostile], true);
+  expect(onNavigate).toHaveBeenCalledTimes(1);
+  expect(screen.getByRole("region", { name: "Last" }).querySelector(".em-files-row__counts")?.textContent).toBe("");
+  rerender(
+    <FilesView
+      revision={view}
+      counts={new Map([...counts, [last.id, { additions: 4, deletions: 0 }]])}
+      onViewed={onViewed}
+      onNavigate={onNavigate}
+    />,
+  );
+  expect(within(screen.getByRole("region", { name: "Last" })).getByText("+4")).toBeTruthy();
+});

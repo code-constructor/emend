@@ -94,6 +94,7 @@ a machine token reaches only reviews from its own instance.
 | GET | `/api/v1/reviews` | Reviewer | List reviews in the inbox. |
 | GET | `/api/v1/reviews/:id` | Reviewer | Read a review. |
 | GET | `/api/v1/reviews/:id/revisions/:seq` | Reviewer | Read one revision. |
+| PUT | `/api/v1/reviews/:id/viewed` | Reviewer | Mark or unmark diff files as viewed; return 204. |
 | GET | `/api/v1/files/:fileId/old` | Reviewer | Read the old file side. |
 | GET | `/api/v1/files/:fileId/new` | Reviewer | Read the new file side. |
 | GET | `/api/v1/events` | Reviewer | Subscribe to owner-wide review events using SSE. |
@@ -129,6 +130,41 @@ returns `404 not_found`. `HEAD` applies the same authorization and headers, with
 no response body. File and blob lookups filter the authenticated owner's id;
 the number of queries is bounded independently of revision size.
 
+### Viewed files
+
+`PUT /api/v1/reviews/:id/viewed` accepts `ViewedRequest = { revision, paths, viewed }` and returns
+204. Only a reviewer session may call it, using the same `comment` scope as user comments.
+Agent and admin bearers receive `403 forbidden`; a reviewer credential used as a bearer is
+refused with `401 unauthorized`. Cookie writes require the allowed Origin as usual.
+
+`revision` is a positive safe integer sequence belonging to this review, including an older
+revision. `paths` contains 1 through `filesPerRevision` (10000) validated `FilePath` values;
+the normal `requestJsonBytes` (1048576 bytes) body limit also applies. Duplicate paths are
+applied once. A missing or foreign review gives `404 unknown_review`, and a revision absent
+from that review gives `404 not_found`. A path not in that revision's diff files gives
+`400 invalid_request`, like invalid targets when creating comments; the entire batch is refused.
+Invalid bodies give `400 invalid_request`; oversized bodies give `413 too_large` before parsing.
+As with comment writes, a moved review gives `409 review_moved`.
+
+Marking upserts the owner's mark for each review/path with that revision's old/new blob pair
+and sequence. Unmarking deletes it. For tracked text files, matching blob pairs and rename
+sources (`oldPath`) stay viewed across revisions; a different pair or rename source is stale
+and does not count as viewed. If either the marked revision's file or the shown file is flagged
+binary or oversized, content is not fully tracked:
+the mark is viewed only on the sequence where it was made, and stale on every other sequence,
+even with equal or null blob pairs. An absent side of an unflagged added/deleted text file is
+not untracked content and still uses the blob-pair rule. The stale indicator says “changed”
+and identifies the revision where it was viewed, without claiming when it changed.
+Viewed marks are reviewer state and are excluded from export and import. A successful PUT
+emits `viewed` with `{ reviewId }` only on the owner's event bus after the transaction commits.
+Clients batch invalidation of that review's revision queries through the existing live event
+stream, including other tabs and devices. Only revision fetches write the revision cache.
+The initiating page overlays pending marks and successful writes until a fetch that started
+after the write settled resolves. Each settled write requests a refresh through the same
+batch as events. Errors drop their optimistic entry immediately and remain visible until
+dismissed or their affected paths are successfully marked again. Revision queries retain
+their normal focus behavior; no unconditional focus refetch is required.
+
 ### Review read views
 
 `ReviewState = "open" | "approved" | "settled"`.
@@ -160,9 +196,14 @@ these fields read as `main: null`, `writeupEmpty: false` and keep opening on Wri
 Without an explicit visible `tab` in the URL, the app opens the main page when set; otherwise
 it opens Writeup if it has text, the first doc in manifest order, Diff if any file has role
 `diff`, or Writeup when there is nothing. A main doc opens Docs scrolled to that document.
-`FileView = { id, path, oldPath, role, status, topic, order, mediaType, flag, hasOld, hasNew }`.
+`FileView = { id, path, oldPath, role, status, topic, order, mediaType, flag, hasOld, hasNew, viewed?, viewedOn? }`.
 `oldPath`, `status`, `topic` and `flag` are nullable. Files are in their stored order; assets
 are omitted. `hasOld` and `hasNew` indicate stored sides, without exposing blob hashes.
+For tracked diff files, `viewed` is `"viewed"` when the marked old/new blob pair and rename
+source match the shown revision, or `"stale"` when either differs. Flagged files use the
+revision-only rule above.
+`viewedOn` is the positive revision sequence when marked.
+Both are absent without a mark. Marks follow the current path, including for renames.
 
 `RenderedBlock = { id: BlockId, section, kind, html, text, source? }` mirrors core's `Block`.
 Kinds are `heading | paragraph | item | code | table | quote | diagram`; diagram source is optional.
@@ -649,7 +690,7 @@ compatibility and delivers only that owned review's events. Both require the sam
 principal and scope; `HEAD` returns headers only and allocates no stream. Both SSE
 endpoints use `text/event-stream`, `Cache-Control: no-store` and a comment keepalive every
 25 seconds. `ReviewEventName` is
-`publish | send | thread | waiting | claimed | confirmed`. `ReviewEvent` has a `type`
+`publish | send | thread | waiting | claimed | confirmed | viewed`. `ReviewEvent` has a `type`
 discriminator and the same fields as its SSE payload. The SSE `event` line supplies
 `type`; the JSON `data` is:
 
@@ -661,10 +702,12 @@ discriminator and the same fields as its SSE payload. The SSE `event` line suppl
 | `waiting` | `{ reviewId, revision }` |
 | `claimed` | `{ reviewId, revision }` |
 | `confirmed` | `{ reviewId, revision, deliveryId }` |
+| `viewed` | `{ reviewId }` |
 
-Events contain ids and a positive revision sequence only, never text bodies or
+Events contain ids and, except for `viewed`, a positive revision sequence only, never paths, text bodies or
 instructions. `claimed` follows a successful take; `confirmed` follows a successful
-delivery confirmation. Both are emitted after the transaction commits. Events have no
+delivery confirmation. `viewed` follows a successful viewed-mark PUT and invalidates that
+review's revision queries. These events are emitted after the transaction commits. Events have no
 replay ids; clients refresh their cached state on every connection, including the first.
 The waiting event signals a change: `agentWaiting(ownerId, reviewId)` stays true during an
 open take and for 35 seconds after the last waiting take ends. Views also include

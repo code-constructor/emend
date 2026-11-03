@@ -238,9 +238,13 @@ test.each([1280, 768])(
     const docs = tabs.getByRole("tab", { name: "Docs 2" });
     const comments = tabs.getByRole("tab", { name: "Comments 2" });
     expect(within(comments).getByText("2").className).toContain("bg-accent");
-    expect(tabs.queryByRole("tab", { name: "Files" })).toBeNull();
+    const files = tabs.getByRole("tab", { name: /^Files 0\// });
     expect(writeup.getAttribute("aria-controls")).toBe(screen.getByRole("tabpanel", { name: "Writeup" }).id);
     fireEvent.keyDown(writeup, { key: "ArrowRight" });
+    await waitFor(() => expect(history.location.search).toContain("tab=files"));
+    expect(document.activeElement).toBe(files);
+    expect(screen.getByRole("tabpanel").getAttribute("aria-labelledby")).toBe(files.id);
+    fireEvent.keyDown(files, { key: "ArrowRight" });
     await waitFor(() => expect(history.location.search).toContain("tab=docs"));
     expect(history.location.search).not.toContain("thread");
     expect(history.location.hash).toBe("");

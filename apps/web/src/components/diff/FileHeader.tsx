@@ -1,17 +1,11 @@
 import type { FileView } from "@emend/contract";
 import { ChevronDown, ChevronRight, MessageSquarePlus } from "lucide-react";
 import { Fragment } from "react";
+import { ViewedMark } from "../files/ViewedMark.tsx";
 import { IconButton } from "../ui/IconButton.tsx";
+import { FileStatusMark } from "./FileStatusMark.tsx";
 import type { DiffCounts } from "./presentation.ts";
 import { ThreadCount } from "./ThreadCount.tsx";
-
-const statuses = {
-  added: { letter: "A", color: "text-success-fg" },
-  modified: { letter: "M", color: "text-warning-fg" },
-  deleted: { letter: "D", color: "text-danger-fg" },
-  renamed: { letter: "R", color: "text-info-fg" },
-  "mode-changed": { letter: "T", color: "text-fg-3" },
-};
 
 function Path({ path }: { path: string }) {
   const segments = path.split("/");
@@ -38,6 +32,7 @@ export function FileHeader({
   threads,
   onToggle,
   onComment,
+  onViewed,
 }: {
   file: FileView;
   collapsed: boolean;
@@ -45,9 +40,8 @@ export function FileHeader({
   threads: number;
   onToggle: () => void;
   onComment: () => void;
+  onViewed?: (paths: string[], viewed: boolean) => void;
 }) {
-  const status = file.status && statuses[file.status];
-  const statusName = file.status?.replaceAll("-", " ");
   return (
     <header id={`diff-file-${file.id}`} data-file-header className="em-file" data-collapsed={collapsed || undefined}>
       <IconButton
@@ -57,15 +51,7 @@ export function FileHeader({
         aria-expanded={!collapsed}
         onClick={onToggle}
       />
-      {status && (
-        <span
-          title={statusName}
-          className={`shrink-0 font-mono text-11 font-semibold font-stretch-mono ${status.color}`}
-        >
-          <span aria-hidden="true">{status.letter}</span>
-          <span className="sr-only">{statusName}</span>
-        </span>
-      )}
+      <FileStatusMark status={file.status} />
       <div className="min-w-0 flex-1 font-stretch-mono [font:var(--type-path)]">
         <h4 className="em-file-path" title={file.path} aria-label={file.path}>
           <Path path={file.path} />
@@ -84,6 +70,15 @@ export function FileHeader({
       )}
       <ThreadCount count={threads} />
       <IconButton label="Comment on file" icon={MessageSquarePlus} size="sm" onClick={onComment} />
+      {onViewed && (
+        <ViewedMark
+          state={file.viewed}
+          viewedOn={file.viewedOn}
+          label={file.path}
+          showLabel
+          onToggle={() => onViewed([file.path], file.viewed !== "viewed")}
+        />
+      )}
     </header>
   );
 }

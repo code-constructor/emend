@@ -73,6 +73,20 @@ test("waiting covers concurrent takes and 35 seconds of grace, emitting only tra
   expect(owner.mock.calls.map(([event]) => event)).toEqual(changes);
   expect(foreign).not.toHaveBeenCalled();
 });
+test("a viewed event without a revision preserves the waiting revision through expiry", async () => {
+  vi.useFakeTimers();
+  const events = new ReviewEvents(Date.now);
+  const reviewId = randomUUID();
+  const listener = vi.fn();
+  events.subscribe("owner", reviewId, listener);
+  const end = events.beginWaiting("owner", reviewId, 2);
+  events.emit("owner", { type: "viewed", reviewId });
+  expect(listener).toHaveBeenLastCalledWith({ type: "viewed", reviewId });
+  end();
+  await vi.advanceTimersByTimeAsync(35000);
+  expect(events.agentWaiting("owner", reviewId)).toBe(false);
+  expect(listener).toHaveBeenLastCalledWith({ type: "waiting", reviewId, revision: 2 });
+});
 test("both stream kinds share the 32-stream owner cap and release slots on cancellation and abort", async () => {
   const f = await mailboxFixture();
   const responses: Response[] = [];

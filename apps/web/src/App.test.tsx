@@ -1,6 +1,6 @@
 // @vitest-environment-options {"settings":{"disableIframePageLoading":true}}
 import type { FileView, InboxItem, RenderedBlock, RevisionView, Target, ThreadView } from "@emend/contract";
-import { QueryClient } from "@tanstack/react-query";
+import { focusManager, QueryClient } from "@tanstack/react-query";
 import { createMemoryHistory } from "@tanstack/react-router";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { Window } from "happy-dom";
@@ -442,9 +442,10 @@ test.each([767, 768, 1279, 1280, 390])(
       const tabs = within(screen.getByRole("navigation", { name: "Review tabs" }));
       expect(tabs.getAllByRole("link").map((link) => link.textContent)).toEqual([
         "Writeup",
-        "Diff",
+        "Files 0/1",
         "Docs",
         "Comments 2 unsent",
+        "Diff",
       ]);
       fireEvent.click(tabs.getByRole("link", { name: "Diff" }));
       await waitFor(() => expect(screen.getByTestId("diff-pane")).toBeTruthy());
@@ -2106,8 +2107,8 @@ test.each([0, 2])(
     await screen.findByText("Overview");
     const tabs = within(screen.getByRole("navigation", { name: "Review tabs" }));
     const links = tabs.getAllByRole("link");
-    expect(links).toHaveLength(4);
-    for (const label of ["Writeup", "Diff", "Docs", "Comments"])
+    expect(links).toHaveLength(5);
+    for (const label of ["Writeup", "Files 0/1", "Docs", "Comments", "Diff"])
       expect(tabs.getByRole("link", { name: new RegExp(label) })).toBeTruthy();
     for (const link of links) expect(link.querySelector('svg[aria-hidden="true"]')).toBeTruthy();
     expect(tabs.queryByRole("img")).toBeNull();
@@ -2508,7 +2509,13 @@ test("pane defaults and choices are independent across desktop, tablet and phone
   expect(screen.queryByRole("tab", { name: "Diff" })).toBeNull();
   fireEvent.click(paneControls().getByRole("radio", { name: "Tabs" }));
   expect(screen.getByTestId("diff-pane").hidden).toBe(true);
-  expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Writeup", "Docs1", "Comments2", "Diff"]);
+  expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+    "Writeup",
+    "Files 0/1",
+    "Docs1",
+    "Comments2",
+    "Diff",
+  ]);
   fireEvent.click(screen.getByRole("tab", { name: "Diff" }));
   await waitFor(() => expect(history.location.search).toContain("tab=diff"));
   expect(screen.getByTestId("reading-pane").hidden).toBe(true);
@@ -2585,4 +2592,208 @@ test.each([1280, 900, 390])("text menu changes validated app variables at %s px"
   expect(root?.style.getPropertyValue("--reader-code-size")).toBe("13px");
   fireEvent.keyDown(menu.getByRole("menuitemradio", { name: "13 px" }), { key: "Escape" });
   await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+});
+
+test.each([1280, 800, 390])("Files tab count excludes stale marks and row opens the diff at %s px", async (size) => {
+  width = size;
+  openingRevision({
+    files: [
+      { ...diffFile, viewed: "stale", viewedOn: 1 },
+      {
+        ...diffFile,
+        id: "44444444-4444-4444-8444-444444444444",
+        path: "viewed.txt",
+        order: 1,
+        viewed: "viewed",
+        viewedOn: 1,
+      },
+    ],
+    writeupEmpty: false,
+    topics: [{ slug: "topic", title: "Topic", summary: "", importance: 1 }],
+  });
+  const scroll = vi.spyOn(HTMLElement.prototype, "scrollTo");
+  const { history } = mount(`/r/${id}?tab=files`);
+  const filesTab = await screen.findByRole(size < 768 ? "link" : "tab", { name: "Files 1/2" });
+  expect(filesTab.getAttribute(size < 768 ? "aria-current" : "aria-selected")).toBe(size < 768 ? "page" : "true");
+  const reading = within(screen.getByTestId("reading-pane"));
+  expect(reading.getByText("1 of 2 viewed")).toBeTruthy();
+  expect(reading.getByText("changed")).toBeTruthy();
+  if (size >= 768) expect(screen.queryByRole("radiogroup", { name: "Reading mode" })).toBeNull();
+  scroll.mockClear();
+  fireEvent.click(reading.getByRole("button", { name: "Open diff for new.txt, modified" }));
+  await waitFor(() => expect(history.location.hash).toContain(`diff-file-${diffFile.id}`));
+  if (size < 1280) await waitFor(() => expect(history.location.search).toContain("tab=diff"));
+  else expect(history.location.search).toContain("tab=files");
+  await waitFor(() =>
+    expect(
+      scroll.mock.instances.some(
+        (element) => element instanceof HTMLElement && element.hasAttribute("data-diff-scroll"),
+      ),
+    ).toBe(true),
+  );
+  expect(screen.getByTestId("diff-pane").hidden).toBe(false);
+});
+
+test.each([1280, 800, 390])(
+  "Files tab is absent and tab=files falls back without diff files at %s px",
+  async (size) => {
+    width = size;
+    openingRevision({ files: [{ ...diffFile, role: "doc" }], writeupEmpty: false });
+    mount(`/r/${id}?tab=files`);
+    await screen.findByText("Overview");
+    expect(screen.queryByRole(size < 768 ? "link" : "tab", { name: /^Files/ })).toBeNull();
+    expect(
+      screen
+        .getByRole(size < 768 ? "link" : "tab", { name: "Writeup" })
+        .getAttribute(size < 768 ? "aria-current" : "aria-selected"),
+    ).toBe(size < 768 ? "page" : "true");
+  },
+);
+
+test.each([false, true])("viewed mutation collapses optimistically and handles failure=%s", async (fail) => {
+  const fallback = fetchMock.getMockImplementation();
+  const response = Promise.withResolvers<Response>();
+  let viewed = false;
+  fetchMock.mockImplementation(async (path, init) => {
+    if (path.endsWith("/viewed")) {
+      const result = await response.promise;
+      if (result.ok) viewed = JSON.parse(String(init?.body)).viewed;
+      return result;
+    }
+    if (path.includes("/revisions/"))
+      return Response.json({
+        ...revision,
+        files: [{ ...diffFile, ...(viewed ? { viewed: "viewed", viewedOn: 1 } : {}) }],
+      });
+    return fallback?.(path, init) as Promise<Response>;
+  });
+  mount(`/r/${id}?tab=files`);
+  const reading = within(await screen.findByTestId("reading-pane"));
+  const toggle = await reading.findByRole("button", { name: "Mark new.txt as viewed" });
+  const diff = within(await screen.findByRole("region", { name: "File new.txt" }));
+  expect(diff.getByRole("button", { name: "Collapse file" })).toBeTruthy();
+  fireEvent.click(toggle);
+  await screen.findByRole("tab", { name: "Files 1/1" });
+  expect(diff.getByRole("button", { name: "Expand file" })).toBeTruthy();
+  expect(diff.getByRole("button", { name: "Unmark new.txt as viewed" }).getAttribute("aria-pressed")).toBe("true");
+  expect(toggle.hasAttribute("disabled")).toBe(false);
+  expect(fetchMock).toHaveBeenCalledWith(
+    `/api/v1/reviews/${id}/viewed`,
+    expect.objectContaining({
+      method: "PUT",
+      body: JSON.stringify({ revision: 1, paths: ["new.txt"], viewed: true }),
+    }),
+  );
+  await act(async () =>
+    response.resolve(
+      fail
+        ? Response.json(
+            { error: { code: "invalid_request", message: "Could not save viewed marks." } },
+            { status: 400 },
+          )
+        : new Response(null, { status: 204 }),
+    ),
+  );
+  await waitFor(() => expect(toggle.hasAttribute("disabled")).toBe(false));
+  if (fail) {
+    expect((await screen.findByRole("alert")).textContent).toContain("Could not save viewed marks.");
+    expect(screen.getByRole("tab", { name: "Files 0/1" })).toBeTruthy();
+    expect(diff.getByRole("button", { name: "Collapse file" })).toBeTruthy();
+    expect(diff.queryByRole("button", { name: "Unmark new.txt as viewed" })).toBeNull();
+  } else {
+    fireEvent.click(diff.getByRole("button", { name: "Unmark new.txt as viewed" }));
+    await screen.findByRole("tab", { name: "Files 0/1" });
+    expect(diff.getByRole("button", { name: "Expand file" })).toBeTruthy();
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        `/api/v1/reviews/${id}/viewed`,
+        expect.objectContaining({ body: JSON.stringify({ revision: 1, paths: ["new.txt"], viewed: false }) }),
+      ),
+    );
+  }
+});
+
+test("topic viewed box sends every file in one request and marks them all", async () => {
+  const fallback = fetchMock.getMockImplementation();
+  const paths = ["new.txt", "second.txt"];
+  let viewed = false;
+  fetchMock.mockImplementation(async (path, init) => {
+    if (path.endsWith("/viewed")) {
+      viewed = JSON.parse(String(init?.body)).viewed;
+      return new Response(null, { status: 204 });
+    }
+    if (path.includes("/revisions/"))
+      return Response.json({
+        ...revision,
+        topics: [{ slug: "topic", title: "Topic", summary: "", importance: 1 }],
+        files: paths.map((path, index) => ({
+          ...diffFile,
+          id: index ? "44444444-4444-4444-8444-444444444444" : diffFile.id,
+          path,
+          order: index,
+          ...(viewed ? { viewed: "viewed", viewedOn: 1 } : {}),
+        })),
+      });
+    return fallback?.(path, init) as Promise<Response>;
+  });
+  mount(`/r/${id}?tab=files`);
+  fireEvent.click(await screen.findByRole("button", { name: "Mark topic Topic as viewed" }));
+  await screen.findByRole("tab", { name: "Files 2/2" });
+  expect(fetchMock.mock.calls.filter(([path]) => path.endsWith("/viewed"))).toHaveLength(1);
+  expect(fetchMock).toHaveBeenCalledWith(
+    `/api/v1/reviews/${id}/viewed`,
+    expect.objectContaining({ method: "PUT", body: JSON.stringify({ revision: 1, paths, viewed: true }) }),
+  );
+  const toggle = screen.getByRole("button", { name: "Unmark topic Topic as viewed" });
+  await waitFor(() => expect(toggle.hasAttribute("disabled")).toBe(false));
+  fireEvent.click(toggle);
+  await screen.findByRole("tab", { name: "Files 0/2" });
+  await waitFor(() =>
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/v1/reviews/${id}/viewed`,
+      expect.objectContaining({ body: JSON.stringify({ revision: 1, paths, viewed: false }) }),
+    ),
+  );
+});
+
+test("viewed events update boxes without changing folds; focus alone does not refetch revisions", async () => {
+  let state: "viewed" | "stale" = "viewed";
+  const fallback = fetchMock.getMockImplementation();
+  fetchMock.mockImplementation(async (path, init) =>
+    path.includes("/revisions/")
+      ? Response.json({ ...revision, files: [{ ...diffFile, viewed: state, viewedOn: 1 }] })
+      : (fallback?.(path, init) as Promise<Response>),
+  );
+  try {
+    mount(`/r/${id}?tab=files`);
+    await screen.findByRole("tab", { name: "Files 1/1" });
+    const diff = within(await screen.findByRole("region", { name: "File new.txt" }));
+    expect(diff.getByRole("button", { name: "Expand file" })).toBeTruthy();
+    fireEvent.click(diff.getByRole("button", { name: "Expand file" }));
+    state = "stale";
+    const reads = () => fetchMock.mock.calls.filter(([path]) => path.includes("/revisions/")).length;
+    const before = reads();
+    await act(async () => {
+      focusManager.setFocused(false);
+      focusManager.setFocused(true);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(reads()).toBe(before);
+    await waitFor(() => expect(Events.opened.length).toBeGreaterThan(0));
+    act(() => Events.opened.at(-1)?.emit("viewed", { reviewId: id }));
+    await screen.findByRole("tab", { name: "Files 0/1" });
+    expect(diff.getByRole("button", { name: "Collapse file" })).toBeTruthy();
+    expect(
+      diff
+        .getByRole("button", { name: "Viewed in revision 1; this revision differs. Mark new.txt as viewed" })
+        .hasAttribute("data-stale"),
+    ).toBe(true);
+    expect(diff.getByText("changed")).toBeTruthy();
+    state = "viewed";
+    act(() => Events.opened.at(-1)?.emit("viewed", { reviewId: id }));
+    await screen.findByRole("tab", { name: "Files 1/1" });
+    expect(diff.getByRole("button", { name: "Collapse file" })).toBeTruthy();
+  } finally {
+    focusManager.setFocused(undefined);
+  }
 });

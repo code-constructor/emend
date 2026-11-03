@@ -48,7 +48,8 @@ export class ReviewEvents {
     // Strip any accidental content fields even when the caller isn't type checked.
     const event = ReviewEvent.parse(value);
     const waiting = this.waiting.get(ownedKey(ownerId, event.reviewId));
-    if (waiting?.ownerId === ownerId) waiting.revision = Math.max(waiting.revision, event.revision);
+    if (waiting?.ownerId === ownerId && "revision" in event)
+      waiting.revision = Math.max(waiting.revision, event.revision);
     const reviews = this.listeners.get(ownerId);
     for (const listener of [...(reviews?.get(null) ?? []), ...(reviews?.get(event.reviewId) ?? [])]) listener(event);
   }

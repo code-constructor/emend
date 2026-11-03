@@ -208,6 +208,7 @@ export const files = sqliteTable(
   },
   (t): SQLiteTableExtraConfigValue[] => [
     ...owned("files", t),
+    index("files_owner_revision_path_idx").on(t.ownerId, t.revisionId, t.path),
     unique("files_owner_revision_id_unique").on(t.ownerId, t.revisionId, t.id),
     foreignKey({ columns: [t.ownerId, t.revisionId], foreignColumns: [revisions.ownerId, revisions.id] }),
     foreignKey({
@@ -224,6 +225,29 @@ export const files = sqliteTable(
     enumCheck("files_role_check", t.role, FileRole.options),
     enumCheck("files_status_check", t.status, FileStatus.options),
     enumCheck("files_flag_check", t.flag, FileFlag.options),
+  ],
+);
+
+export const viewedFiles = sqliteTable(
+  "viewed_files",
+  {
+    id: id(),
+    ownerId: ownerId(),
+    reviewId: text("review_id").notNull(),
+    path: text("path").notNull(),
+    revisionSeq: integer("revision_seq").notNull(),
+    oldBlob: text("old_blob"),
+    newBlob: text("new_blob"),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    ...owned("viewed_files", t),
+    unique("viewed_files_owner_review_path_unique").on(t.ownerId, t.reviewId, t.path),
+    foreignKey({ columns: [t.ownerId, t.reviewId], foreignColumns: [reviews.ownerId, reviews.id] }),
+    ...[t.oldBlob, t.newBlob].map((blob) =>
+      foreignKey({ columns: [t.ownerId, blob], foreignColumns: [blobs.ownerId, blobs.sha256] }),
+    ),
+    check("viewed_files_revision_seq_positive", sql`${t.revisionSeq} > 0`),
   ],
 );
 

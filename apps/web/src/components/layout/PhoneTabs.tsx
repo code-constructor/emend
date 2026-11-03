@@ -1,24 +1,37 @@
 import { Link } from "@tanstack/react-router";
-import { FileDiff, Files, FileText, MessageSquare } from "lucide-react";
+import { FileDiff, Files, FileText, ListChecks, MessageSquare } from "lucide-react";
 import { Icon } from "../ui/Icon.tsx";
 import { cn } from "../ui/utils.ts";
 import type { ReviewTabsProps } from "./ReviewTabs.tsx";
 
 const tabs = [
   { id: "writeup", label: "Writeup", icon: FileText },
-  { id: "diff", label: "Diff", icon: FileDiff },
+  { id: "files", label: "Files", icon: ListChecks },
   { id: "docs", label: "Docs", icon: Files },
   { id: "comments", label: "Comments", icon: MessageSquare },
+  { id: "diff", label: "Diff", icon: FileDiff },
 ] as const;
 
-export function PhoneTabs({ id, search, hasDocs, hasWriteup, hasDiff, unsentCount }: ReviewTabsProps) {
+export function PhoneTabs({
+  id,
+  search,
+  hasDocs,
+  hasWriteup,
+  hasDiff,
+  unsentCount,
+  filesCount = 0,
+  viewedCount = 0,
+}: ReviewTabsProps) {
   return (
     <nav
       aria-label="Review tabs"
       className="grid shrink-0 auto-cols-fr grid-flow-col border-t border-line-1 bg-surface pb-[env(safe-area-inset-bottom)]"
     >
       {tabs
-        .filter((tab) => ({ writeup: hasWriteup, diff: hasDiff, docs: hasDocs, comments: true })[tab.id])
+        .filter(
+          (tab) =>
+            ({ writeup: hasWriteup, files: filesCount > 0, diff: hasDiff, docs: hasDocs, comments: true })[tab.id],
+        )
         .map((tab) => (
           <Link
             key={tab.id}
@@ -36,7 +49,7 @@ export function PhoneTabs({ id, search, hasDocs, hasWriteup, hasDiff, unsentCoun
           >
             <span className="relative flex flex-col items-center gap-[3px]">
               <Icon icon={tab.icon} size={18} />
-              <span>{tab.label}</span>
+              <span>{tab.id === "files" ? `Files ${viewedCount}/${filesCount}` : tab.label}</span>
               {tab.id === "comments" && unsentCount > 0 && (
                 <span className="absolute -top-1.5 left-[calc(50%+3px)] inline-grid h-[15px] min-w-[15px] place-items-center rounded-full bg-accent px-1 text-[9.5px] font-semibold leading-none text-accent-fg tabular-nums">
                   <span className="sr-only"> </span>

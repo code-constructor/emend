@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const ReviewEventName = z.enum(["publish", "send", "thread", "waiting", "claimed", "confirmed"]);
+export const ReviewEventName = z.enum(["publish", "send", "thread", "waiting", "claimed", "confirmed", "viewed"]);
 export type ReviewEventName = z.infer<typeof ReviewEventName>;
 const review = { reviewId: z.uuid(), revision: z.int().positive() };
 export const ReviewEvent = z.discriminatedUnion("type", [
@@ -10,5 +10,6 @@ export const ReviewEvent = z.discriminatedUnion("type", [
   z.object({ type: z.literal("waiting"), ...review }),
   z.object({ type: z.literal("claimed"), ...review }),
   z.object({ type: z.literal("confirmed"), ...review, deliveryId: z.uuid() }),
+  z.object({ type: z.literal("viewed"), reviewId: z.uuid() }),
 ]);
 export type ReviewEvent = z.infer<typeof ReviewEvent>;

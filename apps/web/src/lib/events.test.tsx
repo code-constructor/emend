@@ -4,6 +4,7 @@ import { StrictMode } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Channel, Events } from "../test/events.ts";
 import { ReviewEventsProvider, usePublishedRevision } from "./events.tsx";
+import { refreshQueries } from "./query-refresh.ts";
 
 const id = "11111111-1111-4111-8111-111111111111";
 const other = "22222222-2222-4222-8222-222222222222";
@@ -406,4 +407,35 @@ test("unmount aborts a pending HEAD probe and cannot resume its closed stream", 
   response.resolve(new Response(null, { status: 200 }));
   await tick(60_000);
   expect(Events.opened).toHaveLength(1);
+});
+
+test("viewed events invalidate only the review's revision queries in every tab, once per batch", async () => {
+  const leader = await mount();
+  const follower = await mount();
+  act(() => {
+    for (let i = 0; i < 5; i++) source().emit("viewed", { reviewId: id });
+  });
+  await tick(199);
+  expect(leader.invalidate).not.toHaveBeenCalled();
+  expect(follower.invalidate).not.toHaveBeenCalled();
+  await tick(1);
+  for (const tab of [leader, follower]) {
+    expect(tab.invalidate).toHaveBeenCalledExactlyOnceWith({ queryKey: ["revision", id] });
+    expect(tab.view.getByLabelText(id).textContent).toBe("0");
+  }
+});
+
+test("a burst of settled writes and viewed events share one refetch batch", async () => {
+  const { client, invalidate } = await mount();
+  const revision = observe(client, ["revision", id, "1"], Date.now());
+  act(() => {
+    for (let i = 0; i < 10; i++) {
+      source().emit("viewed", { reviewId: id });
+      refreshQueries(client, [["revision", id]], { settled: true });
+    }
+  });
+  await tick();
+  expect(invalidate).toHaveBeenCalledExactlyOnceWith({ queryKey: ["revision", id] });
+  expect(revision.fetcher).toHaveBeenCalledOnce();
+  revision.stop();
 });

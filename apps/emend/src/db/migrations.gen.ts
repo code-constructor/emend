@@ -150,5 +150,17 @@ export const MIGRATIONS: readonly { tag: string; when: number; hash: string; sta
     "statements": [
       "ALTER TABLE `topics` ADD `attention` text CONSTRAINT `topics_attention_check` CHECK(`attention` in ('critical', 'review', 'skim'));"
     ]
+  },
+  {
+    "tag": "0009_fluffy_bloodscream",
+    "when": 1793693990000,
+    "hash": "5496e0c4c2eb0ab10115a121949349ecebef3dca00a2e836b077ab4fca39680a",
+    "statements": [
+      "CREATE TABLE `viewed_files` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`owner_id` text NOT NULL,\n\t`review_id` text NOT NULL,\n\t`path` text NOT NULL,\n\t`revision_seq` integer NOT NULL,\n\t`old_blob` text,\n\t`new_blob` text,\n\t`created_at` integer NOT NULL,\n\tFOREIGN KEY (`owner_id`) REFERENCES `owners`(`id`) ON UPDATE no action ON DELETE no action,\n\tFOREIGN KEY (`owner_id`,`review_id`) REFERENCES `reviews`(`owner_id`,`id`) ON UPDATE no action ON DELETE no action,\n\tFOREIGN KEY (`owner_id`,`old_blob`) REFERENCES `blobs`(`owner_id`,`sha256`) ON UPDATE no action ON DELETE no action,\n\tFOREIGN KEY (`owner_id`,`new_blob`) REFERENCES `blobs`(`owner_id`,`sha256`) ON UPDATE no action ON DELETE no action,\n\tCONSTRAINT \"viewed_files_revision_seq_positive\" CHECK(\"viewed_files\".\"revision_seq\" > 0)\n);",
+      "CREATE INDEX `viewed_files_owner_idx` ON `viewed_files` (`owner_id`);",
+      "CREATE UNIQUE INDEX `viewed_files_owner_id_unique` ON `viewed_files` (`owner_id`,`id`);",
+      "CREATE UNIQUE INDEX `viewed_files_owner_review_path_unique` ON `viewed_files` (`owner_id`,`review_id`,`path`);",
+      "CREATE INDEX `files_owner_revision_path_idx` ON `files` (`owner_id`,`revision_id`,`path`);"
+    ]
   }
 ];

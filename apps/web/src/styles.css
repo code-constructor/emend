@@ -10,6 +10,7 @@
 @import "./styles/focus.css";
 @import "./styles/threads.css";
 @import "./styles/diff.css";
+@import "./styles/files.css";
 @import "./styles/layout.css";
 
 @layer components {

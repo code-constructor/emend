@@ -9,14 +9,18 @@ import { ReviewPage } from "./routes/review.tsx";
 
 export type ReviewSearch = {
   rev?: number;
-  tab?: "writeup" | "diff" | "docs" | "comments";
+  tab?: "writeup" | "files" | "diff" | "docs" | "comments";
   thread?: string;
   doc?: string;
 };
 export function validateReviewSearch(input: Record<string, unknown>): ReviewSearch {
   const rev = typeof input.rev === "string" || typeof input.rev === "number" ? Number(input.rev) : NaN;
   const tab =
-    input.tab === "writeup" || input.tab === "diff" || input.tab === "docs" || input.tab === "comments"
+    input.tab === "writeup" ||
+    input.tab === "files" ||
+    input.tab === "diff" ||
+    input.tab === "docs" ||
+    input.tab === "comments"
       ? input.tab
       : undefined;
   return {

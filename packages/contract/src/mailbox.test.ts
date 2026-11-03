@@ -78,3 +78,11 @@ test("events contain only their discriminator, ids and revision sequence", () =>
     }
   }
 });
+
+test("viewed events carry only a review id, with no revision or content", () => {
+  expect(ReviewEvent.parse({ type: "viewed", reviewId: id, revision: 2, paths: ["a.ts"], viewed: true })).toEqual({
+    type: "viewed",
+    reviewId: id,
+  });
+  expect(ReviewEvent.safeParse({ type: "viewed", reviewId: "invalid" }).success).toBe(false);
+});
