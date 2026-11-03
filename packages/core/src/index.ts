@@ -1,4 +1,5 @@
 export { htmlAssetReferences } from "./assets.ts";
+export { cleanDocTitle, inferDocTitle } from "./doc-title.ts";
 export { docText, placeHtmlSpan } from "./place/html.ts";
 export { lineMap } from "./place/linemap.ts";
 export { type FileSides, placeLines } from "./place/lines.ts";

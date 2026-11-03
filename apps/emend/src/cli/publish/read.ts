@@ -19,6 +19,18 @@ export const inside = (root: string, file: string) => {
   const path = relative(root, file);
   return path === "" || (!isAbsolute(path) && path !== ".." && !path.startsWith(`..${sep}`));
 };
+export interface PublishedFolder {
+  root: string;
+  argument: string;
+}
+export class PublishedFolderEscape extends CliError {
+  constructor(argument: string) {
+    super(`symlink leaves the published folder: ${escapeReference(argument)}`);
+  }
+}
+export function checkPublishedFolders(file: string, folders: readonly PublishedFolder[] = []): void {
+  for (const folder of folders) if (!inside(folder.root, file)) throw new PublishedFolderEscape(folder.argument);
+}
 const nativeFs = { lstat, open, realpath, stat: pathStat, platform: process.platform };
 export class GitFolderRead extends CliError {
   constructor(file: string) {
@@ -54,8 +66,14 @@ export async function leadingFolders(root: string, file: string): Promise<boolea
   }
   return true;
 }
-export async function sourcePath(file: string, roots: string[], gitDirs: string[]): Promise<string> {
+export async function sourcePath(
+  file: string,
+  roots: string[],
+  gitDirs: string[],
+  folders: readonly PublishedFolder[] = [],
+): Promise<string> {
   const actual = await realpath(file);
+  checkPublishedFolders(actual, folders);
   outsideGit(actual, gitDirs, roots);
   if (!roots.some((root) => inside(root, actual))) throw new CliError("source is outside the allowed doc roots");
   const root = roots.find((root) => inside(root, file));

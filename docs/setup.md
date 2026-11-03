@@ -101,6 +101,8 @@ emend config add docRoots <folder>
 ```
 
 `emend config` lists the settings; `emend config remove docRoots <folder>` takes a folder back.
+Then `emend publish <folder>/plan.html` prints a review URL. Run it again after editing to update
+the same review, or publish the folder to bundle its docs. See [Publish a doc](../README.md#publish-a-doc).
 
 ```text
 Rules: never read secrets or emend's state folder; never run emend config yourself, give me the

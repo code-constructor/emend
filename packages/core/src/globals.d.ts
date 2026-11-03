@@ -12,6 +12,10 @@ declare global {
     encode(input: string): Uint8Array<ArrayBuffer>;
   }
 
+  class TextDecoder {
+    decode(input: Uint8Array): string;
+  }
+
   class URL {
     constructor(input: string);
     readonly protocol: string;

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, posix, resolve } from "node:path";
+import { basename, dirname, posix, resolve, sep } from "node:path";
 import { LIMITS, OTHER_TOPIC, type PublishFile, type PublishManifest, PublishRequest } from "@emend/contract";
 import { UnchangedFilesError, withOtherChanges } from "@emend/core";
 import { DocRootError, readDocRoots, rootRules, validateDocRoot } from "../config.ts";
@@ -11,13 +11,28 @@ import { CliError } from "../http.ts";
 import { collectAssets } from "./assets.ts";
 import { collectChanges } from "./collect.ts";
 import { docsKey, normalizeRemote, reviewKey } from "./key.ts";
-import { NotRegularFile, outsideGitSegments, readRegular, sourcePath } from "./read.ts";
+import {
+  checkPublishedFolders,
+  NotRegularFile,
+  outsideGitSegments,
+  type PublishedFolder,
+  readRegular,
+  sourcePath,
+} from "./read.ts";
 import { gitFolders, worktreeRoot } from "./root.ts";
+import { ShortcutAssets } from "./shortcut-assets.ts";
 import { readSide } from "./sides.ts";
 
-import type { BlobSource } from "./upload.ts";
+import { type BlobSource, readBlob } from "./upload.ts";
 
-export type PublishOptions = { manifest: string; review?: string; key?: string };
+export type PublishOptions = {
+  manifest?: string;
+  review?: string;
+  key?: string | ((instanceId: string) => string);
+  skipNodeModules?: boolean;
+  titleFromMain?: (bytes: Uint8Array) => string;
+  docFolders?: ReadonlyMap<string, readonly PublishedFolder[]>;
+};
 const sha256 = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 export async function publishContext(cwd: string, stateDir: string) {
   const git = createGitSession();
@@ -84,6 +99,7 @@ export async function resolvePublish(
   if (grouped.other.length)
     topics.push({ ...OTHER_TOPIC, importance: 100, summary: "Changed files not assigned to a declared topic." });
   const blobs = new Map<string, BlobSource>();
+  const rechecks = new Map<string, BlobSource["read"][]>();
   let totalBytes = Buffer.byteLength(JSON.stringify(manifest.writeup));
   if (totalBytes > LIMITS.revisionBytes) throw new CliError("the docs pass the revision size limit");
   const add = (bytes: Buffer, read: BlobSource["read"]) => {
@@ -91,8 +107,21 @@ export async function resolvePublish(
     if (!blobs.has(hash)) {
       if (totalBytes + bytes.length > LIMITS.revisionBytes) return null;
       totalBytes += bytes.length;
-      blobs.set(hash, { size: bytes.length, read });
-    }
+      const size = bytes.length;
+      if (options.docFolders) {
+        // Shortcut deduplication retains every source's checks, including shared HTML assets.
+        const checks: BlobSource["read"][] = [];
+        rechecks.set(hash, checks);
+        blobs.set(hash, {
+          size,
+          read: async () => {
+            const content = await read();
+            for (const check of checks) await readBlob(hash, { size, read: check });
+            return content;
+          },
+        });
+      } else blobs.set(hash, { size, read });
+    } else rechecks.get(hash)?.push(read);
     return hash;
   };
   const addRequired = (bytes: Buffer, read: BlobSource["read"]) => {
@@ -105,9 +134,11 @@ export async function resolvePublish(
     if (a.role === "doc" || b.role === "doc") return Number(b.role === "doc") - Number(a.role === "doc");
     return (ranks.get(a.topic ?? "") ?? ranks.size) - (ranks.get(b.topic ?? "") ?? ranks.size);
   });
-  const files: PublishFile[] = [];
+  let files: PublishFile[] = [];
+  let title = manifest.title;
   let assetCount = 0;
   const assetPaths = new Set<string>();
+  const shortcutAssets = options.docFolders ? new ShortcutAssets(gitDirs, warn) : undefined;
   const roots = [...(worktree ? [worktree] : []), ...(await readDocRoots(stateDir))];
   for (const file of grouped.files) {
     if (file.role === "diff") {
@@ -155,6 +186,7 @@ export async function resolvePublish(
       continue;
     }
     const original = resolve(root, file.source ?? file.path);
+    const publishedFolders = options.docFolders?.get(file.path) ?? [];
     const docError = (error: unknown): never => {
       if (
         error instanceof NotRegularFile ||
@@ -165,7 +197,7 @@ export async function resolvePublish(
     };
     // Check the written alias here; sourcePath also checks its resolved target.
     outsideGitSegments(original, root);
-    const source = await sourcePath(original, roots, gitDirs).catch(docError);
+    const source = await sourcePath(original, roots, gitDirs, publishedFolders).catch(docError);
     const html = /\.html?$/i.test(file.path);
     if (!html && !/\.(md|markdown)$/i.test(file.path))
       throw new CliError("doc path must end in .md, .markdown, .html or .htm");
@@ -176,15 +208,21 @@ export async function resolvePublish(
     if (file.source !== undefined) checkExtension(file.source);
     checkExtension(source);
     const readResolvedDoc = (actual: string) =>
-      readRegular(actual, html ? LIMITS.htmlDocBytes : LIMITS.markdownDocBytes, roots, undefined, gitDirs).catch(
-        docError,
-      );
+      readRegular(
+        publishedFolders.length ? original : actual,
+        html ? LIMITS.htmlDocBytes : LIMITS.markdownDocBytes,
+        roots,
+        undefined,
+        gitDirs,
+        (_info, opened) => checkPublishedFolders(opened, publishedFolders),
+      ).catch(docError);
     const readDoc = async () => {
-      const actual = await sourcePath(original, roots, gitDirs).catch(docError);
+      const actual = await sourcePath(original, roots, gitDirs, publishedFolders).catch(docError);
       checkExtension(actual);
       return readResolvedDoc(actual);
     };
     const bytes = await readResolvedDoc(source);
+    if (file.path === manifest.main && options.titleFromMain) title = options.titleFromMain(bytes);
     const resolvedDoc: PublishFile = {
       path: file.path,
       oldPath: null,
@@ -197,7 +235,20 @@ export async function resolvePublish(
     };
     files.push(resolvedDoc);
     if (!html) continue;
-    const assets = await collectAssets(source, warn, bytes.toString(), gitDirs);
+    if (shortcutAssets) {
+      // source is the checked real path, so aliases use the target folder for assets.
+      // readResolvedDoc/readDoc enforce the HTML doc Git and published-folder rules here.
+      shortcutAssets.add(resolvedDoc, source, bytes, publishedFolders);
+      continue;
+    }
+    const assets = await collectAssets(
+      source,
+      warn,
+      bytes.toString(),
+      gitDirs,
+      options.skipNodeModules,
+      publishedFolders,
+    );
     resolvedDoc.assets = assets.map((asset) => posix.join(posix.dirname(file.path), asset.ref));
     let size = bytes.length;
     for (const asset of assets) {
@@ -207,47 +258,57 @@ export async function resolvePublish(
       if (size > LIMITS.htmlDocWithAssetsBytes) throw new CliError("HTML doc and assets exceed their size limit");
     }
     let actualSize = bytes.length;
+    const readAsset = async (file: string, limit: number) => {
+      const actual = await sourcePath(file, [dirname(source)], gitDirs, publishedFolders);
+      if (options.skipNodeModules && actual.split(sep).includes("node_modules"))
+        throw new CliError("asset target changed into node_modules");
+      return readRegular(
+        publishedFolders.length ? file : actual,
+        limit,
+        [dirname(source)],
+        undefined,
+        gitDirs,
+        (_info, opened) => checkPublishedFolders(opened, publishedFolders),
+      );
+    };
     for (const asset of assets) {
       const path = posix.join(posix.dirname(file.path), asset.ref);
       if (assetPaths.has(path)) continue;
       assetPaths.add(path);
       if (grouped.files.length + ++assetCount > LIMITS.filesPerRevision)
         throw new CliError("too many files in the review");
-      const content = await readRegular(
-        await sourcePath(asset.file, [dirname(source)], gitDirs),
+      const content = await readAsset(
+        asset.file,
         Math.min(LIMITS.assetBytes, LIMITS.htmlDocWithAssetsBytes - actualSize),
-        [dirname(source)],
-        undefined,
-        gitDirs,
       );
       actualSize += content.length;
+      const newBlob = addRequired(content, () => readAsset(asset.file, LIMITS.assetBytes));
       files.push({
         path,
         oldPath: null,
         role: "asset",
         parent: file.path,
         oldBlob: null,
-        newBlob: addRequired(content, async () =>
-          readRegular(
-            await sourcePath(asset.file, [dirname(source)], gitDirs),
-            LIMITS.assetBytes,
-            [dirname(source)],
-            undefined,
-            gitDirs,
-          ),
-        ),
+        newBlob,
         flag: null,
       });
     }
   }
-  const keyFor = (id: string) =>
-    options.key || !code || !branch ? docsKey(id, options.key ?? options.review ?? "") : reviewKey(id, root, branch);
+  if (shortcutAssets) {
+    // HTML docs already passed their checked reads; this phase checks their shared assets.
+    const assets = await shortcutAssets.resolve(files.length, addRequired);
+    files = files.flatMap((file) => [file, ...(assets.get(file.path) ?? [])]);
+  }
+  const keyFor = (id: string) => {
+    const name = typeof options.key === "function" ? options.key(id) : options.key;
+    return name || !code || !branch ? docsKey(id, name ?? options.review ?? "") : reviewKey(id, root, branch);
+  };
   const request = PublishRequest.safeParse({
     reviewId: options.review,
     reviewKey: keyFor(instanceId ?? ""),
     repo,
     branch,
-    title: manifest.title,
+    title,
     base: manifest.base ?? null,
     head: manifest.head ?? null,
     main: manifest.main,

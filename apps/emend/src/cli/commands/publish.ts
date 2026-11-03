@@ -9,31 +9,59 @@ import { movedError, refuseUncopiedReview } from "../moved.ts";
 import { manifestError } from "../publish/manifest-error.ts";
 import { GitFolderRead, inside, NotRegularFile, OversizedFile, readRegular } from "../publish/read.ts";
 import { type PublishOptions, publishContext, resolvePublish } from "../publish/resolve.ts";
+import { type ShortcutOptions, shortcutManifest } from "../publish/shortcut.ts";
+import { SHORTCUT_LIMITS } from "../publish/shortcut-walk.ts";
 import { upload } from "../publish/upload.ts";
 import { readAttachmentPair, resolveTarget } from "../target.ts";
 
-export function parsePublishArgs(args: string[]): PublishOptions {
-  const opts: Partial<PublishOptions> = {};
-  for (let i = 0; i < args.length; i += 2) {
+type PublishArgs = ShortcutOptions & { manifest?: string; json?: boolean };
+const publishUsage =
+  "usage: emend publish <path>... [--title T] [--key K | --new] [--review ID] [--main PATH] [--json], or emend publish --manifest <file> [--review <id>] [--key <name>]";
+
+export function parsePublishArgs(args: string[]): PublishArgs {
+  const opts: PublishArgs = { paths: [] };
+  let positional = false;
+  const validValue = (value: string, title = false) =>
+    title ||
+    (value.length > 0 &&
+      value.length <= LIMITS.pathChars &&
+      !Array.from(value).some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127));
+  for (let i = 0; i < args.length; i++) {
     const name = args[i];
-    const value = args[i + 1];
-    if (
-      !name ||
-      !["--manifest", "--review", "--key"].includes(name) ||
-      !value ||
-      value.startsWith("--") ||
-      value.length > LIMITS.pathChars ||
-      Array.from(value).some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)
-    )
-      throw new CliError("usage: emend publish --manifest <file> [--review <id>] [--key <name>]");
-    const key = name.slice(2) as keyof PublishOptions;
+    if (name === undefined) throw new CliError(publishUsage);
+    if (name === "--" && !positional) {
+      positional = true;
+      continue;
+    }
+    if (positional || !name.startsWith("-")) {
+      if (!validValue(name)) throw new CliError(publishUsage);
+      opts.paths.push(name);
+      continue;
+    }
+    if (name === "--new" || name === "--json") {
+      const key = name === "--new" ? "new" : "json";
+      if (opts[key]) throw new CliError("duplicate publish option");
+      opts[key] = true;
+      continue;
+    }
+    if (!["--manifest", "--review", "--key", "--title", "--main"].includes(name)) throw new CliError(publishUsage);
+    const value = args[++i];
+    if (value === undefined || value.startsWith("--") || !validValue(value, name === "--title"))
+      throw new CliError(publishUsage);
+    const key = name.slice(2) as "manifest" | "review" | "key" | "title" | "main";
     if (opts[key] !== undefined) throw new CliError("duplicate publish option");
     opts[key] = value;
   }
-  if (!opts.manifest) throw new CliError("pass --manifest <file>");
+  if (
+    opts.manifest &&
+    (opts.paths.length || opts.title !== undefined || opts.main !== undefined || opts.new || opts.json)
+  )
+    throw new CliError(publishUsage);
+  if (!opts.manifest && !opts.paths.length) throw new CliError(publishUsage);
+  if (opts.new && (opts.key || opts.review)) throw new CliError(publishUsage);
   if (opts.review && !/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i.test(opts.review))
     throw new CliError("invalid review id");
-  return opts as PublishOptions;
+  return opts;
 }
 export const publishTimeoutMs = (files: { role: string; path: string }[]) =>
   30000 +
@@ -54,10 +82,8 @@ export function manifestJsonError(error: SyntaxError, text: string): string {
   return `${message} (line ${lines.length}, column ${(lines.at(-1)?.length ?? 0) + 1})`;
 }
 
-export async function publishCommand(stateDir: string, args: string[], io: Io, cwd = process.cwd()): Promise<void> {
-  const options = parsePublishArgs(args);
-  const context = await publishContext(cwd, stateDir);
-  const manifestPath = resolve(cwd, options.manifest);
+async function readManifest(path: string, cwd: string, context: Awaited<ReturnType<typeof publishContext>>) {
+  const manifestPath = resolve(cwd, path);
   const unsafeManifest = new CliError(
     `the manifest ${escapeReference(manifestPath)} can be changed by other users; write it in a private folder`,
   );
@@ -86,7 +112,7 @@ export async function publishCommand(stateDir: string, args: string[], io: Io, c
   } catch (error) {
     if (error instanceof GitFolderRead || error === unsafeManifest) throw error;
     if (error instanceof NotRegularFile || ["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? ""))
-      throw new CliError(`manifest not found: ${escapeReference(options.manifest)}`);
+      throw new CliError(`manifest not found: ${escapeReference(path)}`);
     if (error instanceof OversizedFile) throw new CliError("manifest exceeds its size limit");
     throw new CliError("invalid publish manifest");
   }
@@ -100,19 +126,36 @@ export async function publishCommand(stateDir: string, args: string[], io: Io, c
   }
   const parsed = PublishManifest.safeParse(input, { reportInput: true });
   if (!parsed.success) throw new CliError(manifestError(parsed.error.issues));
-  const manifest = parsed.data;
+  return parsed.data;
+}
+
+export async function publishCommand(stateDir: string, args: string[], io: Io, cwd = process.cwd()): Promise<void> {
+  const parsed = parsePublishArgs(args);
+  const context = await publishContext(cwd, stateDir);
+  const shortcut = parsed.manifest ? undefined : await shortcutManifest(parsed, stateDir, cwd, context);
+  const manifest = shortcut?.manifest ?? (await readManifest(parsed.manifest ?? "", cwd, context));
+  const options: PublishOptions = {
+    manifest: parsed.manifest,
+    key: shortcut?.key ?? parsed.key,
+    review: parsed.review,
+    skipNodeModules: shortcut !== undefined,
+    titleFromMain: shortcut?.titleFromMain,
+    docFolders: shortcut?.docFolders,
+  };
   if (!manifest.base && !options.key && !options.review) throw new CliError("pass --review or --key");
   // Resolve all paths and unchanged-file checks before creating any server state.
   const warnings: string[] = [];
-  const collected = await resolvePublish(
-    manifest,
-    options,
-    stateDir,
-    null,
-    cwd,
-    (line) => warnings.push(line),
-    context,
-  );
+  let moreSkipped = 0;
+  const warn = (line: string) => {
+    if (shortcut && warnings.length >= SHORTCUT_LIMITS.warnings) moreSkipped++;
+    else warnings.push(line);
+  };
+  for (const argument of shortcut?.skippedArguments ?? [])
+    warn(`emend: skipped ${escapeReference(argument)}: not a visible Markdown or HTML doc\n`);
+  const collected = await resolvePublish(manifest, options, stateDir, null, cwd, warn, context);
+  const published = new Set(collected.request.files.map((file) => file.path));
+  for (const path of shortcut?.skipped ?? [])
+    if (!published.has(path)) warn(`emend: skipped ${escapeReference(path)}: not a doc or referenced HTML asset\n`);
   const pair = await readAttachmentPair(stateDir);
   const localReviewId = pair
     ? await refuseUncopiedReview(
@@ -158,8 +201,16 @@ export async function publishCommand(stateDir: string, args: string[], io: Io, c
   }
   const result = PublishResponse.safeParse(response);
   if (!result.success) throw new CliError(publishAnswerIncomplete);
-  await printJson(io, result.data);
+  if (!shortcut || parsed.json) await printJson(io, result.data);
+  else {
+    try {
+      await (io.stdoutAsync ?? io.stdout)(`${escapeReference(result.data.url)}\n`);
+    } catch {
+      throw new CliError("Could not write to stdout.");
+    }
+  }
   for (const warning of warnings) io.stderr(warning);
+  if (moreSkipped) io.stderr(`emend: and ${moreSkipped} more files skipped\n`);
   for (const path of result.data.unrendered) io.stderr(`emend: could not render ${escapeReference(path)}\n`);
   io.stderr(`emend: published revision ${result.data.revision}: ${escapeReference(result.data.url)}\n`);
   if (target.via === "direct")
