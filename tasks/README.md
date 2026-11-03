@@ -13,7 +13,8 @@ When the owner asks what to do next:
    `done`.
 3. Answer with its title, who does it (`owner`), the first unchecked step, and its "Done when"
    line. Mention anything `blocked`.
-4. For task 005, the next step is the first unchecked task in the plan's order of work.
+4. For task 008, the next step is the first unchecked step in its list, in the order its
+   intro gives.
 5. If no task qualifies, say so and point to the plan. Do not invent work.
 
 ## Keeping it current
@@ -32,9 +33,10 @@ When the owner asks what to do next:
 | # | Task | Owner | Depends on | Status |
 |---|---|---|---|---|
 | 001 | [Port the harness](001-port-harness.md) | agent + your approval | — | done |
-| 002 | [Scaffold the workspace and the gate](002-scaffold.md) | agent + your approval | 001 | open |
-| 003 | [Spike the diff renderer](003-spike-diffs.md) | agent; you name the branch | 002 | open |
+| 002 | [Scaffold the workspace and the gate](002-scaffold.md) | agent + your approval | 001 | done |
+| 003 | [Spike the diff renderer](003-spike-diffs.md) | agent; you name the branch | 002 | done |
 | 004 | [Spike SQLite with Drizzle](004-spike-sqlite.md) | agent | 002 | done |
-| 005 | [Build the MVP](005-build-mvp.md) | agent + your approval | 003, 004 | open |
+| 005 | [Build the MVP](005-build-mvp.md) | agent + your approval | 003, 004 | done |
 | 006 | [Brainstorm the layout and the phone menu](006-layout-brainstorm.md) | you, with the agent | — | done |
 | 007 | [Run the success test](007-success-test.md) | you | 005 | open |
+| 008 | [Replace readout](008-replace-readout.md) | agent + your approval | 005 | open |

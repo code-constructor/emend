@@ -1,10 +1,10 @@
 ---
 id: 003
 title: Spike the diff renderer
-status: open
+status: done
 owner: agent; you name the branch
 depends_on: [002]
-done_on:
+done_on: 2026-11-03
 ---
 
 # 003 — Spike the diff renderer
@@ -14,9 +14,9 @@ committed). Record numbers only, never paths, file names or code from the branch
 
 ## Steps
 
-- [ ] You: name the branch.
-- [ ] Build the spike page and run it on the branch.
-- [ ] Answer the plan's ten questions in its build log, with a verdict: go, or a change of plan.
+- [ ] ~~You: name the branch.~~ Dropped.
+- [ ] ~~Build the spike page and run it on the branch.~~ Dropped.
+- [x] Answer the plan's ten questions in its build log, with a verdict: go, or a change of plan.
 
 ## Done when
 
@@ -32,3 +32,7 @@ The verdict is recorded. A change of plan goes back to you before slice 1.
   browser checks (first file in 1.5 s, scrolling, memory, 390 px, gutter drag, CSP enforcement)
   are still open, because the agent sandbox cannot run a browser or a local server. The run on a
   branch you name is still open too.
+- 2026-11-03: Done; the go stands. Plan task 1.11 built the diff pane on the library, and the
+  owner's first real review ran on it. The first two steps were dropped: the spike ran on a
+  synthetic branch only, the run on a named branch was never made, and real use replaces it. The
+  browser speed bars (first file in 1.5 s, scroll stalls, memory) were never measured.
