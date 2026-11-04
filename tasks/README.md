@@ -43,4 +43,5 @@ When the owner asks what to do next:
 | 009 | [Phone fixes after the hub setup](009-phone-fixes.md) | agent + your approval | 005 | done |
 | 010 | [Review feedback from using emend](010-review-feedback.md) | agent + your approval | 005 | done |
 | 011 | [Screenshots in the writeup](011-writeup-media.md) | agent + your approval | 005 | done |
+| 012 | [CLI state checks](012-cli-state-checks.md) | agent + your approval | 005 | open |
 | 013 | [Release emend and document every setup](013-release-and-setup.md) | agent + your approval | 005 | open |
