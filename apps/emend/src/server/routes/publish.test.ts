@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { LIMITS } from "@emend/contract";
 import { afterEach, beforeEach, expect, test } from "vitest";
@@ -50,6 +51,25 @@ function request(
     body,
   });
 }
+test("HEAD answers 404 for a row whose file is missing or the wrong size, and the next upload repairs it", async () => {
+  const bytes = new TextEncoder().encode("# Plan with a lost file");
+  const hash = sha(bytes);
+  const path = `/blobs/${hash}`;
+  const file = join(f.dir, "state", "blobs", hash.slice(0, 2), hash);
+  const upload = () => request(path, "PUT", bytes, { "Content-Length": String(bytes.length) });
+  expect((await upload()).status).toBe(204);
+  expect((await request(path, "HEAD")).status).toBe(204);
+  await rm(file);
+  expect((await request(path, "HEAD")).status).toBe(404);
+  expect((await upload()).status).toBe(204);
+  expect((await request(path, "HEAD")).status).toBe(204);
+  await writeFile(file, bytes.subarray(0, 3), { mode: 0o600 });
+  expect((await request(path, "HEAD")).status).toBe(404);
+  expect((await upload()).status).toBe(204);
+  expect((await request(path, "HEAD")).status).toBe(204);
+  expect(new Uint8Array(await readFile(file))).toEqual(bytes);
+});
+
 test("blob upload checks hash and actual size; HEAD is owner scoped; publish uses the stored blob", async () => {
   const bytes = new TextEncoder().encode("# Plan");
   const hash = sha(bytes);

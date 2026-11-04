@@ -5,11 +5,13 @@ import {
   LEASE_SECONDS,
   LIMITS,
   MODE_LABELS,
+  type TakeAccept,
   type UnplacedReason,
   type WaitResult,
 } from "@emend/contract";
-import { and, eq, gte, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, ne, or, sql } from "drizzle-orm";
 import type { Db, Queries } from "../../db/client.ts";
+import { snoozeInEffect } from "../../db/repo/snooze.ts";
 import { commentOrder, newestRevision, requireReview } from "../../db/repo/thread-access.ts";
 import { comments, deliveries, placements, reviews, revisions, sends, threads } from "../../db/schema.ts";
 import type { Principal } from "../auth/principal.ts";
@@ -26,7 +28,7 @@ async function reopen(ownerId: string, q: Queries, reviewId: string, now: number
     );
 }
 
-export async function takeDelivery(
+async function claimSends(
   db: Db,
   principal: Principal,
   reviewId: string,
@@ -236,6 +238,140 @@ export async function takeDelivery(
   });
 }
 
+type Closing = { reason: "retired" | "snoozed"; until: number | null };
+
+/** Why a review ends the wait of its agent, if it does: retired, or snoozed and still asleep. */
+function closing(
+  review: { state: string; snoozedAt: number | null; snoozedUntil: number | null },
+  now: number,
+): Closing | null {
+  if (review.state === "settled") return { reason: "retired", until: null };
+  if (review.state === "open" && snoozeInEffect(review, now)) return { reason: "snoozed", until: review.snoozedUntil };
+  return null;
+}
+
+/**
+ * Deliver any pending Send first. With none, a retired or snoozed review answers `closed` to a client
+ * that announced it, and `review_closed` to one that did not.
+ */
+export async function takeDelivery(
+  db: Db,
+  principal: Principal,
+  reviewId: string,
+  now: number,
+  authorize?: (q: Queries) => Promise<void>,
+  maxBytes: number = LIMITS.handoffBytes,
+  accepts: readonly TakeAccept[] = [],
+): Promise<Exclude<WaitResult, { kind: "pending" }> | null> {
+  const claimed = await claimSends(db, principal, reviewId, now, authorize, maxBytes);
+  if (claimed) return claimed;
+  const review = await db.read((q) => requireReview(principal.ownerId, q, reviewId, principal));
+  if (!closing(review, now)) return null;
+  if (!accepts.includes("closed")) throw new ApiError("review_closed");
+  return closeDelivery(db, principal, reviewId, now, authorize);
+}
+
+async function closeDelivery(
+  db: Db,
+  principal: Principal,
+  reviewId: string,
+  now: number,
+  authorize?: (q: Queries) => Promise<void>,
+): Promise<Exclude<WaitResult, { kind: "pending" }> | null> {
+  const ownerId = principal.ownerId;
+  return db.transaction(async (q) => {
+    await authorize?.(q);
+    const review = await requireReview(ownerId, q, reviewId, principal);
+    const why = closing(review, now);
+    if (!why) return null;
+    // A Send that arrived after the claim attempt is delivered first: leave it to the next claim of the wait.
+    const waiting = await q
+      .select({ id: sends.id })
+      .from(sends)
+      .leftJoin(deliveries, and(eq(deliveries.ownerId, ownerId), eq(deliveries.id, sends.deliveryId)))
+      .where(
+        and(
+          eq(sends.ownerId, ownerId),
+          eq(sends.reviewId, reviewId),
+          isNull(sends.setAsideAt),
+          or(isNull(sends.deliveryId), and(isNull(deliveries.confirmedAt), lt(deliveries.leaseUntil, now))),
+        ),
+      )
+      .limit(1)
+      .get();
+    if (waiting) return null;
+    const newest = await newestRevision(ownerId, q, reviewId);
+    const sendless = sql`not exists (select 1 from sends where sends.owner_id = ${ownerId} and sends.delivery_id = deliveries.id)`;
+    // Confirmed closed deliveries pile up with every wake; keep only the newest one.
+    const newestConfirmed = await q
+      .select({ id: deliveries.id })
+      .from(deliveries)
+      .where(
+        and(
+          eq(deliveries.ownerId, ownerId),
+          eq(deliveries.reviewId, reviewId),
+          isNotNull(deliveries.confirmedAt),
+          sendless,
+        ),
+      )
+      .orderBy(desc(sql`${deliveries}.rowid`))
+      .limit(1)
+      .get();
+    if (newestConfirmed)
+      await q
+        .delete(deliveries)
+        .where(
+          and(
+            eq(deliveries.ownerId, ownerId),
+            eq(deliveries.reviewId, reviewId),
+            isNotNull(deliveries.confirmedAt),
+            ne(deliveries.id, newestConfirmed.id),
+            sendless,
+          ),
+        );
+    // A dead closed delivery has no Send to release; drop it before reusing a live one.
+    await q
+      .delete(deliveries)
+      .where(
+        and(
+          eq(deliveries.ownerId, ownerId),
+          eq(deliveries.reviewId, reviewId),
+          isNull(deliveries.confirmedAt),
+          lt(deliveries.leaseUntil, now),
+          sendless,
+        ),
+      );
+    const live = await q
+      .select({ id: deliveries.id })
+      .from(deliveries)
+      .where(
+        and(
+          eq(deliveries.ownerId, ownerId),
+          eq(deliveries.reviewId, reviewId),
+          isNull(deliveries.confirmedAt),
+          gte(deliveries.leaseUntil, now),
+          sendless,
+        ),
+      )
+      .orderBy(desc(sql`${deliveries}.rowid`))
+      .limit(1)
+      .get();
+    const deliveryId = live?.id ?? randomUUID();
+    if (!live)
+      await q
+        .insert(deliveries)
+        .values({ id: deliveryId, ownerId, reviewId, leaseUntil: now + LEASE_SECONDS * 1000, createdAt: now });
+    return {
+      kind: "closed",
+      reviewId,
+      deliveryId,
+      revision: newest.seq,
+      reason: why.reason,
+      until: why.until === null ? null : new Date(why.until).toISOString(),
+    };
+  });
+}
+
 export function confirmDelivery(db: Db, principal: Principal, deliveryId: string, now: number) {
   const ownerId = principal.ownerId;
   return db.transaction(async (q) => {
@@ -245,7 +381,7 @@ export function confirmDelivery(db: Db, principal: Principal, deliveryId: string
       .where(and(eq(deliveries.ownerId, ownerId), eq(deliveries.id, deliveryId)))
       .get();
     if (!delivery) return false;
-    await requireReview(ownerId, q, delivery.reviewId, principal, false, true);
+    const review = await requireReview(ownerId, q, delivery.reviewId, principal, false, true);
     const confirmed = await q
       .update(deliveries)
       .set({ confirmedAt: now })
@@ -260,6 +396,20 @@ export function confirmDelivery(db: Db, principal: Principal, deliveryId: string
       .returning({ id: deliveries.id })
       .get();
     if (!confirmed) return false;
+    // A delivery with no Send is a closed answer. Its confirm is the proof of the agent that it stopped,
+    // and the point where the review counts as released.
+    const carriesSend = await q
+      .select({ id: sends.id })
+      .from(sends)
+      .where(and(eq(sends.ownerId, ownerId), eq(sends.deliveryId, deliveryId)))
+      .limit(1)
+      .get();
+    const why = carriesSend ? null : closing(review, now);
+    if (why)
+      await q
+        .update(reviews)
+        .set({ releasedAt: now, releasedReason: why.reason })
+        .where(and(eq(reviews.ownerId, ownerId), eq(reviews.id, delivery.reviewId)));
     const revision = await newestRevision(ownerId, q, delivery.reviewId);
     return { reviewId: delivery.reviewId, revision: revision.seq, deliveryId };
   });

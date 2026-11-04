@@ -185,11 +185,11 @@ test("every documented API endpoint enforces its scope even before its handler e
         path === "/api/v1/publish" ||
         path.startsWith("/api/v1/blobs/") ||
         (endpoint.method === "PUT" && path.endsWith("/viewed")) ||
-        (endpoint.method === "POST" && /\/(threads|comments|sends|reply)$/.test(path)) ||
+        (endpoint.method === "POST" && /\/(threads|comments|sends|reply|snooze)$/.test(path)) ||
         (endpoint.method === "PATCH" && path.startsWith("/api/v1/comments/"))
       )
         await error(response, "invalid_request", endpoint.method === "HEAD");
-      else if (/\/reviews\/missing(?:$|\/(?:events|take|revisions\/missing)$)/.test(path))
+      else if (/\/reviews\/missing(?:$|\/(?:events|take|unsnooze|retire|reopen|revisions\/missing)$)/.test(path))
         await error(response, "unknown_review");
       else await error(response, "not_found", endpoint.method === "HEAD");
     }

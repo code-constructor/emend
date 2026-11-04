@@ -247,7 +247,7 @@ test.each(["owner", "origin"])("direct waits refuse a foreign %s without leaving
     await q.insert(revisions).values({ ownerId, reviewId, seq: 1, contentKey: randomUUID() });
   });
   await expect(takeFeedback(f.stateDir, await resolveTarget(f.stateDir), reviewId, 1)).rejects.toMatchObject({
-    code: "unknown_review",
+    message: `review ${reviewId} was deleted or never existed`,
   });
   expect(
     await server.db.read((q) => q.values(sql`select id from agent_waiters where owner_id = ${server.ownerId}`)),

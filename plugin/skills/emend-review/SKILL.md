@@ -345,7 +345,7 @@ you started on this folder is still running; a delegated sub-agent never starts 
 When the command ends, read its output first: the exit code, any error line and any warning.
 
 On success, repeat the folder-entry check and ownership listing above, then read the file you just wrote and check its JSON `kind`.
-All three normal results exit 0. Keep only `go` and `approve` results; delete a result after reading `pending`.
+All four normal results exit 0. After reading a `pending` result, delete that file; only `go`, `approve` and `closed` results stay.
 
 - `go`: keep the hand-off and follow emend-feedback. It supplies comments, instructions and the
   allowed mode. After its last reply and any new revision, append its `deliveryId` to `handled.txt` as below.
@@ -356,8 +356,16 @@ All three normal results exit 0. Keep only `go` and `approve` results; delete a 
   If the session must end, tell the user the review id and literal folder path.
   The emend-feedback skill continues from them.
   Pending is not approval.
+- `closed`: the reviewer retired or snoozed the review. It is not approval.
 
-Record each handled `go` or reported `approve` as one line, replacing `<deliveryId>` with that result's field.
+`closed` means the reviewer retired or snoozed the review. Save and confirm it like `approve`, record its `deliveryId` as below, and never start another wait after it.
+
+- `reason: "retired"`: stop the loop and tell the user the reviewer retired review <review-id>.
+- `reason: "snoozed"`: stop the loop and tell the user: "The reviewer moved review <review-id> down until <time>. When they send feedback, resume with `/emend:emend-feedback <review-id>`." When `until` is `null`, say "until its next revision" in place of the time.
+
+If an error line reads `review <review-id> was deleted or never existed` or `review <review-id> was deleted on the hub`, stop the loop and report that line.
+
+Record each handled `go` or reported `approve` or `closed` as one line, replacing `<deliveryId>` with that result's field.
 Use the verified `handled.txt`, or create it if absent:
 
 ```sh

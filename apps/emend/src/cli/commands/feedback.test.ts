@@ -9,7 +9,7 @@ test("feedback takes once without waiting and prints pending with zero waited se
   let takes = 0;
   f.setResponse(async (url, init) => {
     expect(String(url)).toMatch(/\/take$/);
-    expect(JSON.parse(String(init?.body))).toEqual({ waitSeconds: 0 });
+    expect(JSON.parse(String(init?.body))).toEqual({ waitSeconds: 0, accepts: ["closed"] });
     takes++;
     return Response.json({ kind: "pending", reviewId, waitedSeconds: 0.01 });
   });

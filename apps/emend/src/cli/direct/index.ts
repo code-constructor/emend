@@ -130,7 +130,7 @@ export function takeDirect(
           await renewWait(principal.ownerId, db, waiterId, Date.now());
           renewAt = performance.now() + 10000;
         }
-        const result = await takeDelivery(db, principal, reviewId, Date.now(), undefined, options.maxBytes);
+        const result = await takeDelivery(db, principal, reviewId, Date.now(), undefined, options.maxBytes, ["closed"]);
         options.signal?.throwIfAborted();
         if (result) return result;
         if (performance.now() >= deadline) break;

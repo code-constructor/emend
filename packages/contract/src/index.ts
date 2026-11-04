@@ -10,6 +10,7 @@ export * from "./events.ts";
 export * from "./import.ts";
 export * from "./import-budget.ts";
 export * from "./import-index.ts";
+export * from "./lifecycle.ts";
 export * from "./limits.ts";
 export * from "./manifest.ts";
 export * from "./placement.ts";

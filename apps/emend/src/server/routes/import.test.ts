@@ -2452,3 +2452,15 @@ test.runIf(process.env.EMEND_IMPORT_TIMING === "1")(
   },
   120_000,
 );
+
+test("a repeated import of a review deleted on the hub is skipped as deleted and brings nothing back", async () => {
+  const input = await bundle();
+  expect((await request("/import", input)).status).toBe(201);
+  expect((await f.request(`/reviews/${input.review.id}`, "DELETE")).status).toBe(204);
+  const before = await snapshot();
+  const retry = await request("/import", input);
+  expect(retry.status).toBe(200);
+  expect(await retry.json()).toEqual({ skipped: true, deleted: true });
+  expect(await snapshot()).toEqual(before);
+  await error(await f.request(`/reviews/${input.review.id}`, "GET"), 404, "unknown_review");
+});

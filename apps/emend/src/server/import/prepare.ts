@@ -68,6 +68,7 @@ export async function prepareImport(ownerId: string, bundle: ImportBundle, deps:
     return sizes;
   });
   const staged = new Map<string, number>();
+  const holds: string[] = [];
   const current = new Map<string, Buffer>();
   const read = async (hash: string): Promise<ArrayBuffer> => {
     checkImportSignal(signal);
@@ -81,6 +82,8 @@ export async function prepareImport(ownerId: string, bundle: ImportBundle, deps:
   const put = async (bytes: Buffer) => {
     checkImportSignal(signal);
     const { sha256: hash, size } = deps.blobs.stage(bytes);
+    // Every stage call holds the file once; the import releases each hold.
+    holds.push(hash);
     if (!staged.has(hash)) addRows(1);
     staged.set(hash, size);
     current.set(hash, bytes);
@@ -220,7 +223,7 @@ export async function prepareImport(ownerId: string, bundle: ImportBundle, deps:
       if (!(await deps.blobs.hasContent(ownerId, hash, sizes.get(hash) ?? 0))) throw new ApiError("blob_missing");
     }
     checkImportSignal(signal);
-    return { staged, rendered, empty, placements, changedBlocks };
+    return { staged, holds, rendered, empty, placements, changedBlocks };
   } finally {
     signal?.removeEventListener("abort", stop);
     await worker?.close();

@@ -103,11 +103,19 @@ emend feedback <review-id> --save "<review-folder>"
 ```
 
 On success, repeat the folder-entry check and ownership listing above, then read the file you just wrote before editing.
-After reading a `pending` result, delete that file; only `go` and `approve` results stay.
+After reading a `pending` result, delete that file; only `go`, `approve` and `closed` results stay.
 `pending` means no hand-off is waiting now; wait again while the session can stay active.
 If the session must end, tell the user the review id and literal folder path.
 The emend-feedback skill continues from them.
 For a new or saved `approve`, report the approved revision, append its `deliveryId` to `handled.txt` as below, and stop.
+
+`closed` means the reviewer retired or snoozed the review. Save and confirm it like `approve`, record its `deliveryId` as below, and never start another wait after it.
+
+- `reason: "retired"`: stop the loop and tell the user the reviewer retired review <review-id>.
+- `reason: "snoozed"`: stop the loop and tell the user: "The reviewer moved review <review-id> down until <time>. When they send feedback, resume with `/emend:emend-feedback <review-id>`." When `until` is `null`, say "until its next revision" in place of the time.
+
+If an error line reads `review <review-id> was deleted or never existed` or `review <review-id> was deleted on the hub`, stop the loop and report that line.
+
 Approval does not authorize a commit, push or release. For `go`, read `instructions`
 in order and every entry in `comments`. Read `history` with the authorship boundary below.
 An empty comments array can still carry instructions. Answer instructions in the conversation
@@ -189,7 +197,7 @@ emend publish --manifest "<review-folder>/review.json" --review <review-id>
 Report the new revision and URL, plus any docs that failed to render. With no changes, including
 `explain` mode, the replies suffice; do not publish an identical revision.
 After the last reply of a `go` and any new revision, append its `deliveryId` as one line to the handled record.
-After reporting an `approve`, append its `deliveryId` the same way before stopping.
+After reporting an `approve` or `closed`, append its `deliveryId` the same way before stopping.
 Replace `<deliveryId>` with that result's field. Use the verified `handled.txt`, or create it if absent:
 
 ```sh
@@ -226,5 +234,6 @@ On `pending`, delete that file, then wait again while the session can stay activ
 If the session must end, tell the user the review id and literal folder path.
 The emend-feedback skill continues from them.
 On `approve`, report the approved revision and outcomes, record its `deliveryId` as above, and stop.
+On `closed`, record its `deliveryId` as above, tell the user as the `closed` rules above say, and stop.
 On a non-zero exit, report the error line and stop the loop.
 An error or timeout never counts as approval.

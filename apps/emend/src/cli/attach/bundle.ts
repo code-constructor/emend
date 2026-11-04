@@ -163,12 +163,15 @@ export async function snapshot(
       createdAt: iso(s.createdAt),
       setAsideAt: s.setAsideAt === null ? null : iso(s.setAsideAt),
     })),
-    deliveries: deliveryRows.map((d) => ({
-      ...d,
-      createdAt: iso(d.createdAt),
-      leaseUntil: iso(d.leaseUntil),
-      confirmedAt: d.confirmedAt === null ? null : iso(d.confirmedAt),
-    })),
+    // A closed delivery has no Send, and the import contract refuses a delivery without one.
+    deliveries: deliveryRows
+      .filter((d) => sendRows.some((s) => s.deliveryId === d.id))
+      .map((d) => ({
+        ...d,
+        createdAt: iso(d.createdAt),
+        leaseUntil: iso(d.leaseUntil),
+        confirmedAt: d.confirmedAt === null ? null : iso(d.confirmedAt),
+      })),
   });
   return { kind: "bundle" as const, resend, ...prepared };
 }

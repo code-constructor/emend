@@ -20,6 +20,9 @@ export type PublishResponse = z.infer<typeof PublishResponse>;
 export const ReviewState = z.enum(["open", "approved", "settled"]);
 export type ReviewState = z.infer<typeof ReviewState>;
 
+export const ReviewList = z.enum(["active", "snoozed", "done"]);
+export type ReviewList = z.infer<typeof ReviewList>;
+
 export const InboxItem = z.object({
   id: z.uuid(),
   title: PublishRequest.shape.title,
@@ -34,9 +37,13 @@ export const InboxItem = z.object({
   pendingSend: z.boolean(),
   updatedAt: z.iso.datetime(),
   movedTo: z.url({ protocol: /^https?$/ }).nullable(),
+  list: ReviewList,
+  snoozed: z.boolean(),
+  snoozedUntil: z.iso.datetime().nullable(),
+  releasedAt: z.iso.datetime().nullable(),
 });
 export type InboxItem = z.infer<typeof InboxItem>;
-export const InboxList = z.object({ items: z.array(InboxItem).max(LIMITS.inboxItems) });
+export const InboxList = z.object({ items: z.array(InboxItem).max(LIMITS.inboxItems * ReviewList.options.length) });
 export type InboxList = z.infer<typeof InboxList>;
 export const ReviewView = InboxItem.extend({
   importedAt: z.iso.datetime().nullable().default(null),

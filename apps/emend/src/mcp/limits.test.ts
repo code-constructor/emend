@@ -112,5 +112,5 @@ test("a Send larger than the MCP budget stays queued for CLI feedback", async ()
   expect(await run(["feedback", f.mailbox.reviewId], f.io)).toBe(0);
   expect(JSON.parse(f.stdout[0] ?? "").comments).toHaveLength(80);
   const takes = f.fetcher.mock.calls.filter(([url]) => String(url).endsWith("/take"));
-  expect(JSON.parse(String(takes.at(-1)?.[1]?.body))).toEqual({ waitSeconds: 0 });
+  expect(JSON.parse(String(takes.at(-1)?.[1]?.body))).toEqual({ waitSeconds: 0, accepts: ["closed"] });
 });

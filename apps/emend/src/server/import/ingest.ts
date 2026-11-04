@@ -33,9 +33,18 @@ const idTables = [
   t.instances,
   t.owners,
 ];
+const skipOutcome = (outcome: true | "deleted") =>
+  outcome === "deleted" ? { skipped: true, deleted: true } : { skipped: true };
 async function preflight(ownerId: string, q: Queries, principal: Principal, bundle: ImportBundle, now: number) {
   await machineDevice(ownerId, q, principal, now);
   if (bundle.review.originInstanceId !== principal.instanceId) throw new ApiError("wrong_origin");
+  // A review deleted on the hub stays deleted: a repeated attach must not copy it back.
+  const tombstone = await q
+    .select({ id: t.reviewTombstones.reviewId })
+    .from(t.reviewTombstones)
+    .where(and(eq(t.reviewTombstones.ownerId, ownerId), eq(t.reviewTombstones.reviewId, bundle.review.id)))
+    .get();
+  if (tombstone) return "deleted" as const;
   const existing = await q
     .select({ origin: t.reviews.originInstanceId })
     .from(t.reviews)
@@ -100,7 +109,8 @@ async function checkIds(ownerId: string, q: Queries, bundle: ImportBundle, signa
 export async function importReview(principal: Principal, bundle: ImportBundle, deps: AppDeps, signal?: AbortSignal) {
   checkImportSignal(signal);
   const { ownerId } = principal;
-  if (await deps.db.read((q) => preflight(ownerId, q, principal, bundle, deps.now()))) return { skipped: true };
+  const early = await deps.db.read((q) => preflight(ownerId, q, principal, bundle, deps.now()));
+  if (early) return skipOutcome(early);
   const prepared = await prepareImport(ownerId, bundle, deps, signal);
   try {
     return await deps.db.transaction(
@@ -117,7 +127,8 @@ export async function importReview(principal: Principal, bundle: ImportBundle, d
         const now = deps.now();
         const at = (value: string) => Math.min(Date.parse(value), now);
         const nullableAt = (value: string | null) => (value === null ? null : at(value));
-        if (await preflight(ownerId, q, principal, bundle, deps.now())) return { skipped: true };
+        const again = await preflight(ownerId, q, principal, bundle, deps.now());
+        if (again) return skipOutcome(again);
         await checkIds(ownerId, q, bundle, signal);
         let repoId: string | null = null;
         if (bundle.review.repo) {
@@ -258,6 +269,9 @@ export async function importReview(principal: Principal, bundle: ImportBundle, d
     // Constraint failures are malformed or colliding input; never expose SQLite details.
     if (constraintFailure(error)) throw new ApiError("invalid_request");
     throw error;
+  } finally {
+    // The rows are committed or the import failed; either way the staged files need no pin now.
+    deps.blobs.release(prepared.holds);
   }
 }
 

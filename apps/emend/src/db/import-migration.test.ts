@@ -41,11 +41,15 @@ test("0007 retains existing reviews and remembers current and retired self ident
     expect(rows.find((r) => r.id === current)?.wasSelf).toBe(true);
     expect(rows.find((r) => r.id === retired)?.wasSelf).toBe(true);
     expect(rows.find((r) => r.id === tokenless)?.wasSelf).toBe(true);
-    expect(await db.read((q) => q.select().from(reviews).where(eq(reviews.ownerId, owner)).get())).toMatchObject({
-      id: review,
-      title: "Synthetic review",
-      importedAt: null,
-    });
+    // Name the columns: later migrations add reviews columns this database does not have yet.
+    const columns = { id: reviews.id, title: reviews.title, importedAt: reviews.importedAt };
+    expect(await db.read((q) => q.select(columns).from(reviews).where(eq(reviews.ownerId, owner)).get())).toMatchObject(
+      {
+        id: review,
+        title: "Synthetic review",
+        importedAt: null,
+      },
+    );
   } finally {
     await db.close();
     await rm(dir, { recursive: true, force: true });

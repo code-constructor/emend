@@ -10,7 +10,8 @@ export function blobRoutes(app: Hono<AppEnv>, deps: AppDeps) {
   app.get("/api/v1/blobs/:sha256", async (c) => {
     const sha = Sha256.safeParse(c.req.param("sha256"));
     if (!sha.success) throw new ApiError("invalid_request");
-    if (!(await deps.blobs.has(c.get("principal").ownerId, sha.data))) throw new ApiError("not_found");
+    // A row without its file (or at another size) is missing: the client uploads it again.
+    if (!(await deps.blobs.hasWhole(c.get("principal").ownerId, sha.data))) throw new ApiError("not_found");
     return c.body(null, 204);
   });
   app.put("/api/v1/blobs/:sha256", async (c) => {

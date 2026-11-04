@@ -43,6 +43,8 @@ test("MCP lists three schema-bearing tools without resolving a target, then disc
   expect(tools[0]?.inputSchema.properties?.timeoutSeconds).toMatchObject({ default: 50, minimum: 1, maximum: 540 });
   expect(tools[0]?.description).toMatch(/below.*client.*timeout/i);
   expect(tools[0]?.description).toMatch(/again.*pending/i);
+  expect(tools[0]?.description).toMatch(/closed.*retired or snoozed.*stop/i);
+  expect(tools[1]?.description).toMatch(/closed.*retired or snoozed/i);
   expect(f.fetcher).not.toHaveBeenCalled();
   provenTestServer(f.dir);
   writeSecretFile(join(f.dir, "agent.token"), `em_${"a".repeat(43)}`);

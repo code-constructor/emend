@@ -31,13 +31,14 @@ const tools: Tool[] = [
   {
     name: "wait_for_review",
     description:
-      "Wait for review feedback or approval. Keep timeoutSeconds below the client's own tool timeout. Call again on pending.",
+      "Wait for review feedback or approval. Keep timeoutSeconds below the client's own tool timeout. Call again on pending. A closed result means the reviewer retired or snoozed the review: stop waiting and tell the user.",
     inputSchema: objectSchema(WaitInput, "input"),
     outputSchema: objectSchema(WaitResult),
   },
   {
     name: "get_feedback",
-    description: "Take available review feedback without waiting.",
+    description:
+      "Take available review feedback without waiting. A closed result means the reviewer retired or snoozed the review.",
     inputSchema: objectSchema(FeedbackInput, "input"),
     outputSchema: objectSchema(WaitResult),
   },

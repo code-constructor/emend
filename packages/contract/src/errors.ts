@@ -19,6 +19,8 @@ export const ERROR_STATUS = {
   comment_frozen: 409,
   unsent_comments: 409,
   review_moved: 409,
+  review_closed: 409,
+  invalid_state: 409,
   instance_attached: 409,
   publish_conflict: 409,
   too_large: 413,

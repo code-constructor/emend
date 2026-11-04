@@ -19,9 +19,14 @@ test("review views validate their states, limits, rendered blocks and doc varian
     pendingSend: false,
     updatedAt: "2026-01-01T00:00:00.000Z",
     movedTo: null,
+    list: "active",
+    snoozed: false,
+    snoozedUntil: null,
+    releasedAt: null,
   };
-  expect(contract.InboxList.safeParse({ items: Array.from({ length: 200 }, () => item) }).success).toBe(true);
-  expect(contract.InboxList.safeParse({ items: Array.from({ length: 201 }, () => item) }).success).toBe(false);
+  // The cap of 200 applies to each of the three lists.
+  expect(contract.InboxList.safeParse({ items: Array.from({ length: 600 }, () => item) }).success).toBe(true);
+  expect(contract.InboxList.safeParse({ items: Array.from({ length: 601 }, () => item) }).success).toBe(false);
   expect(
     contract.RenderedBlock.safeParse({
       id: "overview-12345678",

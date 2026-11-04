@@ -93,11 +93,19 @@ export const reviews = sqliteTable(
     approvedRevision: text("approved_revision"),
     movedToUrl: text("moved_to_url"),
     importedAt: integer("imported_at"),
+    // A snooze is in effect while snoozed_at is set and snoozed_until is null or in the future.
+    snoozedAt: integer("snoozed_at"),
+    snoozedUntil: integer("snoozed_until"),
+    // The last time a take returned closed, so emend ended an agent's wait.
+    releasedAt: integer("released_at"),
+    releasedReason: text("released_reason", { enum: ["snoozed", "retired"] }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
   (t): SQLiteTableExtraConfigValue[] => [
     ...owned("reviews", t),
+    index("reviews_owner_state_updated_idx").on(t.ownerId, t.state, t.updatedAt),
+    enumCheck("reviews_released_reason_check", t.releasedReason, ["snoozed", "retired"]),
     unique("reviews_owner_origin_key_unique").on(t.ownerId, t.originInstanceId, t.reviewKey),
     foreignKey({ columns: [t.ownerId, t.repoId], foreignColumns: [repos.ownerId, repos.id] }),
     foreignKey({
@@ -106,6 +114,17 @@ export const reviews = sqliteTable(
     }),
     enumCheck("reviews_state_check", t.state, ["open", "approved", "settled"]),
   ],
+);
+
+/** A deleted review's id, so a repeated attach cannot copy it back. No content, key or origin is kept. */
+export const reviewTombstones = sqliteTable(
+  "review_tombstones",
+  {
+    ownerId: ownerId(),
+    reviewId: text("review_id").notNull(),
+    deletedAt: integer("deleted_at").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.ownerId, t.reviewId] }), index("review_tombstones_owner_idx").on(t.ownerId)],
 );
 
 export const revisions = sqliteTable(
@@ -158,6 +177,7 @@ export const blobs = sqliteTable(
   (t) => [
     primaryKey({ columns: [t.ownerId, t.sha256] }),
     index("blobs_owner_idx").on(t.ownerId),
+    index("blobs_sha256_idx").on(t.sha256),
     check("blobs_size_nonnegative", sql`${t.size} >= 0`),
   ],
 );
@@ -209,6 +229,9 @@ export const files = sqliteTable(
   (t): SQLiteTableExtraConfigValue[] => [
     ...owned("files", t),
     index("files_owner_revision_path_idx").on(t.ownerId, t.revisionId, t.path),
+    index("files_owner_old_blob_idx").on(t.ownerId, t.oldBlob),
+    index("files_owner_new_blob_idx").on(t.ownerId, t.newBlob),
+    index("files_owner_rendered_blob_idx").on(t.ownerId, t.renderedBlob),
     unique("files_owner_revision_id_unique").on(t.ownerId, t.revisionId, t.id),
     foreignKey({ columns: [t.ownerId, t.revisionId], foreignColumns: [revisions.ownerId, revisions.id] }),
     foreignKey({
@@ -267,6 +290,8 @@ export const viewedFiles = sqliteTable(
   (t) => [
     ...owned("viewed_files", t),
     unique("viewed_files_owner_review_path_unique").on(t.ownerId, t.reviewId, t.path),
+    index("viewed_files_owner_old_blob_idx").on(t.ownerId, t.oldBlob),
+    index("viewed_files_owner_new_blob_idx").on(t.ownerId, t.newBlob),
     foreignKey({ columns: [t.ownerId, t.reviewId], foreignColumns: [reviews.ownerId, reviews.id] }),
     ...[t.oldBlob, t.newBlob].map((blob) =>
       foreignKey({ columns: [t.ownerId, blob], foreignColumns: [blobs.ownerId, blobs.sha256] }),
@@ -307,6 +332,8 @@ export const writeups = sqliteTable(
   (t) => [
     ...owned("writeups", t),
     unique("writeups_revision_unique").on(t.revisionId),
+    index("writeups_owner_source_blob_idx").on(t.ownerId, t.sourceBlob),
+    index("writeups_owner_rendered_blob_idx").on(t.ownerId, t.renderedBlob),
     foreignKey({ columns: [t.ownerId, t.revisionId], foreignColumns: [revisions.ownerId, revisions.id] }),
     ...[t.sourceBlob, t.renderedBlob].map((blob) =>
       foreignKey({ columns: [t.ownerId, blob], foreignColumns: [blobs.ownerId, blobs.sha256] }),

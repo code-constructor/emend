@@ -1,7 +1,26 @@
 import { InboxList, LIMITS, ReviewView, RevisionView, type ThreadView } from "@emend/contract";
-import { and, count, desc, eq, getTableColumns, gt, inArray, isNull, lte, max, ne, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  getTableColumns,
+  gt,
+  inArray,
+  isNotNull,
+  isNull,
+  lte,
+  max,
+  ne,
+  not,
+  or,
+  type SQL,
+  sql,
+} from "drizzle-orm";
 import type { Hono } from "hono";
 import type { Queries } from "../../db/client.ts";
+import { snoozeInEffect } from "../../db/repo/snooze.ts";
 import {
   agentNotes,
   agentWaiters,
@@ -33,21 +52,43 @@ async function inbox(ownerId: string, q: Queries, deps: AppDeps, reviewId?: stri
     .where(eq(revisions.ownerId, ownerId))
     .groupBy(revisions.reviewId)
     .as("latest");
-  const rows = await q
-    .select({
-      review: reviews,
-      origin: { id: instances.id, name: instances.name },
-      repo: repos.key,
-      newestRevision: latest.seq,
-    })
-    .from(reviews)
-    .innerJoin(latest, eq(latest.reviewId, reviews.id))
-    .innerJoin(instances, eq(instances.id, reviews.originInstanceId))
-    .leftJoin(repos, and(eq(repos.ownerId, ownerId), eq(repos.id, reviews.repoId)))
-    .where(and(eq(reviews.ownerId, ownerId), reviewId === undefined ? undefined : eq(reviews.id, reviewId)))
-    .orderBy(desc(reviews.updatedAt), reviews.id)
-    .limit(reviewId === undefined ? LIMITS.inboxItems : 1)
-    .all();
+  const now = deps.now();
+  const select = (where: SQL | undefined, order: SQL[], limit: number) =>
+    q
+      .select({
+        review: reviews,
+        origin: { id: instances.id, name: instances.name },
+        repo: repos.key,
+        newestRevision: latest.seq,
+      })
+      .from(reviews)
+      .innerJoin(latest, eq(latest.reviewId, reviews.id))
+      .innerJoin(instances, eq(instances.id, reviews.originInstanceId))
+      .leftJoin(repos, and(eq(repos.ownerId, ownerId), eq(repos.id, reviews.repoId)))
+      .where(and(eq(reviews.ownerId, ownerId), where))
+      .orderBy(...order)
+      .limit(limit)
+      .all();
+  const asleep = and(isNotNull(reviews.snoozedAt), or(isNull(reviews.snoozedUntil), gt(reviews.snoozedUntil, now)));
+  const isOpen = eq(reviews.state, "open");
+  // The cap applies to each list: Active and Done by update, Snoozed by wake time.
+  const rows =
+    reviewId === undefined
+      ? [
+          // A timed snooze that has passed counts as an update at its wake time.
+          ...(await select(
+            and(isOpen, not(asleep as SQL)),
+            [sql`max(${reviews.updatedAt}, coalesce(${reviews.snoozedUntil}, 0)) desc`, asc(reviews.id)],
+            LIMITS.inboxItems,
+          )),
+          ...(await select(
+            and(isOpen, asleep),
+            [asc(sql`${reviews.snoozedUntil} is null`), asc(reviews.snoozedUntil), asc(reviews.id)],
+            LIMITS.inboxItems,
+          )),
+          ...(await select(ne(reviews.state, "open"), [desc(reviews.updatedAt), asc(reviews.id)], LIMITS.inboxItems)),
+        ]
+      : await select(eq(reviews.id, reviewId), [asc(reviews.id)], 1);
   if (!rows.length) return [];
   const ids = rows.map((row) => row.review.id);
   const drafts = await q
@@ -105,22 +146,35 @@ async function inbox(ownerId: string, q: Queries, deps: AppDeps, reviewId?: stri
     )
     .groupBy(agentWaiters.reviewId);
   const waitingIds = new Set(directWaits.map((row) => row.reviewId));
-  return rows.map(({ review, origin, repo, newestRevision }) => ({
-    id: review.id,
-    title: review.title,
-    origin,
-    repo,
-    branch: review.branch,
-    state: review.state,
-    newestRevision,
-    unsentCount: draftCounts.get(review.id) ?? 0,
-    openThreads: openCounts.get(review.id) ?? 0,
-    pendingSend: pendingIds.has(review.id),
-    agentWaiting: (deps.events?.agentWaiting(ownerId, review.id) ?? false) || waitingIds.has(review.id),
-    updatedAt: new Date(review.updatedAt).toISOString(),
-    movedTo: review.movedToUrl,
-    importedAt: review.importedAt === null ? null : new Date(review.importedAt).toISOString(),
-  }));
+  const items = rows.map(({ review, origin, repo, newestRevision }) => {
+    const snoozed = review.state === "open" && snoozeInEffect(review, now);
+    return {
+      id: review.id,
+      title: review.title,
+      origin,
+      repo,
+      branch: review.branch,
+      state: review.state,
+      newestRevision,
+      unsentCount: draftCounts.get(review.id) ?? 0,
+      openThreads: openCounts.get(review.id) ?? 0,
+      pendingSend: pendingIds.has(review.id),
+      agentWaiting: (deps.events?.agentWaiting(ownerId, review.id) ?? false) || waitingIds.has(review.id),
+      updatedAt: new Date(review.updatedAt).toISOString(),
+      movedTo: review.movedToUrl,
+      importedAt: review.importedAt === null ? null : new Date(review.importedAt).toISOString(),
+      list: review.state !== "open" ? ("done" as const) : snoozed ? ("snoozed" as const) : ("active" as const),
+      snoozed,
+      snoozedUntil: snoozed && review.snoozedUntil !== null ? new Date(review.snoozedUntil).toISOString() : null,
+      releasedAt: review.releasedAt === null ? null : new Date(review.releasedAt).toISOString(),
+    };
+  });
+  // Inside Active, a review with a waiting agent comes first; the rows already run newest first.
+  return [
+    ...items.filter((item) => item.list === "active" && item.agentWaiting),
+    ...items.filter((item) => item.list === "active" && !item.agentWaiting),
+    ...items.filter((item) => item.list !== "active"),
+  ];
 }
 
 async function revisionView(ownerId: string, q: Queries, deps: AppDeps, reviewId: string, seq: number) {

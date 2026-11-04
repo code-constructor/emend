@@ -87,7 +87,7 @@ a machine token reaches only reviews from its own instance.
 | DELETE | `/api/v1/devices/:id` | Admin, reviewer | Revoke the device and every bound token atomically (204); missing, foreign or revoked is 404. |
 | POST | `/api/v1/machines` | Anyone with a pairing secret or code | Register `MachineRegistration`; return `MachineRegistered` (201); refuses device pairings. |
 | DELETE | `/api/v1/machines/self` | Agent | Revoke the current machine device and all its tokens (204); local agents get 404. |
-| HEAD | `/api/v1/blobs/:sha256` | Agent | Check whether the owner's blob exists. |
+| HEAD | `/api/v1/blobs/:sha256` | Agent | Check whether the owner's blob exists and is stored whole. |
 | PUT | `/api/v1/blobs/:sha256` | Agent | Upload a blob; verify its size and hash. |
 | POST | `/api/v1/publish` | Agent | Create a review or add a revision. |
 | POST | `/api/v1/import` | Agent | Copy one `ImportBundle`; return `ImportResult` (201, or 200 when skipped); machine tokens only. |
@@ -106,7 +106,12 @@ a machine token reaches only reviews from its own instance.
 | POST | `/api/v1/threads/:id/resolve` | Reviewer | Resolve a thread. |
 | POST | `/api/v1/threads/:id/reopen` | Reviewer | Reopen a thread. |
 | POST | `/api/v1/reviews/:id/sends` | Reviewer | Send feedback or approve the revision on screen. |
-| POST | `/api/v1/reviews/:id/take` | Agent | Claim a delivery with `{waitSeconds?: 0..25, maxBytes?: 65536..16777216}`. |
+| POST | `/api/v1/reviews/:id/snooze` | Reviewer | Move an open review to Snoozed (204); see "Snooze, retire and delete". |
+| POST | `/api/v1/reviews/:id/unsnooze` | Reviewer | End a snooze (204). |
+| POST | `/api/v1/reviews/:id/retire` | Reviewer | Mark an open review done without an approval (204). |
+| POST | `/api/v1/reviews/:id/reopen` | Reviewer | Reopen a retired review (204). |
+| DELETE | `/api/v1/reviews/:id` | Reviewer | Delete the review and its records (204). |
+| POST | `/api/v1/reviews/:id/take` | Agent | Claim a delivery with `{waitSeconds?: 0..25, maxBytes?: 65536..16777216, accepts?: ["closed"]}`. |
 | POST | `/api/v1/deliveries/:id/confirm` | Agent | Confirm receipt of a claimed delivery. |
 | POST | `/api/v1/comments/:id/reply` | Agent | Answer a comment with an outcome. |
 | GET | `/content/:contentKey/*` | Holder of the key | Read isolated HTML docs and assets from a revision. |
@@ -167,11 +172,17 @@ their normal focus behavior; no unconditional focus refetch is required.
 
 ### Review read views
 
-`ReviewState = "open" | "approved" | "settled"`.
+`ReviewState = "open" | "approved" | "settled"`. `settled` is the stored and wire value for a
+retired review; clients label it "Retired".
 `InboxItem = { id, title, origin: { id, name }, repo: string | null, branch: string | null,
 state: ReviewState, newestRevision, unsentCount, openThreads, agentWaiting, pendingSend,
-updatedAt, movedTo: string | null }`. `repo` is the repository key, and `movedTo` is the
-review's destination URL. Timestamps are ISO 8601 UTC strings; sequences are positive integers.
+updatedAt, movedTo: string | null, list: "active" | "snoozed" | "done", snoozed: boolean,
+snoozedUntil: string | null, releasedAt: string | null }`. `repo` is the repository key, and
+`movedTo` is the review's destination URL. `list` places the review: `done` for `approved` and
+`settled`, `snoozed` for an open review whose snooze is in effect, `active` otherwise.
+`snoozed` is true while a snooze is in effect; `snoozedUntil` is its wake time, null for a snooze
+that lasts until the next revision (and null when not snoozed). `releasedAt` is the last time an
+agent confirmed a `closed` answer, so emend ended a wait; it is null when that never happened. Timestamps are ISO 8601 UTC strings; sequences are positive integers.
 `unsentCount` counts user comments without a Send; `openThreads` counts all unresolved threads.
 `pendingSend` means a Send is neither confirmed delivered nor set aside (an unconfirmed lease
 is still pending). `agentWaiting` is true for a server-held wait (including its 35-second grace
@@ -179,8 +190,11 @@ period) or an unexpired direct-wait row for the same owner and review. Direct wa
 30-second expiry every 10 seconds and delete their row when they end. They emit no live event;
 views reflect direct writes on their next load.
 
-`GET /api/v1/reviews` returns `InboxList = { items: InboxItem[] }`, newest `updatedAt` first,
-with review id as a stable tie breaker, at most `inboxItems` (200) rows.
+`GET /api/v1/reviews` returns `InboxList = { items: InboxItem[] }`: the Active list (a review with a
+waiting agent first, then newest activity: `updatedAt`, or the wake time of a timed snooze that has
+passed when that is later), then the Snoozed list (soonest wake first, a snooze
+until the next revision last), then the Done list (newest `updatedAt` first). Review id is the
+stable tie breaker in each. At most `inboxItems` (200) rows per list, so at most 600 in all.
 `GET /api/v1/reviews/:id` returns `ReviewView = InboxItem & { revisions: { seq, createdAt }[], importedAt: string | null }`,
 with revisions ascending by sequence. Both are reviewer-only, as is the revision endpoint below.
 
@@ -490,6 +504,11 @@ source, a worker failure or a timeout of that step is `400 invalid_request`. Gen
 hashes/sizes and one revision’s rendered buffers remain in memory, and owner blob references commit
 with the review. Failed imports may leave unreferenced immutable bytes, as publishing does.
 
+`ImportResult = { skipped, deleted? }`. A review the owner deleted on the hub is answered
+`{ skipped: true, deleted: true }` (200): the hub keeps a tombstone by review id, so a repeated
+`emend attach` never brings it back. A retired review is exported with its `settled` state; the
+snooze is not part of the bundle.
+
 The hub records its copy time in nullable `ReviewView.importedAt`; ordinary local reviews use
 null (older responses lacking this additive field parse as null). Imported `movedTo` is ignored.
 The review page displays: "Copied from <origin name> on <date>. Comments, Sends and approvals
@@ -535,7 +554,8 @@ published once, with the first doc as parent. Diff rows always have media type `
 Only assets have parents. Docs and assets have a new blob, no old side and no flag; flagged
 diffs have no blobs. Source filenames never leave the CLI.
 
-`HEAD /api/v1/blobs/:sha256` returns 204 for an owner's blob, otherwise 404 `not_found`.
+`HEAD /api/v1/blobs/:sha256` returns 204 for an owner's blob whose content is stored at the recorded
+size, otherwise 404 `not_found` (a row without its file counts as missing, so the client uploads it again).
 `PUT` takes raw bytes with a required nonnegative integer `Content-Length`, at most
 `htmlDocBytes`, and returns 204. Missing/malformed length or hash is 400 `invalid_request`;
 hash or actual length mismatch is 400 `blob_mismatch`; excess size is 413 `too_large`.
@@ -675,6 +695,44 @@ doc spans retain `path` and `blockId`; HTML spans retain `path`. Line locations 
 use the same fields as their targets. Placement describes the newest revision; a thread keeps its
 original target separately.
 
+### Snooze, retire and delete
+
+All five routes are reviewer-only (scope `send`): an agent or admin bearer, or a reviewer token
+sent as a bearer, is refused before any lookup. A missing or foreign review is `404 unknown_review`.
+Each runs in one transaction and emits its event after the commit. A wrong state is `409 invalid_state`.
+Capabilities lists the feature `review-lifecycle`.
+
+- `POST /reviews/:id/snooze`, body `SnoozeRequest = { until: datetime } | { untilRevision: true }`
+  (strict, exactly one). `until` must lie in the future and at most `MAX_SNOOZE_DAYS` (366) days
+  out, else `400 invalid_request`. Only an `open` review may be snoozed. A snooze ends at its time
+  (computed on read, with no timer), on `unsnooze`, and when a new revision is published. A Send
+  does not end it. Snoozing a snoozed review replaces the snooze. Returns 204; emits `snooze`.
+- `POST /reviews/:id/unsnooze` clears the snooze and sets `updatedAt` to now, so the review sorts as
+  just updated; it is idempotent. Returns 204; emits `unsnooze`.
+- `POST /reviews/:id/retire`, body `RetireRequest = { discardUnsent?: boolean }` (a missing body means
+  `{}`). Only an `open` review may be retired. Unsent user comments give `409 unsent_comments`
+  unless `discardUnsent` is true; then they are deleted, with every thread left without comments.
+  It sets `state` to `settled` and clears the snooze. It does not set `releasedAt`. A Send or
+  Approve on a retired review is `409 invalid_state`. A publish adds a revision and reopens it.
+  Returns 204; emits `retire`.
+- `POST /reviews/:id/reopen` sets a `settled` review to `open`; any other state is `invalid_state`.
+  Returns 204; emits `reopen`.
+- `DELETE /reviews/:id` removes the review's revisions, topics, files, notes, writeups, threads,
+  comments, placements, viewed marks, Sends, deliveries and waiter rows in one transaction, and
+  records a tombstone `{ ownerId, reviewId, deletedAt }`. The same transaction drops the review's
+  repository row when no remaining review of the owner references it. Returns 204 once that
+  transaction commits; emits `delete` (its `revision` is the newest one before the delete). After
+  the response, each blob that no remaining row of the owner references is removed, in batches. A
+  failure there is logged and never changes the response. A later take on the id is `404 unknown_review`. A publish with
+  the same key creates a new review with a new id and URL.
+
+A take that finds no deliverable Send, on a review that is retired or snoozed, answers
+`closed` (below) when the request lists `"closed"` in `accepts`, and `409 review_closed`
+otherwise, so a client that does not know `closed` stops instead of waiting. A pending Send is
+delivered first. `closed` is a status answer, not a hand-off: it repeats on every later take while
+the review stays retired or snoozed. Retire, snooze and delete end a waiting take at once; `unsnooze`
+and `reopen` never end one.
+
 ### Sends, replies and waiting
 
 `CreateThreadRequest = { revision, target: Target, body: CommentBody }` creates a thread
@@ -692,7 +750,8 @@ delivery, which remains available so receipt can be recorded. Foreign or missing
 comment and delivery ids return `404 not_found`,
 including ids from another origin instance for an agent.
 
-`TakeRequest = { waitSeconds?, maxBytes? }`: `waitSeconds` defaults to 0; finite values from 0 through
+`TakeRequest = { waitSeconds?, maxBytes?, accepts? }`: `accepts` lists result kinds the client can
+parse beyond Go, Approve and Pending; today only `"closed"`, default none. `waitSeconds` defaults to 0; finite values from 0 through
 `MAX_TAKE_WAIT_SECONDS` (25), including fractions, are accepted. Optional `maxBytes` is an integer
 from 65536 through `handoffBytes` (16777216); out-of-range or non-integer values return
 `400 invalid_request`. It narrows both the claim's byte window and history trimming to
@@ -715,7 +774,7 @@ compatibility and delivers only that owned review's events. Both require the sam
 principal and scope; `HEAD` returns headers only and allocates no stream. Both SSE
 endpoints use `text/event-stream`, `Cache-Control: no-store` and a comment keepalive every
 25 seconds. `ReviewEventName` is
-`publish | send | thread | waiting | claimed | confirmed | viewed`. `ReviewEvent` has a `type`
+`publish | send | thread | waiting | claimed | confirmed | viewed | snooze | unsnooze | retire | reopen | delete`. `ReviewEvent` has a `type`
 discriminator and the same fields as its SSE payload. The SSE `event` line supplies
 `type`; the JSON `data` is:
 
@@ -728,6 +787,7 @@ discriminator and the same fields as its SSE payload. The SSE `event` line suppl
 | `claimed` | `{ reviewId, revision }` |
 | `confirmed` | `{ reviewId, revision, deliveryId }` |
 | `viewed` | `{ reviewId }` |
+| `snooze`, `unsnooze`, `retire`, `reopen`, `delete` | `{ reviewId, revision }` |
 
 Events contain ids and, except for `viewed`, a positive revision sequence only, never paths, text bodies or
 instructions. `claimed` follows a successful take; `confirmed` follows a successful
@@ -775,11 +835,19 @@ Replies must target a sent user comment; a draft or an agent comment returns `40
 `POST /comments/:id/reply` returns 201 `ReplyCreated = { commentId, threadId, state: ThreadState }`,
 where `state` is the thread's state after the reply. It creates neither a Send nor a delivery.
 
-`WaitResult` has three variants:
+`WaitResult` has four variants:
 
 - Go: `{ kind: "go", reviewId, deliveryId, revision, sentOn, mode, modeLabel, instructions: string[],
   approvalSetAside: boolean, comments: HandoffComment[] }`.
 - Approve: `{ kind: "approve", reviewId, deliveryId, revision }`.
+- Closed: `{ kind: "closed", reviewId, deliveryId, revision, reason: "retired" | "snoozed", until: string | null }`.
+  Sent only to a client that lists `"closed"` in `accepts`. `until` is the snooze's wake time, null
+  when `reason` is `retired` or the snooze lasts until the next revision. The `deliveryId` names a
+  delivery without Sends, confirmed like any other; until it is confirmed and while its lease runs,
+  later takes on the same review reuse it. Confirming that delivery sets the review's `releasedAt`
+  and `releasedReason` (and emits `confirmed`); taking it does not. Each take keeps at most one
+  confirmed delivery without Sends for the review. A wait started on a retired or still-snoozed
+  review gets `closed` at once. A Send that arrives first is delivered instead.
 - Pending: `{ kind: "pending", reviewId, waitedSeconds }`.
 
 For Go, `revision` is the newest revision used for placement, and `sentOn` is the revision sequence
@@ -828,7 +896,9 @@ an expired unconfirmed lease offers the same feedback again and re-evaluates its
 approvals. A stale approval clears review approval only if it names the approved revision;
 a newer approval remains intact.
 A merged Go and Approve delivers Go with `approvalSetAside: true`. The CLI prints one JSON object
-for Go, Approve or Pending and exits 0; errors print one line to stderr, nothing to stdout, and exit 1.
+for Go, Approve, Closed or Pending and exits 0; errors print one line to stderr, nothing to stdout,
+and exit 1. A take on a deleted or unknown review prints `review <id> was deleted or never existed`
+(`review <id> was deleted on the hub` for a local copy that moved to the hub).
 Synthetic examples live in `packages/contract/fixtures/wait-*.json`.
 
 ## Limits
@@ -950,6 +1020,8 @@ escaped line on stderr.
 | `unsent_comments` | 409 | An Approve is attempted while unsent comments remain. |
 | `instance_attached` | 409 | The instance already has a live machine device; the pairing remains usable. |
 | `review_moved` | 409 | A mutation targets a local review moved to a hub. |
+| `review_closed` | 409 | A take finds the review retired or snoozed and the client did not list `closed` in `accepts`. |
+| `invalid_state` | 409 | A lifecycle action does not fit the review's state, or a Send targets a retired review. |
 | `publish_conflict` | 409 | The revision or thread set changed during publish computation on three attempts; retry publishing. |
 | `too_large` | 413 | A JSON request body or uploaded content exceeds its byte limit; reject before parsing. |
 | `client_outdated` | 426 | The CLI version is below the minimum supported version. |

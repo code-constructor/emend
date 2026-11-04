@@ -19,6 +19,10 @@ const review: ReviewView = {
   pendingSend: false,
   updatedAt: "2026-01-01T00:00:00.000Z",
   movedTo: null,
+  list: "active",
+  snoozed: false,
+  snoozedUntil: null,
+  releasedAt: null,
   importedAt: null,
   revisions: [
     { seq: 1, createdAt: new Date(Date.now() - 3600_000).toISOString() },

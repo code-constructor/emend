@@ -34,7 +34,9 @@ test.each([false, true])(
           );
         });
       const before = await db.read((q) =>
-        q.values(sql`SELECT name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY name`),
+        q.values(
+          sql`SELECT name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' AND name NOT LIKE 'review_tombstones%' AND name NOT IN ('reviews', 'reviews_owner_state_updated_idx', 'blobs_sha256_idx') AND name NOT LIKE '%_blob_idx' ORDER BY name`,
+        ),
       );
       expect(await migrate(db)).toBe(previous ? MIGRATIONS.filter((m) => m.tag >= "0009").length : MIGRATIONS.length);
       expect(await migrate(db)).toBe(0);
@@ -48,7 +50,7 @@ test.each([false, true])(
         expect(
           await db.read((q) =>
             q.values(
-              sql`SELECT name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' AND name NOT LIKE 'agent_notes%' AND name NOT LIKE 'viewed_files%' AND name != 'files_owner_revision_path_idx' ORDER BY name`,
+              sql`SELECT name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' AND name NOT LIKE 'agent_notes%' AND name NOT LIKE 'viewed_files%' AND name != 'files_owner_revision_path_idx' AND name NOT LIKE 'review_tombstones%' AND name NOT IN ('reviews', 'reviews_owner_state_updated_idx', 'blobs_sha256_idx') AND name NOT LIKE '%_blob_idx' ORDER BY name`,
             ),
           ),
         ).toEqual(before);

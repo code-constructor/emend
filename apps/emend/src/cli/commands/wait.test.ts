@@ -75,7 +75,7 @@ test("wait prints one unchanged JSON line and confirms only after stdout has flu
   };
   f.setResponse(async (url, init) => {
     if (String(url).endsWith("/take")) {
-      expect(JSON.parse(String(init?.body))).toEqual({ waitSeconds: 25 });
+      expect(JSON.parse(String(init?.body))).toEqual({ waitSeconds: 25, accepts: ["closed"] });
       return Response.json(approve);
     }
     events.push("confirm");

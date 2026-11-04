@@ -787,3 +787,19 @@ test("all counterpart paths exist when the counterpart checkout is readable", ({
     }
   }
 });
+
+test.each(skillFiles)("%s handles a closed result and a deleted review", (path) => {
+  const text = read(path);
+  const guidance = [
+    "`closed` means the reviewer retired or snoozed the review. Save and confirm it like `approve`, record its `deliveryId` as below, and never start another wait after it.",
+    "",
+    '- `reason: "retired"`: stop the loop and tell the user the reviewer retired review <review-id>.',
+    '- `reason: "snoozed"`: stop the loop and tell the user: "The reviewer moved review <review-id> down until <time>. When they send feedback, resume with `/emend:emend-feedback <review-id>`." When `until` is `null`, say "until its next revision" in place of the time.',
+    "",
+    "If an error line reads `review <review-id> was deleted or never existed` or `review <review-id> was deleted on the hub`, stop the loop and report that line.",
+  ].join("\n");
+  expect(text.split(guidance)).toHaveLength(2);
+  expect(text).toContain("only `go`, `approve` and `closed` results stay");
+  expect(text).not.toContain("only `go` and `approve` results stay");
+  expect(text).not.toContain("Keep only `go` and `approve` results");
+});

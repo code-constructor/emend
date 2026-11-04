@@ -8,7 +8,12 @@ import { CommentBody, Outcome } from "./thread.ts";
 export const LEASE_SECONDS = 120;
 export const MAX_TAKE_WAIT_SECONDS = 25;
 
+/** Result kinds a client announces it can parse, beyond go, approve and pending. */
+export const TakeAccept = z.enum(["closed"]);
+export type TakeAccept = z.infer<typeof TakeAccept>;
+
 export const TakeRequest = z.object({
+  accepts: z.array(TakeAccept).max(4).optional(),
   waitSeconds: z.number().min(0).max(MAX_TAKE_WAIT_SECONDS).default(0),
   maxBytes: z.int().min(65536).max(LIMITS.handoffBytes).optional(),
 });
@@ -55,5 +60,19 @@ export const WaitResult = z.discriminatedUnion("kind", [
     }),
   z.object({ kind: z.literal("approve"), reviewId: z.uuid(), deliveryId: z.uuid(), revision: z.int().positive() }),
   z.object({ kind: z.literal("pending"), reviewId: z.uuid(), waitedSeconds: z.number().nonnegative() }),
+  // Keep pending third: callers read its shape through WaitResult.options[2].
+  z
+    .object({
+      kind: z.literal("closed"),
+      reviewId: z.uuid(),
+      deliveryId: z.uuid(),
+      revision: z.int().positive(),
+      reason: z.enum(["retired", "snoozed"]),
+      until: z.iso.datetime().nullable(),
+    })
+    .superRefine((result, ctx) => {
+      if (result.reason === "retired" && result.until !== null)
+        ctx.addIssue({ code: "custom", path: ["until"], message: "until must be null when retired" });
+    }),
 ]);
 export type WaitResult = z.infer<typeof WaitResult>;

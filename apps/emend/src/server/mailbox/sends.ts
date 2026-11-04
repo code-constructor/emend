@@ -9,7 +9,9 @@ import { commentTargetReserve, envelopeBytes, jsonBytes } from "./payload.ts";
 
 export function createSend(ownerId: string, db: Db, reviewId: string, request: SendRequest, now: number) {
   return db.transaction(async (q) => {
-    await requireReview(ownerId, q, reviewId);
+    const review = await requireReview(ownerId, q, reviewId);
+    // A retired review is done; the reviewer reopens it before sending again.
+    if (review.state === "settled") throw new ApiError("invalid_state");
     const newest = await newestRevision(ownerId, q, reviewId);
     if (request.revision !== newest.seq) throw new ApiError("stale_revision");
     const unsent = and(

@@ -545,11 +545,14 @@ async function computePublish(
           });
           if (++inserted % 100 === 0) await setImmediate();
         }
+        // A new revision reopens the review and ends any snooze; released_at stays as history.
         await q
           .update(reviews)
           .set({
             state: "open",
             approvedRevision: null,
+            snoozedAt: null,
+            snoozedUntil: null,
             title: input.title,
             branch: input.branch,
             updatedAt: Date.now(),
@@ -577,9 +580,13 @@ async function computePublish(
         if (
           !(error instanceof PublishConflict) &&
           !(error instanceof DuplicateReviewKeyError) &&
-          !sequenceConflict(error)
+          !sequenceConflict(error) &&
+          // A delete removed a blob between the snapshot and the commit; the retry re-reads the blobs.
+          !foreignKeyFailure(error)
         )
           throw error;
+        // The rendered and source blobs may be the ones the delete removed: render and put them again.
+        if (foreignKeyFailure(error)) prepared = undefined;
       }
     }
     throw new ApiError("publish_conflict");
@@ -589,6 +596,10 @@ async function computePublish(
   }
 }
 class PublishConflict extends Error {}
+function foreignKeyFailure(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return /FOREIGN KEY constraint failed/.test(error.message) || foreignKeyFailure(error.cause);
+}
 function sequenceConflict(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   return (

@@ -30,6 +30,10 @@ const item: InboxItem = {
   pendingSend: true,
   updatedAt: "2026-01-01T00:00:00.000Z",
   movedTo: null,
+  list: "active",
+  snoozed: false,
+  snoozedUntil: null,
+  releasedAt: null,
 };
 const diffFile: FileView = {
   id: "33333333-3333-4333-8333-333333333333",

@@ -14,6 +14,7 @@ test("includes go, approve, pending and approval-set-aside fixtures", () => {
       "wait-approve.json",
       "wait-pending.json",
       "wait-go-approval-set-aside.json",
+      "wait-closed.json",
     ]),
   );
 });

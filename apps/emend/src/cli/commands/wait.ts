@@ -2,7 +2,7 @@ import { MAX_TAKE_WAIT_SECONDS, WaitResult } from "@emend/contract";
 import type { Io } from "../../main.ts";
 import { confirmDirect, takeDirect } from "../direct/index.ts";
 import { apiRequest, CliError, CliSignalExit, CliUsageError, jsonLine, printJson } from "../http.ts";
-import { movedError } from "../moved.ts";
+import { deletedError, movedError } from "../moved.ts";
 import { pause } from "../pause.ts";
 import {
   type CheckedFolder,
@@ -47,7 +47,12 @@ export async function takeFeedback(
       const result = parseFeedback(
         await apiRequest(stateDir, target, `/reviews/${reviewId}/take`, {
           method: "POST",
-          body: { waitSeconds, ...(options.maxBytes === undefined ? {} : { maxBytes: options.maxBytes }) },
+          body: {
+            waitSeconds,
+            // This CLI parses the closed result, so a retired or snoozed review may answer with it.
+            accepts: ["closed"],
+            ...(options.maxBytes === undefined ? {} : { maxBytes: options.maxBytes }),
+          },
           timeoutMs: Math.ceil((waitSeconds + 10) * 1000),
           signal: options.signal,
         }),
@@ -65,7 +70,9 @@ export async function takeFeedback(
       waitedSeconds: timeoutSeconds === 0 ? 0 : Math.floor((performance.now() - start) / 1000),
     };
   } catch (error) {
-    return movedError(stateDir, error, { reviewId });
+    return deletedError(stateDir, error, reviewId, target.via === "hub" ? target.url : undefined).catch((next) =>
+      movedError(stateDir, next, { reviewId }),
+    );
   }
 }
 

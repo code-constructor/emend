@@ -72,6 +72,48 @@ export async function movedError(
   throw error;
 }
 
+/**
+ * Turn an unknown-review answer into the line the skills stop on. With a hub address, a local copy
+ * that moved to that hub says the review was deleted there. Any other error is rethrown unchanged.
+ */
+export async function deletedError(
+  stateDir: string,
+  error: unknown,
+  reviewId: string,
+  hubUrl?: string,
+): Promise<never> {
+  if (!(error instanceof CliApiError) || error.code !== "unknown_review") throw error;
+  let onHub = false;
+  const path = join(stateDir, "emend.db");
+  if (
+    hubUrl !== undefined &&
+    (await lstat(path).then(
+      (s) => s.isFile(),
+      () => false,
+    ))
+  ) {
+    const db = openDb(path);
+    try {
+      onHub = await db.read(async (q) => {
+        // Local bootstrap has exactly one owner; never use an id from command input as an owner.
+        const owner = await q.select({ id: owners.id }).from(owners).get();
+        if (!owner) return false;
+        const row = await q
+          .select({ movedToUrl: reviews.movedToUrl })
+          .from(reviews)
+          .where(and(eq(reviews.ownerId, owner.id), eq(reviews.id, reviewId)))
+          .get();
+        return row?.movedToUrl === `${hubUrl}/r/${reviewId}`;
+      });
+    } catch {
+      onHub = false;
+    } finally {
+      await db.close();
+    }
+  }
+  throw new CliError(`review ${reviewId} was deleted ${onHub ? "on the hub" : "or never existed"}`);
+}
+
 /** Refuse an attached publish before any request can create a competing hub review. */
 export async function refuseUncopiedReview(
   stateDir: string,

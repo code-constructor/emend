@@ -1,4 +1,10 @@
-import { Capabilities, SERVER_CHALLENGE_HEADER, SERVER_PROOF_HEADER, ServerChallenge } from "@emend/contract";
+import {
+  Capabilities,
+  REVIEW_LIFECYCLE_FEATURE,
+  SERVER_CHALLENGE_HEADER,
+  SERVER_PROOF_HEADER,
+  ServerChallenge,
+} from "@emend/contract";
 import type { Hono } from "hono";
 import { VERSION } from "../../version.ts";
 import type { AppEnv } from "../auth/principal.ts";
@@ -17,7 +23,7 @@ export function capabilitiesRoutes(app: Hono<AppEnv>, key: string, canStop = fal
       Capabilities.parse({
         api: 1,
         version: VERSION,
-        features: ["attach", "html-docs", "mcp", ...(canStop ? ["server-stop"] : [])],
+        features: ["attach", "html-docs", "mcp", REVIEW_LIFECYCLE_FEATURE, ...(canStop ? ["server-stop"] : [])],
       }),
     );
   });

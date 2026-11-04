@@ -173,5 +173,27 @@ export const MIGRATIONS: readonly { tag: string; when: number; hash: string; sta
       "CREATE UNIQUE INDEX `agent_notes_owner_id_unique` ON `agent_notes` (`owner_id`,`id`);",
       "CREATE UNIQUE INDEX `agent_notes_owner_file_ord_unique` ON `agent_notes` (`owner_id`,`file_id`,`ord`);"
     ]
+  },
+  {
+    "tag": "0011_lifecycle",
+    "when": 1793748123578,
+    "hash": "4bdde366bcf555e9d07505a35a45fdfae995442a5aaf1656a4815f213d45bc80",
+    "statements": [
+      "CREATE TABLE `review_tombstones` (\n\t`owner_id` text NOT NULL,\n\t`review_id` text NOT NULL,\n\t`deleted_at` integer NOT NULL,\n\tPRIMARY KEY(`owner_id`, `review_id`),\n\tFOREIGN KEY (`owner_id`) REFERENCES `owners`(`id`) ON UPDATE no action ON DELETE no action\n);",
+      "CREATE INDEX `review_tombstones_owner_idx` ON `review_tombstones` (`owner_id`);",
+      "ALTER TABLE `reviews` ADD `snoozed_at` integer;",
+      "ALTER TABLE `reviews` ADD `snoozed_until` integer;",
+      "ALTER TABLE `reviews` ADD `released_at` integer;",
+      "ALTER TABLE `reviews` ADD `released_reason` text CONSTRAINT `reviews_released_reason_check` CHECK(`released_reason` in ('snoozed', 'retired'));",
+      "CREATE INDEX `reviews_owner_state_updated_idx` ON `reviews` (`owner_id`,`state`,`updated_at`);",
+      "CREATE INDEX `blobs_sha256_idx` ON `blobs` (`sha256`);",
+      "CREATE INDEX `files_owner_old_blob_idx` ON `files` (`owner_id`,`old_blob`);",
+      "CREATE INDEX `files_owner_new_blob_idx` ON `files` (`owner_id`,`new_blob`);",
+      "CREATE INDEX `files_owner_rendered_blob_idx` ON `files` (`owner_id`,`rendered_blob`);",
+      "CREATE INDEX `viewed_files_owner_old_blob_idx` ON `viewed_files` (`owner_id`,`old_blob`);",
+      "CREATE INDEX `viewed_files_owner_new_blob_idx` ON `viewed_files` (`owner_id`,`new_blob`);",
+      "CREATE INDEX `writeups_owner_source_blob_idx` ON `writeups` (`owner_id`,`source_blob`);",
+      "CREATE INDEX `writeups_owner_rendered_blob_idx` ON `writeups` (`owner_id`,`rendered_blob`);"
+    ]
   }
 ];

@@ -238,5 +238,5 @@ export function importPublishInput(bundle: ImportBundle, revisionId: string, wri
     })),
   };
 }
-export const ImportResult = z.object({ skipped: z.boolean() });
+export const ImportResult = z.object({ skipped: z.boolean(), deleted: z.boolean().optional() });
 export type ImportResult = z.infer<typeof ImportResult>;

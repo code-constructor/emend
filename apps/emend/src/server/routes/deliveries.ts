@@ -11,7 +11,8 @@ import { confirmDelivery, releaseUnreturnedDelivery, takeDelivery } from "../mai
 
 export function deliveryRoutes(app: Hono<AppEnv>, deps: AppDeps) {
   app.post("/api/v1/reviews/:id/take", async (c) => {
-    const { waitSeconds, maxBytes } = c.get("jsonBody") === "" ? TakeRequest.parse({}) : parseBody(c, TakeRequest);
+    const { waitSeconds, maxBytes, accepts } =
+      c.get("jsonBody") === "" ? TakeRequest.parse({}) : parseBody(c, TakeRequest);
     const principal = c.get("principal");
     const reviewId = c.req.param("id");
     const start = deps.now();
@@ -30,13 +31,21 @@ export function deliveryRoutes(app: Hono<AppEnv>, deps: AppDeps) {
         : undefined;
     let endWaiting: (() => void) | undefined;
     try {
-      let result = await takeDelivery(deps.db, principal, reviewId, deps.now(), wait ? authorize : undefined, maxBytes);
+      let result = await takeDelivery(
+        deps.db,
+        principal,
+        reviewId,
+        deps.now(),
+        wait ? authorize : undefined,
+        maxBytes,
+        accepts,
+      );
       if (!result && wait && !c.req.raw.signal.aborted) {
         endWaiting = deps.events?.beginWaiting(principal.ownerId, reviewId, revision.seq);
         await wait.promise;
         await deps.db.read(authorize);
         if (!c.req.raw.signal.aborted)
-          result = await takeDelivery(deps.db, principal, reviewId, deps.now(), authorize, maxBytes);
+          result = await takeDelivery(deps.db, principal, reviewId, deps.now(), authorize, maxBytes, accepts);
       }
       if (wait) {
         try {

@@ -95,12 +95,20 @@ you started on this folder is still running; a delegated sub-agent never starts 
 When the command ends, read its output first: the exit code, any error line and any warning.
 
 On success, repeat the folder-entry check and ownership listing above, then read the file you just wrote.
-After reading a `pending` result, delete that file; only `go` and `approve` results stay.
+After reading a `pending` result, delete that file; only `go`, `approve` and `closed` results stay.
 `pending` means no hand-off is waiting now; wait again while the session can stay active.
 If the session must end, tell the user the review id and literal folder path.
 The emend-feedback skill continues from them.
 Handle a `go` through emend-feedback. After its last reply and any new revision, append its `deliveryId` as one line.
 For a new or saved `approve`, report the approved revision, append its `deliveryId`, and stop.
+
+`closed` means the reviewer retired or snoozed the review. Save and confirm it like `approve`, record its `deliveryId` as below, and never start another wait after it.
+
+- `reason: "retired"`: stop the loop and tell the user the reviewer retired review <review-id>.
+- `reason: "snoozed"`: stop the loop and tell the user: "The reviewer moved review <review-id> down until <time>. When they send feedback, resume with `/emend:emend-feedback <review-id>`." When `until` is `null`, say "until its next revision" in place of the time.
+
+If an error line reads `review <review-id> was deleted or never existed` or `review <review-id> was deleted on the hub`, stop the loop and report that line.
+
 Use the verified `handled.txt`, or create it if absent, replacing `<deliveryId>` with that result's field:
 
 ```sh

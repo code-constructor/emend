@@ -25,6 +25,7 @@ import { deviceRoutes } from "./routes/devices.ts";
 import { eventRoutes } from "./routes/events.ts";
 import { fileRoutes } from "./routes/files.ts";
 import { importRoutes } from "./routes/import.ts";
+import { lifecycleRoutes } from "./routes/lifecycle.ts";
 import { machineRoutes } from "./routes/machines.ts";
 import { pairingRoutes } from "./routes/pairings.ts";
 import { publishRoutes } from "./routes/publish.ts";
@@ -43,6 +44,8 @@ export interface AppDeps {
   publishExecutor?: Executor;
   events?: ReviewEvents;
   onStopRequest?: () => void;
+  /** Called with the background blob cleanup of a review delete; tests await it. */
+  onBlobCleanup?: (cleanup: Promise<void>) => void;
   config: {
     serverKey: string;
     allowedHosts: string[];
@@ -81,6 +84,11 @@ export const ENDPOINTS = [
   { method: "POST", path: "/api/v1/threads/:id/resolve", scope: "comment" },
   { method: "POST", path: "/api/v1/threads/:id/reopen", scope: "comment" },
   { method: "POST", path: "/api/v1/reviews/:id/sends", scope: "send" },
+  { method: "POST", path: "/api/v1/reviews/:id/snooze", scope: "send" },
+  { method: "POST", path: "/api/v1/reviews/:id/unsnooze", scope: "send" },
+  { method: "POST", path: "/api/v1/reviews/:id/retire", scope: "send" },
+  { method: "POST", path: "/api/v1/reviews/:id/reopen", scope: "send" },
+  { method: "DELETE", path: "/api/v1/reviews/:id", scope: "send" },
   { method: "POST", path: "/api/v1/reviews/:id/take", scope: "take" },
   { method: "POST", path: "/api/v1/deliveries/:id/confirm", scope: "take" },
   { method: "POST", path: "/api/v1/comments/:id/reply", scope: "reply" },
@@ -153,6 +161,7 @@ export function createApp(deps: AppDeps) {
   blobRoutes(app, deps);
   publishRoutes(app, deps);
   reviewRoutes(app, deps);
+  lifecycleRoutes(app, deps);
   viewedRoutes(app, deps);
   fileRoutes(app, deps);
   threadRoutes(app, deps);

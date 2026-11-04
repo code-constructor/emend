@@ -26,12 +26,16 @@ export async function mailboxFixture() {
   const session = await reviewer(f.ownerId);
   const foreign = await reviewer(f.otherOwnerId);
   const origin = "http://127.0.0.1:3636";
+  const cleanups: Promise<void>[] = [];
   const deps: AppDeps = {
     db: f.db,
     blobs: new BlobStore(f.db, join(f.dir, "state")),
     instance: { id: f.instanceId, name: "Synthetic" },
     now: () => now,
     publishExecutor: executeWork,
+    onBlobCleanup: (cleanup) => {
+      cleanups.push(cleanup);
+    },
     config: {
       baseUrl: origin,
       allowedHosts: ["127.0.0.1:3636"],
@@ -116,6 +120,10 @@ export async function mailboxFixture() {
     ...f,
     deps,
     app,
+    /** Wait for the background blob cleanup of every review delete so far. */
+    blobCleanup: async () => {
+      await Promise.all(cleanups.splice(0));
+    },
     request,
     thread,
     comment,

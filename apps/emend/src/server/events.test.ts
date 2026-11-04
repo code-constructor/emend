@@ -45,6 +45,24 @@ test("owner subscriptions and Send waiters cannot hear a different owner even fo
     stopReview();
   }
 });
+test.each(["snooze", "retire", "delete"] as const)(
+  "a Send waiter also wakes on %s, and not on another owner's event",
+  async (type) => {
+    const events = new ReviewEvents(Date.now);
+    const reviewId = randomUUID();
+    const wait = events.waitForSend("owner", reviewId, 25);
+    const woke = vi.fn();
+    void wait.promise.then(woke);
+    events.emit("foreign", { type, reviewId, revision: 1 });
+    events.emit("owner", { type: "unsnooze", reviewId, revision: 1 });
+    events.emit("owner", { type: "publish", reviewId, revision: 1 });
+    await Promise.resolve();
+    expect(woke).not.toHaveBeenCalled();
+    events.emit("owner", { type, reviewId, revision: 1 });
+    await wait.promise;
+    expect(woke).toHaveBeenCalledOnce();
+  },
+);
 test("waiting covers concurrent takes and 35 seconds of grace, emitting only transitions", async () => {
   vi.useFakeTimers();
   const events = new ReviewEvents(Date.now);

@@ -48,7 +48,9 @@ live event; the browser sees them on its next load. A direct wait polls every se
 A killed wait's row stops counting after 30 seconds and the next wait removes expired rows for
 that owner. A challenge timeout or hidden pid can select direct mode while a server is running;
 shared claims and transactions keep writes safe, but a newer CLI may migrate the database under
-a running older server.
+a running older server. Blob files are the exception: the lock that guards blob removal after a
+delete holds only inside the server, so a direct publish that reuses the same content at that
+moment can lose a file. Publishing that content again restores it.
 A signal after a hand-off is claimed leaves it unconfirmed, and it is offered again after the lease.
 
 State is one SQLite database and a content-addressed blob store with SHA-256 names. `EMEND_HOME`
