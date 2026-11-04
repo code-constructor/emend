@@ -1,72 +1,5 @@
 {
-  "sandbox": {
-    "enabled": true,
-    "failIfUnavailable": true,
-    "allowUnsandboxedCommands": false,
-    "network": {
-      "allowedDomains": [
-        "registry.npmjs.org",
-        "github.com",
-        "api.github.com",
-        "codeload.github.com"
-      ],
-      "allowLocalBinding": true,
-      "deniedDomains": [
-        "localhost",
-        "*.localhost",
-        "127.0.0.1",
-        "[::1]",
-        "0.0.0.0",
-        "[::]"
-      ]
-    },
-    "filesystem": {
-      "denyRead": [
-        ".env",
-        ".env.local",
-        "~/.local/share/emend",
-        "~/Library/Application Support/emend",
-        "~/.ssh",
-        "~/.gnupg",
-        "~/.aws",
-        "~/.config/gh",
-        "~/.npmrc",
-        "~/.docker",
-        "~/.config/.wrangler",
-        "~/.claude/.credentials.json",
-        "~/.codex/auth.json",
-        "~/.local/share/opencode/auth.json",
-        "~/.kube",
-        "~/.config/rclone",
-        "~/.local/share/keyrings",
-        "~/.config/op"
-      ],
-      "denyWrite": [
-        ".claude/settings.json",
-        ".claude/settings.local.json",
-        ".claude/hooks",
-        ".codex",
-        ".git/config",
-        ".git/hooks",
-        ".git"
-      ]
-    }
-  },
   "permissions": {
-    "ask": [
-      "Edit(/.claude/settings.json)",
-      "Edit(/.claude/settings.local.json)",
-      "Edit(/.claude/hooks/**)",
-      "Edit(/.codex/**)",
-      "Edit(/.git/config)",
-      "Edit(/.git/hooks/**)",
-      "Edit(/.git/**)",
-      "Edit(~/.config/git/**)",
-      "Edit(~/.gitconfig)",
-      "Edit(/.claude/agents/**)",
-      "Edit(/.claude/rules/**)",
-      "Edit(/.github/workflows/**)"
-    ],
     "deny": [
       "Read(/.env)",
       "Read(/**/.env)",
@@ -91,28 +24,6 @@
   },
   "hooks": {
     "PreToolUse": [
-      {
-        "matcher": "Bash|Monitor|PowerShell",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "command -v node >/dev/null 2>&1 || { echo 'guard-commands: node is not on PATH, so commands stay blocked' >&2; exit 2; }; node \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard-commands.ts\" || exit 2",
-            "timeout": 10,
-            "onFailure": "block"
-          }
-        ]
-      },
-      {
-        "matcher": "mcp__codex__.*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "command -v node >/dev/null 2>&1 || { echo 'guard-commands: node is not on PATH, so Codex calls stay blocked' >&2; exit 2; }; node \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard-commands.ts\" || exit 2",
-            "timeout": 10,
-            "onFailure": "block"
-          }
-        ]
-      },
       {
         "matcher": "Agent|Task",
         "hooks": [

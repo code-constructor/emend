@@ -15,43 +15,9 @@ dist
 # Throwaway spikes (plan tasks 0.3 and 0.4)
 spikes/
 
-# A pnpm store inside the checkout (sandboxed sessions cannot write the global one)
+# A pnpm store inside the checkout, if one was created
 .pnpm-store/
 
 # Temporary package documents, copied by prepack and removed by postpack.
 /apps/emend/README.md
 /apps/emend/LICENSE
-
-# Empty mount points left by the Claude Code sandbox, which .claude/settings.json turns on.
-# The sandbox makes each path below read-only by mounting /dev/null over it. When the path
-# does not exist, it first creates an empty file there, on the real disk, and removes it once
-# the sandboxed command ends. While the command runs, any process outside the sandbox sees
-# those files as untracked, and a `git add -A` would stage them. A real directory at one of the
-# directory paths stays visible, because its `!/<path>/` line re-includes it; a real file at
-# one of the file paths needs `git add -f` the first time.
-/.bashrc
-/.bash_profile
-/.zshrc
-/.zprofile
-/.profile
-/.gitconfig
-/.gitmodules
-/.ripgreprc
-/.mcp.local.json
-/.claude/launch.json
-/.claude/loop.md
-/.claude/scheduled_tasks.json
-/.idea
-!/.idea/
-/.vscode
-!/.vscode/
-/.claude/commands
-!/.claude/commands/
-/.claude/skills
-!/.claude/skills/
-/.claude/workflows
-!/.claude/workflows/
-/.claude/routines
-!/.claude/routines/
-/.claude/output-styles
-!/.claude/output-styles/

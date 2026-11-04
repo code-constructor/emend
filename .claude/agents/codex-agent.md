@@ -16,7 +16,7 @@ threads you started in this session. Preserve unrelated dirty work, and require 
 `AGENTS.md`, with focused verification (`pnpm verify`, or the narrower check the commission names).
 For reviews, start a fresh read-only session and point Codex at the working tree and the base the
 commission names (`origin/main` by default) instead of pasting a diff or the author's summary.
-Codex's workspace-write sandbox can reach the guard files, so after every build run
+Codex's workspace-write sandbox can reach the harness files, so after every build run
 `git status --short -- .claude .codex .github scripts`, and report any change the commission did
 not ask for as a blocker. Never inspect or transmit secret values. If Codex cannot run (MCP unreachable, sandbox error,
 timeout), stop and report the cause, so the main session can route the work to a Sonnet
