@@ -23,6 +23,7 @@ import { splitLines } from "../../../../../packages/core/src/place/linemap.ts";
 import { getText } from "../../api/client.ts";
 import { plural } from "../../lib/count.ts";
 import { diffLoads } from "../../lib/diff-loads.ts";
+import { useStickyHeight } from "../../lib/sticky-stack.ts";
 import { Composer } from "../threads/Composer.tsx";
 import { ThreadCard } from "../threads/ThreadCard.tsx";
 import { Button } from "../ui/Button.tsx";
@@ -242,6 +243,9 @@ export function FileDiff({
   ...context
 }: DiffContext & { file: FileView; topicCollapsed: boolean }) {
   const ref = useRef<HTMLElement>(null);
+  const header = useRef<HTMLElement>(null);
+  // Lines and threads below this sticky header scroll to the bottom of the stack, not under it.
+  useStickyHeight(header, ref, "--em-file-height");
   const [near, setNear] = useState(false);
   const [viewportKnown, setViewportKnown] = useState(false);
   const loads = diffLoads(useQueryClient());
@@ -325,11 +329,13 @@ export function FileDiff({
     <section
       ref={ref}
       data-diff-section
+      data-diff-file
       aria-label={`File ${file.path}`}
       className="em-diff-file"
       style={{ minHeight: collapsed || topicCollapsed || mounted || file.flag ? undefined : height }}
     >
       <FileHeader
+        ref={header}
         file={file}
         collapsed={collapsed}
         counts={context.counts.get(file.id)}

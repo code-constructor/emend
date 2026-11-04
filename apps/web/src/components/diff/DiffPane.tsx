@@ -7,6 +7,7 @@ import { DiffNavigation, type NavigateDiff } from "../../lib/diff-navigation.ts"
 import { draftKey, type SavedDraft } from "../../lib/drafts.ts";
 import { useLayout } from "../../lib/layout.ts";
 import { layoutStore, useLayoutPreferences } from "../../lib/layout-store.ts";
+import { useTopicFolds } from "../../lib/topic-folds.ts";
 import { rankedTopics } from "../../lib/topics.ts";
 import { useViewedCollapse } from "../../lib/viewed-collapse.ts";
 import type { ReviewSearch } from "../../router.tsx";
@@ -50,7 +51,7 @@ export function DiffPane({
   const [style, setStyle] = useDiffStyle();
   const [wrap, setWrap] = useDiffWrap();
   const { notes } = useLayoutPreferences();
-  const [collapsedTopics, setCollapsedTopics] = useState(new Set<string>());
+  const [collapsedTopics, setCollapsedTopics] = useTopicFolds(reviewId, revision.seq);
   const [collapsedFiles, setCollapsedFiles] = useViewedCollapse(reviewId, revision);
   const { counts, onParsed: saveCounts } = useDiffCounts();
   const [jump, setJump] = useState<FileView | null>(null);

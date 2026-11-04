@@ -56,11 +56,14 @@ export function scrollDiffTarget(target: HTMLElement) {
   const pane = target.closest<HTMLElement>("[data-diff-scroll]");
   if (!pane) return;
   const toolbar = pane.querySelector("[data-diff-toolbar]");
-  const topic = target.closest("[data-topic]")?.querySelector("[data-topic-header]");
+  const section = target.closest("[data-topic]");
+  // The phone topic header scrolls away with its section, so it takes no room in the stack.
+  const topic = section?.hasAttribute("data-phone") ? null : section?.querySelector("[data-topic-header]");
+  const file = target.closest("[data-diff-file]")?.querySelector("[data-file-header]");
   // A header, its contents, and its section are destinations unobstructed by that header.
-  const topicHeight =
-    topic && !target.contains(topic) && !topic.contains(target) ? topic.getBoundingClientRect().height : 0;
-  const stack = (toolbar?.getBoundingClientRect().height ?? 0) + topicHeight;
+  const height = (header: Element | null | undefined) =>
+    header && !target.contains(header) && !header.contains(target) ? header.getBoundingClientRect().height : 0;
+  const stack = (toolbar?.getBoundingClientRect().height ?? 0) + height(topic) + height(file);
   const destination =
     pane.scrollTop + target.getBoundingClientRect().top - pane.getBoundingClientRect().top - pane.clientTop - stack - 8;
   const top = Math.max(0, Math.min(destination, Math.max(0, pane.scrollHeight - pane.clientHeight)));

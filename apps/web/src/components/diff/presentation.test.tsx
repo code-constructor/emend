@@ -81,3 +81,58 @@ test("phone scroll uses only its topic header and clamps negative destinations t
   scrollDiffTarget(card);
   expect(scroll).toHaveBeenCalledExactlyOnceWith({ top: 0, behavior: "instant" });
 });
+
+function fileScene(phone: boolean) {
+  const { container } = render(
+    <section data-diff-scroll>
+      <div data-diff-toolbar />
+      <section data-topic="first" data-phone={phone || undefined}>
+        <header data-topic-header />
+        <section data-diff-file>
+          <header data-file-header />
+          <article data-thread-card />
+        </section>
+      </section>
+    </section>,
+  );
+  const pane = container.querySelector<HTMLElement>("[data-diff-scroll]") as HTMLElement;
+  const rects: [string, number, number][] = [
+    ["[data-diff-toolbar]", 100, 41],
+    ["[data-topic-header]", 141, 100],
+    ["[data-file-header]", 241, 40],
+  ];
+  for (const [selector, top, height] of rects)
+    vi.spyOn(pane.querySelector(selector) as HTMLElement, "getBoundingClientRect").mockReturnValue(
+      new DOMRect(0, top, 500, height),
+    );
+  const card = pane.querySelector<HTMLElement>("article") as HTMLElement;
+  Object.defineProperties(pane, { clientHeight: { value: 500 }, scrollHeight: { value: 3000 } });
+  vi.spyOn(pane, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 100, 500, 500));
+  vi.spyOn(card, "getBoundingClientRect").mockImplementation(
+    () => new DOMRect(0, 100 + 1300 - pane.scrollTop, 500, 100),
+  );
+  const scroll = vi.spyOn(pane, "scrollTo").mockImplementation(() => {});
+  return { card, header: pane.querySelector("[data-file-header]") as HTMLElement, scroll };
+}
+
+test("a line or thread inside a file also clears that file's sticky header", () => {
+  const { card, scroll } = fileScene(false);
+  scrollDiffTarget(card);
+  // 1300 - toolbar 41 - topic 100 - file header 40 - 8
+  expect(scroll).toHaveBeenCalledExactlyOnceWith({ top: 1111, behavior: "instant" });
+});
+
+test("on the phone the topic header scrolls away, so only the file header counts", () => {
+  const { card, scroll } = fileScene(true);
+  scrollDiffTarget(card);
+  // 1300 - toolbar 41 - file header 40 - 8
+  expect(scroll).toHaveBeenCalledExactlyOnceWith({ top: 1211, behavior: "instant" });
+});
+
+test("a file header destination does not count its own header", () => {
+  const { header, scroll } = fileScene(false);
+  vi.spyOn(header, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 1400, 500, 40));
+  scrollDiffTarget(header);
+  // 1300 - toolbar 41 - topic 100 - 8, from the header's own rect at 1400 - 100
+  expect(scroll).toHaveBeenCalledExactlyOnceWith({ top: 1151, behavior: "instant" });
+});

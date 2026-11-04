@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import type { FileView, RevisionView, Target, ThreadView } from "@emend/contract";
 import type { GetHoveredLineResult } from "@pierre/diffs";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -977,4 +979,201 @@ test("counts wait for visible diffs and never exceed three concurrent background
   await waitFor(() => expect(parser).toHaveBeenCalledTimes(background.length + 1));
   expect(maximum).toBe(3);
   expect(active).toBe(0);
+});
+
+function stubWidth(width: number) {
+  vi.stubGlobal("matchMedia", (query: string) => ({
+    matches: query === "(min-width: 768px)" ? width >= 768 : query === "(min-width: 1280px)" ? width >= 1280 : false,
+    addEventListener() {},
+    removeEventListener() {},
+  }));
+}
+const detailed = () =>
+  revision([file("src/a.ts", { oldPath: "src/b.ts" })], {
+    topics: [
+      {
+        slug: "first",
+        title: "A long topic title that has to be cut to one line on a phone",
+        importance: 10,
+        summary: "Synthetic summary",
+        attention: "review",
+        door: "one-way",
+        blastRadius: { scope: "local", note: "A synthetic note" },
+      },
+    ],
+  });
+const detailsButton = () =>
+  within(screen.getByRole("region", { name: /^Topic / })).getByRole("button", { name: "Details" });
+const savedDetails = () => JSON.parse(localStorage.getItem("emend.layout.v1") ?? "{}").details;
+const diffStylesheet = readFileSync(resolve(import.meta.dirname, "../../styles/diff.css"), "utf8");
+
+test.each([
+  [1280, true],
+  [800, true],
+  [390, false],
+])("topic headers start full or compact by device class (%s px)", async (width, full) => {
+  stubWidth(width);
+  await mount(detailed());
+  expect(detailsButton().getAttribute("aria-pressed")).toBe(String(full));
+  expect(screen.getByText("Synthetic summary").closest("[hidden]") === null).toBe(full);
+  expect(screen.getByText(/A synthetic note/).closest("[hidden]") === null).toBe(full);
+  // The second line stays in both modes: attention, door, file count.
+  expect(screen.getByText("One-way door")).toBeTruthy();
+  expect(screen.getByText("1 file")).toBeTruthy();
+});
+
+test("the compact title is one cut line with the full title in its title attribute", async () => {
+  stubWidth(390);
+  const view = detailed();
+  await mount(view);
+  const title = screen.getByRole("heading", { level: 3 });
+  expect(title.getAttribute("title")).toBe(view.topics[0]?.title);
+  expect(title.classList.contains("truncate")).toBe(true);
+});
+
+test("Details flips one preference per device class for every topic header and saves it", async () => {
+  stubWidth(390);
+  const view = revision([file("a.ts"), file("b.ts", { topic: "second" })], {
+    topics: [
+      { slug: "first", title: "First", importance: 10, summary: "First summary" },
+      { slug: "second", title: "Second", importance: 20, summary: "Second summary" },
+    ],
+  });
+  await mount(view);
+  const buttons = screen.getAllByRole("button", { name: "Details" });
+  expect(buttons).toHaveLength(2);
+  fireEvent.click(buttons[0] as HTMLElement);
+  for (const button of screen.getAllByRole("button", { name: "Details" }))
+    expect(button.getAttribute("aria-pressed")).toBe("true");
+  expect(screen.getByText("Second summary").closest("[hidden]")).toBeNull();
+  expect(savedDetails()).toEqual({ phone: true, tablet: true, desktop: true });
+  fireEvent.click(screen.getAllByRole("button", { name: "Details" })[1] as HTMLElement);
+  expect(savedDetails().phone).toBe(false);
+  expect(screen.getByText("Second summary").closest("[hidden]")).not.toBeNull();
+});
+
+test("the tablet preference is separate from the phone one", async () => {
+  stubWidth(800);
+  await mount(detailed());
+  fireEvent.click(detailsButton());
+  expect(savedDetails()).toEqual({ phone: false, tablet: false, desktop: true });
+  expect(screen.getByText("Synthetic summary").closest("[hidden]")).not.toBeNull();
+  expect(screen.getByText(/A synthetic note/).closest("[hidden]")).not.toBeNull();
+});
+
+test("the phone topic header scrolls with the page; the file header sticks inside its own file", async () => {
+  stubWidth(390);
+  await mount(detailed());
+  expect(screen.getByRole("region", { name: /^Topic / }).hasAttribute("data-phone")).toBe(true);
+  expect(diffStylesheet).toMatch(/\.em-diff-topic\[data-phone\] \.em-topic\s*\{[^}]*position:\s*static;/);
+  const header = document.querySelector("[data-file-header]");
+  expect(header?.closest(".em-diff-file")).not.toBeNull();
+  const rule = diffStylesheet.match(/\.em-file\s*\{([^}]+)\}/)?.[1] ?? "";
+  expect(rule).toMatch(/position:\s*sticky;/);
+  expect(rule).toMatch(/top:\s*calc\(var\(--diff-toolbar-height\) \+ var\(--em-topic-height, 0px\)\);/);
+  expect(rule).toMatch(/z-index:\s*calc\(var\(--z-sticky\) - 1\);/);
+  expect(rule).toMatch(/background:\s*var\(--bg-sunken\);/);
+  expect(diffStylesheet).toMatch(/\.em-diff-file\s*\{[^}]*isolation:\s*isolate;/);
+});
+
+test("the file header keeps the full path readable while the phone cuts it from the left", async () => {
+  stubWidth(390);
+  await mount(detailed());
+  const path = document.querySelector("[data-file-header] h4");
+  expect(path?.getAttribute("title")).toBe("src/a.ts");
+  expect(path?.getAttribute("aria-label")).toBe("src/a.ts");
+  expect(diffStylesheet).toMatch(/\.em-file-path\s*\{[^}]*direction:\s*rtl;[^}]*text-overflow:\s*ellipsis;/);
+  expect(document.querySelector("[data-file-header] p")?.getAttribute("title")).toBe("Renamed from src/b.ts");
+});
+
+test("desktop sets the topic height on its section so the file header sticks right below it", async () => {
+  stubWidth(1280);
+  const bounds = HTMLElement.prototype.getBoundingClientRect;
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+    return this.hasAttribute("data-topic-header") ? new DOMRect(0, 0, 400, 92) : bounds.call(this);
+  });
+  await mount(detailed());
+  const section = screen.getByRole("region", { name: /^Topic / });
+  expect(section.hasAttribute("data-phone")).toBe(false);
+  expect(section.style.getPropertyValue("--em-topic-height")).toBe("92px");
+  expect(diffStylesheet).toMatch(
+    /\.em-diff-file\s*\{[^}]*scroll-margin-top:\s*calc\([^;]*var\(--em-topic-height, 0px\)/,
+  );
+});
+
+test("the details sit outside the sticky header, and Details controls that one element", async () => {
+  stubWidth(1280);
+  await mount(detailed());
+  const header = document.querySelector("[data-topic-header]") as HTMLElement;
+  const details = document.querySelector("[data-topic-details]") as HTMLElement;
+  expect(header.contains(details)).toBe(false);
+  expect(header.nextElementSibling).toBe(details);
+  expect(details.id).not.toBe("");
+  expect(detailsButton().getAttribute("aria-controls")).toBe(details.id);
+  expect(details.textContent).toContain("Synthetic summary");
+  expect(details.textContent).toContain("Blast radius");
+  expect(details.textContent).toContain("A synthetic note");
+  // The sticky part keeps only the title, buttons and the meta row.
+  expect(header.textContent).not.toContain("Synthetic summary");
+  expect(header.textContent).not.toContain("Blast radius");
+  expect(header.contains(screen.getByText("One-way door"))).toBe(true);
+});
+
+test("the compact meta row stays one line and is cut from its end", () => {
+  expect(diffStylesheet).toMatch(
+    /\.em-topic-meta\s*\{[^}]*flex-wrap:\s*nowrap;[^}]*overflow:\s*hidden;[^}]*white-space:\s*nowrap;/,
+  );
+});
+
+test("Details keeps the toggled header where the reader saw it", async () => {
+  stubWidth(390);
+  await mount(detailed());
+  const pane = screen.getByTestId("diff-pane");
+  const header = document.querySelector("[data-topic-header]") as HTMLElement;
+  const details = document.querySelector("[data-topic-details]") as HTMLElement;
+  pane.scrollTop = 1000;
+  vi.spyOn(pane, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 50, 400, 600));
+  // Opening the details above the header pushes it down by 120px.
+  vi.spyOn(header, "getBoundingClientRect").mockImplementation(
+    () => new DOMRect(0, details.hidden ? 450 : 570, 400, 60),
+  );
+  fireEvent.click(detailsButton());
+  expect(details.hidden).toBe(false);
+  expect(pane.scrollTop).toBe(1120);
+  fireEvent.click(detailsButton());
+  expect(pane.scrollTop).toBe(1000);
+});
+
+test("paths keep their order in an isolated left-to-right run, and the rename source is cut from the left", async () => {
+  stubWidth(390);
+  await mount(detailed());
+  for (const bdi of document.querySelectorAll("[data-file-header] bdi")) expect(bdi.getAttribute("dir")).toBe("ltr");
+  const from = document.querySelector("[data-file-header] p .em-file-from");
+  expect(from?.textContent).toBe("src/b.ts");
+  expect(document.querySelector("[data-file-header] p .em-file-from-label")?.textContent).toBe("Renamed from");
+  expect(diffStylesheet).toMatch(/\.em-file-from\s*\{[^}]*direction:\s*rtl;[^}]*text-overflow:\s*ellipsis;/);
+  expect(diffStylesheet).toMatch(/\.em-file-from-label\s*\{[^}]*flex-shrink:\s*0;/);
+});
+
+test("the toolbar offset is 0px on the phone, where the toolbar is hidden, and 41px beside it", async () => {
+  expect(diffStylesheet).toMatch(/\.em-diff-pane\s*\{[^}]*--diff-toolbar-height:\s*0px;/);
+  expect(diffStylesheet).toMatch(/\.em-diff-pane\[data-toolbar\]\s*\{[^}]*--diff-toolbar-height:\s*41px;/);
+  stubWidth(390);
+  const phone = await mount(detailed());
+  expect(document.querySelector(".em-diff-pane")?.hasAttribute("data-toolbar")).toBe(false);
+  expect(document.querySelector("[data-diff-toolbar]")).toBeNull();
+  phone.unmount();
+  stubWidth(800);
+  await mount(detailed());
+  expect(document.querySelector(".em-diff-pane")?.hasAttribute("data-toolbar")).toBe(true);
+});
+
+test("the phone leaves the topic height at zero because that header does not stick", async () => {
+  stubWidth(390);
+  const bounds = HTMLElement.prototype.getBoundingClientRect;
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+    return this.hasAttribute("data-topic-header") ? new DOMRect(0, 0, 400, 92) : bounds.call(this);
+  });
+  await mount(detailed());
+  expect(screen.getByRole("region", { name: /^Topic / }).style.getPropertyValue("--em-topic-height")).toBe("0px");
 });

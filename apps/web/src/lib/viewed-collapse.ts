@@ -1,13 +1,24 @@
 import type { RevisionView } from "@emend/contract";
-import { useQueryClient } from "@tanstack/react-query";
-import { type SetStateAction, useMemo, useState } from "react";
+import { type QueryClient, useQueryClient } from "@tanstack/react-query";
+import { type SetStateAction, useEffect, useMemo, useState } from "react";
 import { useViewedChanges } from "../api/mutations.ts";
+
+type Folds = {
+  review: string;
+  seq: number;
+  changes: ReturnType<typeof useViewedChanges>;
+  seen: Set<number>;
+  folded: Set<string>;
+  pending: Map<number, Set<string>>;
+};
+/** In memory, per session: the phone unmounts the Diff tab, but a reader's folds outlive it. */
+const kept = new WeakMap<QueryClient, Map<string, Folds>>();
 
 /** Server refetches update marks, never the reader's current fold choices. */
 export function useViewedCollapse(reviewId: string, revision: RevisionView) {
   const changes = useViewedChanges(reviewId);
   const client = useQueryClient();
-  const initial = () => {
+  const initial = (): Folds => {
     const server = client.getQueryData<RevisionView>(["revision", reviewId, revision.seq]) ?? revision;
     const folded = new Set(server.files.filter((file) => file.viewed === "viewed").map((file) => file.id));
     const pending = new Map<number, Set<string>>();
@@ -18,10 +29,22 @@ export function useViewedCollapse(reviewId: string, revision: RevisionView) {
       if (change.status === "pending") pending.set(change.id, new Set(ids));
       else for (const id of ids) folded.add(id);
     }
-    return { seq: revision.seq, changes, seen: new Set(changes.map((change) => change.id)), folded, pending };
+    return {
+      review: reviewId,
+      seq: revision.seq,
+      changes,
+      seen: new Set(changes.map((change) => change.id)),
+      folded,
+      pending,
+    };
   };
-  const [state, setState] = useState(initial);
-  if (state.seq !== revision.seq) setState(initial());
+  const [state, setState] = useState(() => kept.get(client)?.get(reviewId) ?? initial());
+  useEffect(() => {
+    const reviews = kept.get(client) ?? new Map<string, Folds>();
+    reviews.set(state.review, state);
+    kept.set(client, reviews);
+  }, [client, state]);
+  if (state.seq !== revision.seq || state.review !== reviewId) setState(initial());
   else if (state.changes !== changes) {
     const next = {
       ...state,

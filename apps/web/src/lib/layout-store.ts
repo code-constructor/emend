@@ -13,6 +13,10 @@ export const layoutSchema = z.object({
   diffStyle: z.enum(["split", "unified"]).catch("split"),
   wrap: z.boolean().catch(false),
   notes: z.boolean().catch(true),
+  // Diff topic headers: true shows the summary and blast radius. One choice per device class.
+  details: z
+    .object({ phone: z.boolean().catch(false), tablet: z.boolean().catch(true), desktop: z.boolean().catch(true) })
+    .catch({ phone: false, tablet: true, desktop: true }),
   inboxCollapsed: z.boolean().catch(false),
   proseSize: z.union([z.literal(15), z.literal(16), z.literal(17), z.literal(18)]).catch(16),
   // D.4 inherits --type-code, currently 12px, rather than Pierre's 13px fallback.

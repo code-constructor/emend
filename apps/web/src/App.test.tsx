@@ -2508,6 +2508,36 @@ test("phone header is absent on Diff and returns with its revision picker on eve
   }
 });
 
+test("a folded file stays folded when the phone switches from Diff to Writeup and back", async () => {
+  width = 390;
+  mount(`/r/${id}?tab=diff`);
+  const diff = within(await screen.findByTestId("diff-pane"));
+  fireEvent.click(await diff.findByRole("button", { name: "Collapse file" }));
+  expect(diff.getByRole("button", { name: "Expand file" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("link", { name: "Writeup" }));
+  await screen.findByRole("heading", { level: 1, name: item.title });
+  expect(screen.queryByTestId("diff-pane")).toBeNull();
+  fireEvent.click(screen.getByRole("link", { name: "Diff" }));
+  const back = within(await screen.findByTestId("diff-pane"));
+  expect(await back.findByRole("button", { name: "Expand file" })).toBeTruthy();
+  expect(back.queryByRole("button", { name: "Collapse file" })).toBeNull();
+});
+
+test("a folded topic stays folded when the phone switches from Diff to Writeup and back", async () => {
+  width = 390;
+  mount(`/r/${id}?tab=diff`);
+  const diff = within(await screen.findByTestId("diff-pane"));
+  fireEvent.click(await diff.findByRole("button", { name: "Collapse topic" }));
+  expect(diff.getByRole("button", { name: "Expand topic" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("link", { name: "Writeup" }));
+  await screen.findByRole("heading", { level: 1, name: item.title });
+  expect(screen.queryByTestId("diff-pane")).toBeNull();
+  fireEvent.click(screen.getByRole("link", { name: "Diff" }));
+  const back = within(await screen.findByTestId("diff-pane"));
+  expect(await back.findByRole("button", { name: "Expand topic" })).toBeTruthy();
+  expect(back.queryByRole("button", { name: "Collapse topic" })).toBeNull();
+});
+
 test("revision picker loads the chosen revision and its commit range", async () => {
   newest = 2;
   openingRevision(

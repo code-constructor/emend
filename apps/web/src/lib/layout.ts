@@ -25,6 +25,15 @@ export function useInboxCollapsed() {
   const { inboxCollapsed } = useLayoutPreferences();
   return [inboxCollapsed, (value: boolean) => layoutStore.update({ inboxCollapsed: value })] as const;
 }
+/** Whether diff topic headers show their details, remembered once per device class. */
+export function useTopicDetails() {
+  const layout = useLayout();
+  const { details } = useLayoutPreferences();
+  return [
+    details[layout],
+    (open: boolean) => layoutStore.update({ details: { ...layoutStore.getSnapshot().details, [layout]: open } }),
+  ] as const;
+}
 export function usePaneMode() {
   const layout = useLayout();
   const { pane } = useLayoutPreferences();

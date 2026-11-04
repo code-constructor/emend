@@ -1,6 +1,6 @@
 import type { FileView } from "@emend/contract";
 import { ChevronDown, ChevronRight, MessageSquarePlus } from "lucide-react";
-import { Fragment } from "react";
+import { Fragment, type Ref } from "react";
 import { ViewedMark } from "../files/ViewedMark.tsx";
 import { IconButton } from "../ui/IconButton.tsx";
 import { FileStatusMark } from "./FileStatusMark.tsx";
@@ -10,7 +10,7 @@ import { ThreadCount } from "./ThreadCount.tsx";
 function Path({ path }: { path: string }) {
   const segments = path.split("/");
   return (
-    <bdi>
+    <bdi dir="ltr">
       {segments.map((segment, index) => (
         // biome-ignore lint/suspicious/noArrayIndexKey: Static path segments may repeat names.
         <Fragment key={index}>
@@ -26,6 +26,7 @@ function Path({ path }: { path: string }) {
 }
 
 export function FileHeader({
+  ref,
   file,
   collapsed,
   counts,
@@ -34,6 +35,7 @@ export function FileHeader({
   onComment,
   onViewed,
 }: {
+  ref?: Ref<HTMLElement>;
   file: FileView;
   collapsed: boolean;
   counts?: DiffCounts;
@@ -43,7 +45,13 @@ export function FileHeader({
   onViewed?: (paths: string[], viewed: boolean) => void;
 }) {
   return (
-    <header id={`diff-file-${file.id}`} data-file-header className="em-file" data-collapsed={collapsed || undefined}>
+    <header
+      ref={ref}
+      id={`diff-file-${file.id}`}
+      data-file-header
+      className="em-file"
+      data-collapsed={collapsed || undefined}
+    >
       <IconButton
         size="sm"
         label={collapsed ? "Expand file" : "Collapse file"}
@@ -58,7 +66,10 @@ export function FileHeader({
         </h4>
         {file.oldPath && (
           <p className="em-file-path text-fg-3" title={`Renamed from ${file.oldPath}`}>
-            Renamed from <Path path={file.oldPath} />
+            <span className="em-file-from-label">Renamed from</span>{" "}
+            <span className="em-file-from">
+              <Path path={file.oldPath} />
+            </span>
           </p>
         )}
       </div>

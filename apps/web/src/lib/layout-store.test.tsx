@@ -18,10 +18,17 @@ test("defaults include independent pane choices and D.4's 12px code size", () =>
     diffStyle: "split",
     wrap: false,
     notes: true,
+    details: { phone: false, tablet: true, desktop: true },
     inboxCollapsed: false,
     proseSize: 16,
     codeSize: 12,
   });
+});
+test("details fall back per device class and keep valid choices", () => {
+  localStorage.setItem(layoutKey, JSON.stringify({ details: { phone: true, tablet: "no", desktop: false } }));
+  expect(createLayoutStore().getSnapshot().details).toEqual({ phone: true, tablet: true, desktop: false });
+  localStorage.setItem(layoutKey, JSON.stringify({ details: "x" }));
+  expect(createLayoutStore().getSnapshot().details).toEqual(defaultLayout.details);
 });
 test("invalid fields fall back independently, including each device choice", () => {
   localStorage.setItem(
