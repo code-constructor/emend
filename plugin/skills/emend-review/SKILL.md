@@ -45,6 +45,13 @@ Set `attention` on every topic. It never changes order.
 
 A `skim` topic starts folded. Never give a topic with real risk `skim`.
 
+Keep tests that only follow the code out of the feature topics. When there are any, put them in
+one topic of their own after every other topic you declare: slug `tests` (`routine-tests` if
+`tests` is taken), title "Tests that follow the code", attention `skim`, importance 99. Give no
+other topic 99. Keep a test file in its feature topic only when it holds something the reviewer
+should look at: an edge case, a tricky setup, a changed expectation, or a removed or weakened
+assertion. Then add a note on those lines that says why.
+
 Make two separate calls for each topic:
 
 - `door`: `one-way` when reverting the code cannot undo an effect, such as deleting stored data

@@ -161,6 +161,11 @@ Use these constraints when writing the manifest:
 - `review`: behaviour worth reading line by line.
 - `skim`: mechanical changes, renames, tests that only follow the code, or wording.
 - A `skim` topic starts folded. Never give a topic with real risk `skim`.
+- Tests that only follow the code, when there are any, go into one topic after every other topic
+  you declare: slug `tests` (`routine-tests` if `tests` is taken), title "Tests that follow the
+  code", attention `skim`, importance 99, which no other topic uses. A test file stays in its
+  feature topic only when it holds an edge case, a tricky setup, a changed expectation, or a
+  removed or weakened assertion, with a note on those lines that says why.
 - Attention never changes order. `importance` alone sorts.
 - `door` is `one-way` or `two-way`.
 - `title` is at most 200 characters; `summary` is at most 2000.
