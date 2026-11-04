@@ -23,9 +23,17 @@ export function useViewedCollapse(reviewId: string, revision: RevisionView) {
     const folded = new Set(server.files.filter((file) => file.viewed === "viewed").map((file) => file.id));
     const pending = new Map<number, Set<string>>();
     for (const change of changes) {
-      if (change.body.revision !== revision.seq || !change.body.viewed || change.status === "error") continue;
+      if (change.body.revision !== revision.seq || change.status === "error") continue;
       const paths = new Set(change.body.paths);
       const ids = revision.files.filter((file) => file.role === "diff" && paths.has(file.path)).map((file) => file.id);
+      if (!change.body.viewed) {
+        // Unmarking Viewed expands the file again.
+        for (const id of ids) {
+          folded.delete(id);
+          for (const files of pending.values()) files.delete(id);
+        }
+        continue;
+      }
       if (change.status === "pending") pending.set(change.id, new Set(ids));
       else for (const id of ids) folded.add(id);
     }
@@ -51,19 +59,25 @@ export function useViewedCollapse(reviewId: string, revision: RevisionView) {
       changes,
       seen: new Set(state.seen),
       folded: new Set(state.folded),
-      pending: new Map(state.pending),
+      // Copy each inner Set: unmarks delete from them, and the previous state keeps its own.
+      pending: new Map([...state.pending].map(([id, files]) => [id, new Set(files)])),
     };
     for (const change of changes) {
       if (!next.seen.has(change.id)) {
         next.seen.add(change.id);
-        if (change.status !== "error" && change.body.viewed && change.body.revision === revision.seq) {
+        if (change.status !== "error" && change.body.revision === revision.seq) {
           const paths = new Set(change.body.paths);
-          next.pending.set(
-            change.id,
-            new Set(
-              revision.files.filter((file) => file.role === "diff" && paths.has(file.path)).map((file) => file.id),
-            ),
-          );
+          const ids = revision.files
+            .filter((file) => file.role === "diff" && paths.has(file.path))
+            .map((file) => file.id);
+          if (change.body.viewed) next.pending.set(change.id, new Set(ids));
+          else {
+            // Unmarking Viewed expands the file again.
+            for (const id of ids) {
+              next.folded.delete(id);
+              for (const files of next.pending.values()) files.delete(id);
+            }
+          }
         }
       }
       const files = next.pending.get(change.id);

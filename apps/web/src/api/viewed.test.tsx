@@ -218,7 +218,7 @@ test("a failed earlier action rolls back without erasing a later queued mark", a
   await waitFor(() => expect(invalidate).toHaveBeenCalledExactlyOnceWith({ queryKey: ["revision", id] }));
 });
 
-test("local folds respect manual expansion while pending, and unmark never expands a manual fold", async () => {
+test("local folds respect manual expansion while pending, and unmarking Viewed expands the file", async () => {
   mount();
   fireEvent.click(viewed("a.ts"));
   await waitFor(() => expect(calls).toHaveLength(1));
@@ -231,10 +231,44 @@ test("local folds respect manual expansion while pending, and unmark never expan
   fireEvent.click(fold("a.ts"));
   fireEvent.click(viewed("a.ts"));
   await waitFor(() => expect(calls).toHaveLength(2));
-  expect(pressed(fold("a.ts"))).toBe("true");
+  expect(calls[1]?.body.viewed).toBe(false);
+  expect(pressed(fold("a.ts"))).toBe("false");
   await act(async () => calls[1]?.reply());
   await waitFor(() => expect(client.isMutating()).toBe(0));
+  expect(pressed(fold("a.ts"))).toBe("false");
+});
+
+test("unmarking while the mark request is pending leaves the file expanded after both resolve", async () => {
+  mount();
+  fireEvent.click(viewed("a.ts"));
+  await waitFor(() => expect(calls).toHaveLength(1));
   expect(pressed(fold("a.ts"))).toBe("true");
+  fireEvent.click(viewed("a.ts"));
+  await waitFor(() => expect(pressed(viewed("a.ts"))).toBe("false"));
+  expect(pressed(fold("a.ts"))).toBe("false");
+  await act(async () => calls[0]?.reply());
+  await waitFor(() => expect(calls).toHaveLength(2));
+  expect(pressed(fold("a.ts"))).toBe("false");
+  await act(async () => calls[1]?.reply());
+  await waitFor(() => expect(client.isMutating()).toBe(0));
+  expect(calls.map(({ body }) => body.viewed)).toEqual([true, false]);
+  expect(pressed(fold("a.ts"))).toBe("false");
+});
+
+test("a fold made by hand on another file survives a Viewed unmark", async () => {
+  server.add("a.ts");
+  client.setQueryData(revisionQuery(id, 1).queryKey, fromServer());
+  mount();
+  expect(pressed(fold("a.ts"))).toBe("true");
+  fireEvent.click(fold("b.ts"));
+  fireEvent.click(viewed("a.ts"));
+  await waitFor(() => expect(calls).toHaveLength(1));
+  expect(pressed(fold("a.ts"))).toBe("false");
+  expect(pressed(fold("b.ts"))).toBe("true");
+  await act(async () => calls[0]?.reply());
+  await waitFor(() => expect(client.isMutating()).toBe(0));
+  expect(pressed(fold("a.ts"))).toBe("false");
+  expect(pressed(fold("b.ts"))).toBe("true");
 });
 
 test("initial and switched revisions collapse viewed files while remote marks preserve current folds", () => {

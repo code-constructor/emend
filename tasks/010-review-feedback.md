@@ -22,7 +22,7 @@ per step, in this order.
 - [x] F.2: fix the flaky comment-lines test at its root cause.
 - [x] F.3: the Writeup uses a wider column, at most about 1000 px, with softer text.
 - [x] F.4: the inbox dims approved and retired reviews.
-- [ ] F.5: unmarking a file as viewed expands it again.
+- [x] F.5: unmarking a file as viewed expands it again.
 - [ ] F.6: Approve asks first.
 - [ ] F.7: the first files in the Diff tab get syntax highlighting.
 - [ ] F.8: comment on a selection on the iPhone, keeping its own selection controls.

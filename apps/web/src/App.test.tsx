@@ -2843,7 +2843,7 @@ test.each([false, true])("viewed mutation collapses optimistically and handles f
   } else {
     fireEvent.click(diff.getByRole("button", { name: "Unmark new.txt as viewed" }));
     await screen.findByRole("tab", { name: "Files 0/1" });
-    expect(diff.getByRole("button", { name: "Expand file" })).toBeTruthy();
+    expect(diff.getByRole("button", { name: "Collapse file" })).toBeTruthy();
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
         `/api/v1/reviews/${id}/viewed`,
