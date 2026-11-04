@@ -20,7 +20,9 @@ task 007.
 - [x] 4.1: `emend publish <path>`, a shortcut for docs.
 - [x] 4.2: the `emend-publish` skill, readout's skill on emend.
 - [ ] 4.3: snooze, retire and delete, next to Approve. You confirmed the snooze proposal.
-- [ ] 4.4: the Send bar says whether an agent waits; one resume command for any agent.
+- [ ] 4.4: the Send bar says whether an agent waits; one resume command for any agent. After a
+      Send, a window waits for the agent to pick it up and shows the resume command if none does;
+      a review shows "Not picked up yet" or "Picked up" from the agent's confirmation.
 - [ ] 4.5: agent commands `emend ls` and `emend status`.
 - [ ] 4.6: built-in features for HTML docs. Waits for your go on plan task 1.12b.
 - [ ] 4.7: any text file as a doc, shown as source.
@@ -38,3 +40,6 @@ You have switched from readout (plan task 4.11), or dropped the switch.
 - 2026-11-03: Slice started. 4.1 landed as e246d9e and 4409261.
 - 2026-11-04: 4.2 landed as fd892f5. 4.3's first commit (contract, database, API and agent side)
   landed as 6f657cf; the web UI follows.
+- 2026-11-04: 4.4 grows a pick-up window after Send and the "Not picked up yet" and "Picked up"
+  states, from your feedback. A pick-up means the agent's CLI confirmed the delivery, never that
+  the agent is working on it.
