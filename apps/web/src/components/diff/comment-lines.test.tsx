@@ -231,9 +231,10 @@ test("typing in a reply does not reconcile all cards or scan gutter rows", async
   await waitFor(() => expect(view.root.querySelector("[data-line]")).toBeTruthy());
   fireEvent.click(view.getByRole("button", { name: "Reply" }));
   await act(async () => {});
+  // Query before spying: happy-dom's computed-style lookup inside getByRole queries the shadow root's stylesheets.
+  const input = view.getByRole("textbox");
   const reconcile = vi.spyOn(commentHighlights, "refreshCommentCards");
   const scan = vi.spyOn(view.root, "querySelectorAll");
-  const input = view.getByRole("textbox");
   for (const value of ["a", "ab", "abc"]) {
     fireEvent.change(input, { target: { value } });
     await act(async () => {});

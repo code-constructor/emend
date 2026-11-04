@@ -19,7 +19,7 @@ per step, in this order.
 
 - [x] F.1: a Send finishes when the server answers, not when the refetch ends; the window after
       Send says when emend cannot reach its server.
-- [ ] F.2: fix the flaky comment-lines test at its root cause.
+- [x] F.2: fix the flaky comment-lines test at its root cause.
 - [ ] F.3: the Writeup uses a wider column, at most about 1000 px, with softer text.
 - [ ] F.4: the inbox dims approved and retired reviews.
 - [ ] F.5: unmarking a file as viewed expands it again.
