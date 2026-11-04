@@ -5,143 +5,103 @@ agent's writeup next to its diff, comment on any of it, press Send, and the wait
 feedback. emend starts on your machine with one command. Machines can attach to a hub, so that you
 review from any device, your phone included.
 
-[VISION.md](VISION.md) says what emend is for, and what it is not.
+[VISION.md](https://github.com/shllg/emend/blob/main/VISION.md) says what emend is for, and what it
+is not.
 
 emend grew out of [hunk-review-skill](https://github.com/vendis-ai/hunk-review-skill), which stays
 maintained alongside it.
 
-Status: in development. The npm package is not published yet; until it is, install from a
-checkout as [Development](#development) says.
+## Requirements
 
-## Install
+Linux or macOS, Node.js 24.18 or newer and git 2.44 or newer.
 
-emend needs Node.js 24.18 or newer and git 2.44 or newer. Install the package with
-[mise](https://mise.jdx.dev) (preferred) or npm:
+## Quick start (one machine)
+
+On macOS, install Node.js and git from Homebrew first:
 
 ```sh
-mise use -g npm:@shllg/emend
-# or
+brew install node git
+```
+
+Then install emend, start it and add its skills:
+
+```sh
 npm install -g @shllg/emend
+emend --version
+emend service install
+emend
+claude plugin marketplace add shllg/emend@release
+claude plugin install emend@emend
+emend skills install
 ```
 
-To keep the server running and start it at login, run `emend service install` first. Then run
-`emend` in a terminal: it starts the server if none runs, and prints a one-time link to the review
-inbox.
+With mise activated in your shell, install with `mise use -g npm:@shllg/emend` instead of the
+`npm` line. `emend service install` runs the server at login, which is recommended. `emend` prints a
+one-time sign-in link. The two `claude plugin` lines add the skills to Claude Code, and
+`emend skills install` adds them for Codex and other agents that read `~/.agents/skills`.
 
-A server that `emend` started keeps running until you stop that `emend serve` process
-(`pgrep -af '[e]mend.mjs serve'` finds it; `pgrep -lf` on macOS). `emend service install` asks
-the emend server that runs for you, whether `emend` started it or you run `emend serve` yourself,
-to stop, so the service can take over. If it reports a server it cannot ask to stop (one from an
-older emend), stop that process yourself, then run it again. Without the service, stop that server
-after you update emend: it keeps running the old version.
+If `node --version` is older than 24.18 or `git --version` older than 2.44, as on many Linux
+distributions and with Apple's git on macOS, follow step 1 of
+[local.md](https://github.com/shllg/emend/blob/release/docs/setup/local.md#1-install-nodejs-and-git)
+first. If your agents run in a sandbox, read
+[Use with sandboxed agents](https://github.com/shllg/emend#use-with-sandboxed-agents) next.
 
-Give your agents the review skills:
+The full walkthrough, with a prompt that lets Claude Code or Codex do it with you, is
+[docs/setup/local.md](https://github.com/shllg/emend/blob/release/docs/setup/local.md).
 
-- Claude Code: `/plugin marketplace add shllg/emend`, then `/plugin install emend@emend`.
-- Codex and other agents that read `~/.agents/skills`: `emend skills install`.
+## Pick your setup
 
-Then let the agents' commands leave their sandbox, as
-[Use with sandboxed agents](#use-with-sandboxed-agents) says.
+Each setup has its own page for Linux and macOS, with a copy-paste prompt for your agent.
+[docs/setup.md](https://github.com/shllg/emend/blob/release/docs/setup.md) is the index, with the
+one-prompt setup.
 
-[docs/setup.md](docs/setup.md) walks through each step, the optional ones included, with a prompt
-for an agent that sets it up together with you.
-
-## Configure
-
-`emend config` lists the settings. `emend config add docRoots <folder>` lets agents publish docs
-from a folder outside their repository. `emend config set openBrowser true` makes `emend` open your
-browser instead of printing a one-time sign-in link. Run these yourself: an agent in its sandbox
-cannot write emend's settings.
-
-## Publish a doc
-
-Publish a Markdown or HTML file and get its review URL:
-
-```sh
-emend publish docs/plan.html
-# http://127.0.0.1:3636/r/<review-id>
-```
-
-Run the same command after editing the file to add a revision at the same URL. Use `--key plan`
-to keep one review when the generated file's path changes, or `--new` to start a separate review.
-`--review <id>` updates a review directly. Add `--json` for the full result; the `--manifest` form
-continues to print JSON.
-
-You can name several files or a folder. A folder bundles its Markdown and HTML docs with the
-assets those HTML docs reference; dotfiles, `.git/` and `node_modules/` are skipped. Symlinks
-leaving the folder are refused. A folder of HTML docs keeps its links and images; Markdown docs
-in a folder do not link to each other or show local images yet.
-
-The default key uses the instance and the sorted, distinct real input paths, so reordering the
-arguments keeps the URL. Adding files inside a named folder also
-keeps it; changing the set of input paths needs `--key` to keep one review.
-
-`--main <path>` selects the opening doc, using its bundled path or its path from the current
-directory. Otherwise emend picks the only doc, `index.html`, the only HTML doc, `index.md`,
-`README.md`, the only Markdown doc, then the first doc in path order. The title comes from
-`--title`, that doc's HTML title or first Markdown `#` heading, then its filename, capped at 200
-characters.
-
-Docs must be in the current worktree or an allowed `docRoots` folder. For another folder, run
-`emend config add docRoots <folder>` yourself first; temporary folders need permission too.
-Publishing while the server is stopped saves the review and prints its URL; run `emend` or
-`emend service install` to open it. An attached machine publishes to its hub.
+| Setup | Suits you if |
+|---|---|
+| [One machine](https://github.com/shllg/emend/blob/release/docs/setup/local.md) | You try emend or review agent work on the machine where the agents run. |
+| [Your own hub on Tailscale](https://github.com/shllg/emend/blob/release/docs/setup/hub-tailscale.md) | You have an always-on machine and want to review from your phone and other devices. |
+| [Attach more machines](https://github.com/shllg/emend/blob/release/docs/setup/attach.md) | You run a hub and want the agents on your other machines to publish to it. |
+| [Set up your agents](https://github.com/shllg/emend/blob/release/docs/setup/agents.md) | emend runs and you want Claude Code, Codex or others to use it, sandbox rules included. |
+| [Update](https://github.com/shllg/emend/blob/release/docs/setup/update.md) | A new version is out. |
+| [Troubleshooting](https://github.com/shllg/emend/blob/release/docs/setup/troubleshooting.md) | A setup or update step fails. |
+| A hub on your own network (a LAN address or your own HTTPS proxy) | Not supported yet; planned. Today Tailscale is the supported way to reach a hub from other devices. |
 
 ## Update
 
 ```sh
-mise upgrade npm:@shllg/emend
-# or
 npm install -g @shllg/emend@latest
+claude plugin marketplace update emend
+claude plugin update emend@emend
 ```
 
-Then run `emend service install` again if you installed the service. It keeps its options and
-restarts the server, so the new version runs. Without the service, stop the server `emend` started;
-the next `emend` starts the new version. Do the same after you upgrade Node.js: the service
-starts emend with the Node.js it was installed with. If you ran `emend skills install`, run it
-again too: mise keeps each version in its own folder, and the command moves the links.
+With mise, run `mise upgrade npm:@shllg/emend` instead of the `npm` line. If you installed the
+service, run `emend service install` again; it keeps its options. If you ran `emend skills install`
+before, run it again. Then restart Claude Code. After `brew upgrade node` or `mise upgrade node`,
+run `emend service install` again too.
 
-Claude Code: `claude plugin marketplace update emend`, then `claude plugin update emend@emend`, and
-restart Claude Code.
+[docs/setup/update.md](https://github.com/shllg/emend/blob/release/docs/setup/update.md) covers the
+order for a hub and its machines, Node.js upgrades and the phone app.
 
 ## Use with sandboxed agents
 
-An agent's sandbox keeps `emend` from reaching its server and writing its state folder, so
-`emend publish` and `emend wait` fail inside it, and emend prints a line that points here. Let the
-four commands agents run leave the sandbox, once per machine, in your own settings. `emend attach`,
-`emend detach` and `emend pair` stay inside it, so an agent cannot attach your machine to a hub.
+Inside an agent's sandbox, `emend publish`, `wait`, `feedback` and `reply` cannot reach the
+emend server or write its state folder, and emend prints a line that points here. Step 3 of
+[docs/setup/agents.md](https://github.com/shllg/emend/blob/release/docs/setup/agents.md#3-use-with-sandboxed-agents)
+says how to let exactly these four commands leave the sandbox, once per machine. Read what that
+allows, and when not to add it, before you do: these commands then run with your full rights.
+Add them only when `emend` on your `PATH` is an install no agent can write, never a development
+checkout. The rules never cover `pair`, `attach` or `detach`, so an agent cannot pair a device or
+attach your machine to a hub.
 
-These commands run with your full rights: they read the named files or folders, the manifest,
-the docs it names and their assets, every changed or new file git does not ignore, and any `--body-file`; they write
-`--save` results; and they store that content in emend's state folder or send it to your emend
-server or hub. Add these rules only when `emend` on your `PATH` is an install no agent can
-write, never a development checkout that agents work in.
+## Uninstall
 
-Claude Code: merge this into `~/.claude/settings.json`.
+Remove what a setup added with its Undo section: [one machine](https://github.com/shllg/emend/blob/release/docs/setup/local.md#undo)
+and [your agents](https://github.com/shllg/emend/blob/release/docs/setup/agents.md#undo). The Undo
+sections of the hub and attach pages cover those setups.
 
-```json
-{
-  "sandbox": {
-    "excludedCommands": ["emend publish *", "emend wait *", "emend feedback *", "emend reply *"]
-  }
-}
-```
+## Usage
 
-Claude Code still asks before it runs each of them. To skip that question, also add
-`Bash(emend publish *)`, `Bash(emend wait *)`, `Bash(emend feedback *)` and `Bash(emend reply *)`
-to `permissions.allow`.
-
-Codex: add a file `~/.codex/rules/emend.rules`.
-
-```python
-prefix_rule(
-    pattern = ["emend", ["publish", "wait", "feedback", "reply"]],
-    decision = "allow",
-)
-```
-
-Codex then runs these four commands outside its sandbox without asking. The MCP server
-(`emend mcp`) needs nothing: agents start MCP servers outside their sandbox.
+[docs/usage.md](https://github.com/shllg/emend/blob/release/docs/usage.md) covers `emend config`
+and publishing docs for review.
 
 ## Development
 
@@ -176,8 +136,10 @@ Claude Code reads the skills from the checkout's `plugin/` folder, uncommitted c
 pulled change takes effect at the next session start or after `/reload-plugins`. For other agents,
 run `emend skills install` once; its links point into the installed package.
 
-`pnpm verify` runs every check. [AGENTS.md](AGENTS.md) holds the working rules.
+`pnpm verify` runs every check. [AGENTS.md](https://github.com/shllg/emend/blob/main/AGENTS.md)
+holds the working rules. Maintainers: [docs/releasing.md](https://github.com/shllg/emend/blob/main/docs/releasing.md)
+holds the release policy and checklist.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](https://github.com/shllg/emend/blob/main/LICENSE).

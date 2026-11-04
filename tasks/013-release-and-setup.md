@@ -26,17 +26,17 @@ attached to their hub, or all of them. The first outside user starts on 2026-11-
 - [x] R.2: `pnpm release <x.y.z>` bumps the versions, drafts `CHANGELOG.md` from the commits since
       the last tag, runs the gate and writes the commit message. It never commits, tags, pushes or
       publishes. `docs/releasing.md` holds the policy and your checklist.
-- [ ] R.4: the docs install the Claude Code plugin from `shllg/emend@release`.
+- [x] R.4: the docs install the Claude Code plugin from `shllg/emend@release`.
 - [ ] You: publish 0.1.0 to npm, then push `main`, the tag and `release`.
 
 6.2 Setup docs:
 
-- [ ] D.1: the README becomes a landing page with absolute links; usage moves to `docs/usage.md`.
-- [ ] D.2: `docs/setup.md` keeps its URL and becomes the index with the one-prompt setup.
-- [ ] D.3 to D.8: `docs/setup/local.md`, `hub-tailscale.md`, `attach.md`, `agents.md`,
+- [x] D.1: the README becomes a landing page with absolute links; usage moves to `docs/usage.md`.
+- [x] D.2: `docs/setup.md` keeps its URL and becomes the index with the one-prompt setup.
+- [x] D.3 to D.8: `docs/setup/local.md`, `hub-tailscale.md`, `attach.md`, `agents.md`,
       `update.md` and `troubleshooting.md`, each for Linux and macOS.
-- [ ] D.9: one prompt per page and one per step, for Claude Code and Codex.
-- [ ] D.10: dry run of the packed tarball with a fresh `EMEND_HOME`, following `local.md`.
+- [x] D.9: one prompt per page and one per step, for Claude Code and Codex.
+- [x] D.10: dry run of the packed tarball with a fresh `EMEND_HOME`, following `local.md`.
 
 6.3 Smooth updates and any network:
 
