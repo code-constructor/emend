@@ -13,6 +13,8 @@ export interface DialogProps {
   onInteractOutside?: ComponentProps<typeof Primitive.Content>["onInteractOutside"];
   /** Gets focus back when the element focused at opening is gone, as a menu item is. */
   returnFocus?: RefObject<HTMLElement | null>;
+  /** Return focus to `returnFocus` even when the element focused at opening is still there (it may be disabled). */
+  preferReturnFocus?: boolean;
 }
 
 export function Dialog({
@@ -24,6 +26,7 @@ export function Dialog({
   onOpenChange,
   onInteractOutside,
   returnFocus,
+  preferReturnFocus = false,
 }: DialogProps) {
   const content = useRef<HTMLDivElement>(null);
   const opener = useRef<HTMLElement | null>(null);
@@ -47,7 +50,8 @@ export function Dialog({
             }
           }}
           onCloseAutoFocus={(event) => {
-            const target = opener.current?.isConnected ? opener.current : returnFocus?.current;
+            const preferred = preferReturnFocus && returnFocus?.current?.isConnected ? returnFocus.current : null;
+            const target = preferred ?? (opener.current?.isConnected ? opener.current : returnFocus?.current);
             if (target) {
               event.preventDefault();
               target.focus();

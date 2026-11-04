@@ -40,6 +40,14 @@ function description(node: HTMLElement) {
     .map((id) => document.getElementById(id)?.textContent)
     .join(" ");
 }
+/** The text of the window after a Send, while an agent has not picked up. */
+const sentText = /No agent has picked this up yet|Waiting for the agent to pick this up/;
+/** Waits for the window after a Send and closes it, so the page behind it is reachable again. */
+async function closeSent() {
+  await screen.findByText(sentText);
+  fireEvent.click(button("Close"));
+  await waitFor(() => expect(screen.queryByText(sentText)).toBeNull());
+}
 function input() {
   return screen.getByRole<HTMLInputElement | HTMLTextAreaElement>("textbox", { name: "Instructions" });
 }
@@ -96,9 +104,8 @@ test("blank instructions do not enable Send and Ctrl+Enter posts the selected mo
   fireEvent.keyDown(instructions, { key: "Enter", ctrlKey: true, isComposing: true });
   expect(fetchMock).not.toHaveBeenCalled();
   fireEvent.keyDown(instructions, { key: "Enter", ctrlKey: true });
-  await screen.findByText("Sent your instructions to the agent");
+  await closeSent();
   expectSend({ revision: 3, kind: "go", mode: "explain", instruction: "  Explain the boundary  " });
-  expect(screen.getByText(`Revision 3 · ${MODE_LABELS.explain}`)).toBeTruthy();
   expect(instructions.value).toBe("");
   expect(button("Send").disabled).toBe(true);
   expect(screen.queryByRole("alert")).toBeNull();
@@ -107,9 +114,8 @@ test("blank instructions do not enable Send and Ctrl+Enter posts the selected mo
 test.each([1, 2])("desktop sends %s comments with the exact existing body and a success toast", async (unsentCount) => {
   mount({ unsentCount });
   fireEvent.click(button(`Send ${unsentCount}`));
-  await screen.findByText(`Sent ${unsentCount} ${unsentCount === 1 ? "comment" : "comments"} to the agent`);
+  await closeSent();
   expectSend({ revision: 3, kind: "go", mode: "fix-clear", instruction: "" });
-  expect(screen.getByText(`Revision 3 · ${MODE_LABELS["fix-clear"]}`).closest('[role="status"]')).toBeTruthy();
 });
 
 test.each([false, true])(
@@ -173,7 +179,7 @@ test.each([false, true])("pending Send disables repeat requests and both actions
   fireEvent.submit(input().closest("form") as HTMLFormElement);
   expect(fetchMock).toHaveBeenCalledOnce();
   await act(async () => pending.resolve(new Response(null, { status: 201 })));
-  await screen.findByText("Sent 1 comment to the agent");
+  await closeSent();
 });
 
 test.each([false, true])(
@@ -190,7 +196,7 @@ test.each([false, true])(
       "This page is out of date. Reload to see the newest revision.",
     );
     expect(input().value).toBe("Keep this instruction");
-    expect(screen.queryByText("Sent your instructions to the agent")).toBeNull();
+    expect(screen.queryByText(sentText)).toBeNull();
     if (phone) expect(screen.getByRole("dialog", { name: "Send feedback" })).toBeTruthy();
   },
 );
@@ -245,16 +251,11 @@ test.each([0, 1, 2])(
       expect(sheet.getByText(`7 / ${LIMITS.instructionChars}`)).toBeTruthy();
     }
     fireEvent.click(send);
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect(
-      screen.getByText(
-        unsentCount
-          ? `Sent ${unsentCount} ${unsentCount === 1 ? "comment" : "comments"} to the agent`
-          : "Sent your instructions to the agent",
-      ),
-    ).toBeTruthy();
-    expect(screen.getByText(`Revision 3 · ${MODE_LABELS["fix-all"]}`)).toBeTruthy();
+    await screen.findByText(sentText);
+    expect(screen.queryByRole("dialog", { name: "Send feedback" })).toBeNull();
+    expect(screen.getByRole("dialog", { name: "Sent" })).toBeTruthy();
     expectSend({ revision: 3, kind: "go", mode: "fix-all", instruction: unsentCount ? "" : "Explain" });
+    await closeSent();
     fireEvent.click(button("Send"));
     expect(input().value).toBe("");
   },
@@ -333,7 +334,8 @@ test.each([
   });
   await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
   await act(async () => pending.resolve(new Response(null, { status: 201 })));
-  await screen.findByText(action === "Approve" ? "Approved revision 3" : "Sent 1 comment to the agent");
+  if (action === "Approve") await screen.findByText("Approved revision 3");
+  else await closeSent();
   if (phone && action === "Send") fireEvent.click(button("Send"));
   activate();
   await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
@@ -350,7 +352,7 @@ test("a multiline phone draft survives desktop editing and Shift+Enter, and post
   expect(fetchMock).not.toHaveBeenCalled();
   fireEvent.change(input(), { target: { value: "First line\nSecond line\nThird line" } });
   fireEvent.keyDown(input(), { key: "Enter", ctrlKey: true });
-  await screen.findByText("Sent your instructions to the agent");
+  await closeSent();
   expectSend({ revision: 3, kind: "go", mode: "fix-clear", instruction: "First line\nSecond line\nThird line" });
 });
 
@@ -391,7 +393,7 @@ test.each([false, true])(
     expect(button(/^Approve/).disabled).toBe(false);
     fireEvent.click(button("Send"));
     if (phone) fireEvent.click(button("Send instructions on revision 2"));
-    await screen.findByText("Sent your instructions to the agent");
+    await closeSent();
     expectSend({ revision: 2, kind: "go", mode: "fix-clear", instruction: "Keep the instruction" });
     fireEvent.click(button(/^Approve/));
     await screen.findByText("Approved revision 2");
@@ -514,7 +516,7 @@ test("phone success closes and clears; a later failure stays open with the draft
   fireEvent.click(button("Send"));
   fireEvent.change(input(), { target: { value: "Successful instruction" } });
   fireEvent.click(button("Send instructions on revision 3"));
-  await screen.findByText("Sent your instructions to the agent");
+  await closeSent();
   expect(screen.queryByRole("dialog")).toBeNull();
   fireEvent.click(button("Send"));
   expect(input().value).toBe("");
@@ -527,7 +529,7 @@ test("phone success closes and clears; a later failure stays open with the draft
   expect(screen.getAllByRole("alert", { hidden: true })).toHaveLength(1);
   // Settlement unlocks a failed request as well as a successful one.
   fireEvent.click(button("Send instructions on revision 3"));
-  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  await closeSent();
   fireEvent.click(button("Send"));
   expect(input().value).toBe("");
   expect(fetchMock).toHaveBeenCalledTimes(3);
@@ -565,8 +567,7 @@ test.each([
       ),
     );
     if (outcome === "success") {
-      await screen.findByText("Sent your instructions to the agent");
-      expect(screen.getByText(`Revision 3 · ${MODE_LABELS["fix-clear"]}`)).toBeTruthy();
+      await closeSent();
       expect(instructions.value).toBe(edit === "instruction" ? "Edited before settlement" : "");
       expect(screen.queryByRole("alert")).toBeNull();
     } else {
@@ -582,7 +583,7 @@ test.each([
     });
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(instructions.value).toBe(""));
-    expect(screen.getByText("Sent your instructions to the agent")).toBeTruthy();
+    expect(screen.getByText(sentText)).toBeTruthy();
     expect(screen.queryByRole("alert")).toBeNull();
     expect(fetchMock).toHaveBeenLastCalledWith(
       `/api/v1/reviews/${reviewId}/sends`,
@@ -616,8 +617,8 @@ test("opening the phone sheet immediately after Approve does not detach its pend
   fireEvent.change(input(), { target: { value: "Follow-up instruction" } });
   fireEvent.click(button("Send instructions on revision 3"));
   await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-  expect(screen.getByText("Sent your instructions to the agent")).toBeTruthy();
+  await screen.findByText(sentText);
+  expect(screen.queryByRole("dialog", { name: "Send feedback" })).toBeNull();
 });
 
 test.each([
@@ -656,9 +657,11 @@ test.each([
       ),
     );
     await waitFor(() => expect(instructions.disabled).toBe(false));
-    await waitFor(() => expect(document.activeElement).toBe(movedFocus ? keepFocus : instructions));
+    // A success opens the window after the Send, which takes focus; only a failure returns it.
+    if (outcome === "failure")
+      await waitFor(() => expect(document.activeElement).toBe(movedFocus ? keepFocus : instructions));
     if (outcome === "success") {
-      expect(screen.getByText("Sent your instructions to the agent")).toBeTruthy();
+      expect(screen.getByText(sentText)).toBeTruthy();
       expect(instructions.value).toBe("");
     } else {
       expect(screen.getByRole("alert").textContent).toBe("Synthetic failure");
@@ -711,7 +714,7 @@ test.each([
     }
     await act(async () => pending.resolve(new Response(null, { status: 201 })));
     await waitFor(() => expect(client.isMutating()).toBe(0));
-    expect(screen.queryByText(action === "Send" ? "Sent 1 comment to the agent" : "Approved revision 3")).toBeNull();
+    expect(screen.queryByText(action === "Send" ? sentText : "Approved revision 3")).toBeNull();
     if (ownToast) expect(screen.getByText("Approved revision 7")).toBeTruthy();
     else expect(screen.getByRole("status").textContent).toBe("");
     expect(input().value).toBe("Keep review B's draft");

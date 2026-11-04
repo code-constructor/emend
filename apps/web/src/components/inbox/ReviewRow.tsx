@@ -3,7 +3,7 @@ import { Link } from "@tanstack/react-router";
 import { MessageSquare, Pencil } from "lucide-react";
 import { plural } from "../../lib/count.ts";
 import { relativeTime, wakeHasPassed, wakeTime } from "../../lib/time.ts";
-import { agentDotClasses, agentStatusLabels, agentStatusOf } from "../status/AgentStatus.tsx";
+import { agentDotClasses, agentStatusOf, agentStatusText } from "../status/AgentStatus.tsx";
 import { OriginBadge } from "../status/OriginBadge.tsx";
 import { StateBadge } from "../status/StateBadge.tsx";
 import { Icon } from "../ui/Icon.tsx";
@@ -96,7 +96,7 @@ export function ReviewRow({
           {agent && agent !== "approved" && (
             <span
               role="img"
-              aria-label={agentStatusLabels[agent]}
+              aria-label={agentStatusText(agent, review.pickedUpAt, now)}
               className={cn("size-[7px] shrink-0 rounded-full", agentDotClasses[agent])}
             />
           )}

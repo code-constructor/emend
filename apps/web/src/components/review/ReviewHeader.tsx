@@ -1,6 +1,6 @@
 import type { ReviewView, RevisionView } from "@emend/contract";
 import { BellOff, FileText, GitBranch, GitCommitHorizontal, MessageSquarePlus } from "lucide-react";
-import type { Ref } from "react";
+import { type Ref, useEffect, useState } from "react";
 import { plural } from "../../lib/count.ts";
 import { wakeHasPassed, wakeTime } from "../../lib/time.ts";
 import { AgentStatus, agentStatusOf } from "../status/AgentStatus.tsx";
@@ -33,6 +33,12 @@ export function ReviewHeader({
   onCommentReview?: () => void;
 }) {
   const agent = agentStatusOf(review);
+  // The same minute clock the inbox rows use, so "Picked up 5m" stays current.
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const interval = window.setInterval(() => setNow(Date.now()), 60_000);
+    return () => window.clearInterval(interval);
+  }, []);
   const commits =
     revision &&
     [revision.base?.slice(0, 7), revision.head === "worktree" ? "working tree" : revision.head?.slice(0, 7)]
@@ -91,12 +97,12 @@ export function ReviewHeader({
             </span>
           </>
         )}
-        {(agent === "waiting" || agent === "none") && (
+        {agent && agent !== "approved" && (
           <>
             <span aria-hidden="true" className="text-line-strong">
               ·
             </span>
-            <AgentStatus status={agent} className="font-normal text-fg-3" />
+            <AgentStatus status={agent} pickedUpAt={review.pickedUpAt} now={now} className="font-normal text-fg-3" />
           </>
         )}
       </div>

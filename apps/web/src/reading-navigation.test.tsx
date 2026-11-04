@@ -620,6 +620,7 @@ test("instructions survive navigation to another review and back, then clear aft
   await screen.findByRole("heading", { name: "Synthetic garden" });
   expect(input().value).toBe("Retain the garden instructions");
   fireEvent.click(screen.getByRole("button", { name: "Send 2" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Close" }));
   await waitFor(() => expect(input().value).toBe(""));
   await act(async () => history.push(`/r/${other}`));
   await screen.findByRole("heading", { name: "Another garden" });

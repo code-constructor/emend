@@ -599,7 +599,7 @@ test("Send counts review-wide unsent comments, defaults mode, limits instruction
       }),
     ),
   );
-  await screen.findByText("Sent 7 comments to the agent");
+  await screen.findByText(/No agent has picked this up yet/);
 });
 test.each([
   ["stale_revision", 409, "This page is out of date. Reload to see the newest revision."],

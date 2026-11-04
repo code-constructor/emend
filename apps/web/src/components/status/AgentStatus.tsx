@@ -1,31 +1,56 @@
 import type { InboxItem } from "@emend/contract";
 import { Check } from "lucide-react";
+import { relativeTime } from "../../lib/time.ts";
 import { Icon } from "../ui/Icon.tsx";
 import { cn } from "../ui/utils.ts";
 
-export function agentStatusOf(review: Pick<InboxItem, "state" | "agentWaiting" | "pendingSend">) {
+export type AgentStatusKey = "approved" | "waiting" | "pending" | "pickedUp";
+
+/** The one state a review shows, by priority: approved, waiting, not picked up, picked up, none. */
+export function agentStatusOf(
+  review: Pick<InboxItem, "state" | "agentWaiting" | "pendingSend" | "pickedUpAt">,
+): AgentStatusKey | null {
   if (review.state === "approved") return "approved";
   if (review.agentWaiting) return "waiting";
-  if (review.pendingSend) return "none";
+  if (review.pendingSend) return "pending";
+  if (review.pickedUpAt) return "pickedUp";
   return null;
 }
 
-export const agentStatusLabels = { waiting: "Agent waiting", none: "No agent waiting", approved: "Approved" };
+export const agentStatusLabels: Record<AgentStatusKey, string> = {
+  approved: "Approved",
+  waiting: "Agent waiting",
+  pending: "Not picked up yet",
+  pickedUp: "Picked up",
+};
 export const agentDotClasses = {
   waiting: "bg-agent-waiting text-agent-waiting animate-[em-pulse_var(--dur-pulse)_var(--ease-out)_infinite]",
-  none: "border-[1.5px] border-agent-none",
+  pending: "border-[1.5px] border-agent-none",
+  pickedUp: "bg-agent-none",
 };
+
+/** The label as plain text, with the relative time after "Picked up". */
+export function agentStatusText(status: AgentStatusKey, pickedUpAt: string | null, now: number): string {
+  const label = agentStatusLabels[status];
+  const when = status === "pickedUp" && pickedUpAt ? relativeTime(pickedUpAt, now) : "";
+  return when ? `${label} ${when}` : label;
+}
 
 export function AgentStatus({
   status,
+  pickedUpAt = null,
+  now = Date.now(),
   pill = false,
   className,
 }: {
-  status: ReturnType<typeof agentStatusOf>;
+  status: AgentStatusKey | null;
+  pickedUpAt?: string | null;
+  now?: number;
   pill?: boolean;
   className?: string;
 }) {
   if (!status) return null;
+  const when = status === "pickedUp" && pickedUpAt ? relativeTime(pickedUpAt, now) : "";
   return (
     <span
       className={cn(
@@ -41,6 +66,7 @@ export function AgentStatus({
         <span aria-hidden="true" className={cn("size-2 shrink-0 rounded-full", agentDotClasses[status])} />
       )}
       <span>{agentStatusLabels[status]}</span>
+      {when && <time dateTime={pickedUpAt ?? undefined}>{when}</time>}
     </span>
   );
 }

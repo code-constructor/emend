@@ -19,6 +19,8 @@ export interface SheetProps {
   onInteractOutside?: ComponentProps<typeof Dialog.Content>["onInteractOutside"];
   initialFocus?: RefObject<HTMLElement | null>;
   returnFocus?: () => HTMLElement | null;
+  /** Called once the sheet has closed and unmounted, after focus went back. */
+  onClosed?: () => void;
 }
 
 const sides = {
@@ -41,6 +43,7 @@ export function Sheet({
   onInteractOutside,
   initialFocus,
   returnFocus,
+  onClosed,
 }: SheetProps) {
   const content = useRef<HTMLDivElement>(null);
   const opener = useRef<HTMLElement | null>(null);
@@ -75,6 +78,7 @@ export function Sheet({
               event.preventDefault();
               target.focus({ preventScroll: true });
             }
+            onClosed?.();
           }}
           {...(description ? {} : { "aria-describedby": undefined })}
           className={cn("fixed z-[calc(var(--z-sheet)+1)] flex flex-col bg-surface text-fg-1 shadow-3", sides[side])}

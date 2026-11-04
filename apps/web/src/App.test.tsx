@@ -426,7 +426,7 @@ test.each([
 test("inbox shows the origin and pending Send without a waiting agent", async () => {
   mount();
   expect(await screen.findByText("Workshop")).toBeTruthy();
-  expect(screen.getByRole("img", { name: "No agent waiting" })).toBeTruthy();
+  expect(screen.getByRole("img", { name: "Not picked up yet" })).toBeTruthy();
   expect(screen.getByRole("link", { name: /Synthetic review/ }).getAttribute("href")).toContain(`/r/${id}`);
 });
 test("moved inbox rows show the destination host without a navigable link", async () => {
@@ -917,7 +917,9 @@ test("review route saves a selected doc span, refreshes its thread, sends it, th
   await screen.findByText("1 unsent comment");
   expect((screen.getByRole("button", { name: /^Approve/ }) as HTMLButtonElement).disabled).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: /^Send(?: \d+)?$/ }));
-  await screen.findByText("Sent 1 comment to the agent");
+  await screen.findByText(/No agent has picked this up yet/);
+  fireEvent.click(screen.getByRole("button", { name: "Close" }));
+  await waitFor(() => expect(screen.queryByText(/No agent has picked this up yet/)).toBeNull());
   expect(screen.getByText("Sent")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
   expect((screen.getByRole("button", { name: /^Approve/ }) as HTMLButtonElement).disabled).toBe(false);
@@ -1964,7 +1966,7 @@ test("inbox row shows machine, title, branch, local time, counts and attention w
   expect(row.querySelector("time")?.title).toBe(new Date(item.updatedAt).toLocaleString());
   expect(row.textContent).toContain("1 open thread");
   expect(row.textContent).toContain("2 unsent");
-  expect(within(row).getByRole("img", { name: "No agent waiting" })).toBeTruthy();
+  expect(within(row).getByRole("img", { name: "Not picked up yet" })).toBeTruthy();
   expect(within(row).getByText("Needs you.").className).toBe("sr-only");
   expect(row.querySelector('[aria-hidden="true"].bg-accent')).toBeTruthy();
 });
@@ -1989,7 +1991,7 @@ test("moved rows are disabled and omit attention, counts and agent glyphs", asyn
   const row = moved.closest('[aria-disabled="true"]');
   expect(row?.tagName).toBe("DIV");
   expect(row?.textContent).not.toMatch(/unsent|open thread|Needs you/);
-  expect(screen.queryByRole("img", { name: "No agent waiting" })).toBeNull();
+  expect(screen.queryByRole("img", { name: "Not picked up yet" })).toBeNull();
   expect(screen.queryByRole("link", { name: /Synthetic review/ })).toBeNull();
 });
 
@@ -2934,4 +2936,37 @@ test("viewed events update boxes without changing folds; focus alone does not re
   } finally {
     focusManager.setFocused(undefined);
   }
+});
+
+test("a confirmed live event refetches the review and the open Send window shows the pick-up", async () => {
+  let pickedUpAt: string | null = null;
+  const fallback = fetchMock.getMockImplementation();
+  fetchMock.mockImplementation(async (path, init) => {
+    if (init?.method === "POST") return new Response(null, { status: 201 });
+    if (path === `/api/v1/reviews/${id}`)
+      return Response.json({
+        ...item,
+        unsentCount: 0,
+        agentWaiting: !pickedUpAt,
+        pendingSend: !pickedUpAt,
+        pickedUpAt,
+        revisions: [{ seq: 1, createdAt: item.updatedAt }],
+      });
+    return fallback?.(path, init) as Promise<Response>;
+  });
+  mount(`/r/${id}`);
+  await screen.findByText("Overview");
+  await waitFor(() => expect(Events.opened).toHaveLength(1));
+  fireEvent.change(screen.getByRole("textbox", { name: "Instructions" }), { target: { value: "Carry on" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  await screen.findByText("Waiting for the agent to pick this up…");
+  pickedUpAt = "2026-03-05T12:00:00.000Z";
+  act(() => {
+    Events.opened[0]?.emit("confirmed", {
+      reviewId: id,
+      revision: 1,
+      deliveryId: "44444444-4444-4444-8444-444444444444",
+    });
+  });
+  await screen.findByText("The agent picked up your feedback.");
 });

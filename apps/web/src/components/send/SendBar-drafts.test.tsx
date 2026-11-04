@@ -417,6 +417,7 @@ test("drafts and saves belong to their review; instructions survive navigation a
   expect(instructions().value).toBe("Review A instructions");
   expect(localStorage.getItem(instructionKey(id))).toBe("Review A instructions");
   fireEvent.click(button("Send"));
+  fireEvent.click(await screen.findByRole("button", { name: "Close" }));
   await waitFor(() => expect(instructions().value).toBe(""));
   expect(localStorage.getItem(instructionKey(id))).toBeNull();
   view.rerender(bar(other));
@@ -453,6 +454,7 @@ test("instructions survive remount with blocked browser storage", async () => {
   mount(bar());
   expect(instructions().value).toBe("Keep in memory");
   fireEvent.click(button("Send"));
+  fireEvent.click(await screen.findByRole("button", { name: "Close" }));
   await waitFor(() => expect(instructions().value).toBe(""));
 });
 

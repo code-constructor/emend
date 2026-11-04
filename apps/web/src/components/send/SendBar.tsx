@@ -1,4 +1,4 @@
-import { DEFAULT_MODE, type GoMode, LIMITS, MODE_LABELS } from "@emend/contract";
+import { DEFAULT_MODE, type GoMode, LIMITS } from "@emend/contract";
 import { Check, Pencil, Send } from "lucide-react";
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { mutationMessage, useReviewMutation } from "../../api/mutations.ts";
@@ -23,6 +23,7 @@ import { Sheet } from "../ui/Sheet.tsx";
 import { Textarea } from "../ui/Textarea.tsx";
 import { useToast } from "../ui/Toast.tsx";
 import { cn } from "../ui/utils.ts";
+import { HandOverNote, HandoffWindow, type SendAgent, type SendBaseline } from "./HandOver.tsx";
 import { ModePicker } from "./ModePicker.tsx";
 import { ReviewActions, type ReviewLifecycle } from "./ReviewActions.tsx";
 
@@ -34,6 +35,7 @@ export function SendBar({
   unsentCount,
   approved = false,
   lifecycle,
+  agent,
   phone = false,
 }: {
   reviewId: string;
@@ -44,6 +46,8 @@ export function SendBar({
   approved?: boolean;
   /** Snooze, retire and delete. Without it the bar has no actions menu. */
   lifecycle?: ReviewLifecycle;
+  /** Whether an agent waits, and when one last picked up or was released. Without it the bar says nothing about the agent. */
+  agent?: SendAgent;
   phone?: boolean;
 }) {
   const [mode, setMode] = useState<GoMode>(DEFAULT_MODE);
@@ -62,6 +66,22 @@ export function SendBar({
     };
   }, []);
   const submitting = useRef(false);
+  const agentNow = useRef(agent);
+  useLayoutEffect(() => {
+    agentNow.current = agent;
+  });
+  const sheetOpenNow = useRef(false);
+  const sendTrigger = useRef<HTMLButtonElement>(null);
+  const [handoff, setHandoff] = useState<SendBaseline | null>(null);
+  // On the phone the window waits until the Send sheet has closed: a dialog opened while another
+  // one closes would start under its modal layer and could leave the page unclickable.
+  const deferred = useRef<SendBaseline | null>(null);
+  const closeHandoff = useCallback(() => setHandoff(null), []);
+  const openDeferred = useCallback(() => {
+    const baseline = deferred.current;
+    deferred.current = null;
+    if (baseline) setHandoff(baseline);
+  }, []);
   const desktopInstructions = useRef<HTMLTextAreaElement>(null);
   useLayoutEffect(() => {
     const field = desktopInstructions.current;
@@ -84,6 +104,11 @@ export function SendBar({
   }, []);
   const mutation = useReviewMutation(reviewId);
   const sending = mutation.isPending || reviewSending;
+  sheetOpenNow.current = sheetOpen;
+  // Without the phone sheet there is nothing to wait for.
+  useEffect(() => {
+    if (!phone) openDeferred();
+  }, [phone, openDeferred]);
   useEffect(() => {
     if (phone) {
       focusDesktop.current = false;
@@ -103,6 +128,8 @@ export function SendBar({
   const revisionStatus = useId();
   const olderReasonId = useId();
   const retired = lifecycle?.state === "settled";
+  // An approved review has nothing left to hand over; a retired one only says when the agent stopped waiting.
+  const showNote = !approved && (!retired || !!agent?.releasedAt);
   const unavailable =
     revision === undefined ? (revisionError ? "Could not load this revision." : "Loading revision…") : undefined;
   const olderReason =
@@ -147,6 +174,13 @@ export function SendBar({
       return;
     if (!beginReviewSend(reviewId)) return;
     submitting.current = true;
+    // Read at click time, before the request: the mutation's own refetch may change these while it
+    // runs, and "picked up" must compare against what the reader saw when they pressed Send.
+    const atSend: SendBaseline = {
+      waited: agentNow.current?.agentWaiting ?? false,
+      pickedUpAt: agentNow.current?.pickedUpAt ?? null,
+      newestRevision: agentNow.current?.newestRevision ?? 0,
+    };
     try {
       await mutation.mutateAsync({
         path: `/api/v1/reviews/${encodeURIComponent(reviewId)}/sends`,
@@ -155,12 +189,9 @@ export function SendBar({
       if (kind === "go") clearDraftIfUnchanged(storageKey, instruction);
       if (!mounted.current) return;
       if (kind === "go") {
+        if (phone && sheetOpenNow.current) deferred.current = atSend;
+        else setHandoff(atSend);
         setSheetOpen(false);
-        toast.show({
-          tone: "success",
-          title: unsentCount > 0 ? `Sent ${commentCount} to the agent` : "Sent your instructions to the agent",
-          description: `Revision ${revision} · ${MODE_LABELS[mode]}`,
-        });
       } else toast.show({ tone: "success", title: `Approved revision ${revision}` });
     } catch {
       // The mutation retains the error for the inline alert.
@@ -249,12 +280,14 @@ export function SendBar({
               side="bottom"
               title="Send feedback"
               open={sheetOpen}
+              onClosed={openDeferred}
               onOpenChange={(open) => {
                 if (open && !submitting.current) mutation.reset();
                 setSheetOpen(open);
               }}
               trigger={
                 <Button
+                  ref={sendTrigger}
                   variant="primary"
                   size="lg"
                   icon={Send}
@@ -332,6 +365,7 @@ export function SendBar({
                   value={instruction}
                   onChange={(event) => changeInstruction(event.target.value)}
                 />
+                {showNote && agent && <HandOverNote reviewId={reviewId} agent={agent} lifecycle={lifecycle} />}
               </form>
             </Sheet>
           </div>
@@ -395,6 +429,22 @@ export function SendBar({
             </Button>
           </div>
         </form>
+      )}
+      {!phone && showNote && agent && (
+        <HandOverNote reviewId={reviewId} agent={agent} lifecycle={lifecycle} className="px-4 pb-2" />
+      )}
+      {handoff && (
+        <HandoffWindow
+          reviewId={reviewId}
+          baseline={handoff}
+          agent={
+            agent ?? { agentWaiting: false, pendingSend: true, pickedUpAt: null, releasedAt: null, newestRevision: 0 }
+          }
+          phone={phone}
+          onClose={closeHandoff}
+          returnFocus={desktopInstructions}
+          returnFocusPhone={() => sendTrigger.current}
+        />
       )}
       {(!phone || !sheetOpen) &&
         (unavailable ||

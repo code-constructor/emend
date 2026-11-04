@@ -1,7 +1,7 @@
 import type { ReviewState } from "@emend/contract";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
-import { AgentStatus, agentStatusOf } from "./AgentStatus.tsx";
+import { AgentStatus, agentStatusOf, agentStatusText } from "./AgentStatus.tsx";
 import { OriginBadge } from "./OriginBadge.tsx";
 import { StateBadge } from "./StateBadge.tsx";
 
@@ -44,21 +44,47 @@ for (const state of states)
   for (const agentWaiting of [false, true])
     for (const pendingSend of [false, true]) {
       test(`agent status for ${state}, waiting=${agentWaiting}, pending=${pendingSend}`, () => {
-        expect(agentStatusOf({ state, agentWaiting, pendingSend })).toBe(
-          state === "approved" ? "approved" : agentWaiting ? "waiting" : pendingSend ? "none" : null,
+        expect(agentStatusOf({ state, agentWaiting, pendingSend, pickedUpAt: null })).toBe(
+          state === "approved" ? "approved" : agentWaiting ? "waiting" : pendingSend ? "pending" : null,
         );
       });
     }
 
 test.each([
   ["waiting", "Agent waiting"],
-  ["none", "No agent waiting"],
+  ["pending", "Not picked up yet"],
+  ["pickedUp", "Picked up"],
   ["approved", "Approved"],
 ] as const)("agent %s is static labelled text", (status, label) => {
   const { container } = render(<AgentStatus status={status} pill />);
   expect(screen.getByText(label)).toBeTruthy();
   expect(screen.queryByRole("status")).toBeNull();
   expect(container.querySelector('[aria-hidden="true"]')).toBeTruthy();
+});
+
+test("label priority: approved, waiting, not picked up, picked up, none", () => {
+  const base = {
+    state: "open" as const,
+    agentWaiting: true,
+    pendingSend: true,
+    pickedUpAt: "2026-03-05T12:00:00.000Z",
+  };
+  expect(agentStatusOf({ ...base, state: "approved" })).toBe("approved");
+  expect(agentStatusOf(base)).toBe("waiting");
+  expect(agentStatusOf({ ...base, agentWaiting: false })).toBe("pending");
+  expect(agentStatusOf({ ...base, agentWaiting: false, pendingSend: false })).toBe("pickedUp");
+  expect(agentStatusOf({ ...base, agentWaiting: false, pendingSend: false, pickedUpAt: null })).toBeNull();
+});
+
+test("picked up shows its relative time in a time element and no pulse", () => {
+  const at = "2026-03-05T12:00:00.000Z";
+  const { container } = render(<AgentStatus status="pickedUp" pickedUpAt={at} now={Date.parse(at) + 5 * 60_000} />);
+  expect(screen.getByText("Picked up")).toBeTruthy();
+  const time = container.querySelector("time");
+  expect(time?.textContent).toBe("5m");
+  expect(time?.getAttribute("dateTime")).toBe(at);
+  expect(container.querySelector('[class*="animate-"]')).toBeNull();
+  expect(agentStatusText("pickedUp", at, Date.parse(at) + 5 * 60_000)).toBe("Picked up 5m");
 });
 
 test("no agent status renders nothing", () => {

@@ -541,6 +541,13 @@ function LoadedReview({
               revisionError={query.isError}
               unsentCount={review.unsentCount}
               approved={review.state === "approved"}
+              agent={{
+                agentWaiting: review.agentWaiting,
+                pendingSend: review.pendingSend,
+                pickedUpAt: review.pickedUpAt,
+                releasedAt: review.releasedAt,
+                newestRevision: review.newestRevision,
+              }}
               lifecycle={{
                 title: review.title,
                 state: review.state,

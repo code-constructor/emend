@@ -9,6 +9,13 @@ export function relativeTime(iso: string, now: number): string {
   return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(date);
 }
 
+/** A calendar date as the reader's clock shows it ("Nov 4"), or "" for a bad date. */
+export function shortDate(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(date);
+}
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Whether a wake time has passed: the server still lists the review as snoozed until the next refetch. */
