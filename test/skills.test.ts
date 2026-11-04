@@ -342,8 +342,14 @@ test("emend-publish stays small, publishes without waiting and names its trigger
   expect(text).not.toContain("emend wait");
   expect(text).not.toContain("emend feedback");
   const description = /^description: (.*)$/m.exec(text)?.[1] ?? "";
-  expect(description).toContain("Use only when the user asks to publish or share a document with emend");
+  expect(description).toContain("Use it when you wrote, or are about to write, such a document");
+  expect(description).toContain("it is not a file the task adds to the repository");
+  expect(description).toContain("Also use it when the user asks to publish or share a document with emend");
+  expect(description).toContain("Not for source code, a hunk-review HTML writeup");
   expect(description).toContain("emend-review");
+  expect(text).toContain("## When to use");
+  expect(text).toContain("Do not publish unasked a file the task adds to the repository");
+  expect(text).toContain("Do not publish a hunk-review HTML writeup with emend yet.");
 });
 
 test.each(docSkills)("%s has no command markers", (path) => {

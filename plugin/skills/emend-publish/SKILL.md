@@ -1,6 +1,6 @@
 ---
 name: emend-publish
-description: Publish a standalone Markdown or HTML document (report, plan, analysis, cheatsheet) with `emend publish <path>` and return its review URL. Use only when the user asks to publish or share a document with emend, or to read it in emend on a phone or another device. Use emend-review for code review.
+description: Publish a standalone Markdown or HTML document for the user to read (report, plan, analysis, cheatsheet) with `emend publish <path>` and return its review URL. Use it when you wrote, or are about to write, such a document and it is not a file the task adds to the repository. Also use it when the user asks to publish or share a document with emend, or to read one on a phone or another device. Not for source code, a hunk-review HTML writeup, or anything the user wants kept out of emend. Use emend-review for code review.
 ---
 
 # Publish a document with emend
@@ -8,6 +8,16 @@ description: Publish a standalone Markdown or HTML document (report, plan, analy
 This skill needs the `emend` command on `PATH`.
 If `emend` is not found, skip publishing, keep the local file and tell the user why.
 Do not try to install emend.
+
+## When to use
+
+Use it when you wrote, or are about to write, a standalone document for the user to read.
+Examples are a report, an analysis, a cheatsheet, a plan meant for reading or a writeup of your work.
+Also use it when the user asks to publish or share a document, or to read one on a phone or another device.
+A document the user asks you to publish may live in the repository.
+Do not publish unasked a file the task adds to the repository, such as docs, specs or tasks.
+Do not use it for source code, for a hunk-review HTML writeup (see "Publish") or for anything the user wants kept out of emend.
+If you already wrote the document elsewhere, such as in a temporary folder, copy it into a doc root as step 1 says.
 
 ## Steps
 

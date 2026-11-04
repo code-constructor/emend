@@ -29,7 +29,9 @@ task 007.
 - [ ] 4.8: larger size limits, measured first.
 - [ ] 4.9: the hosted service and its cost. Discussion, after task 007.
 - [ ] 4.10: sign-in per browser on the phone. You check it during task 007.
-- [ ] You: 4.11, the switch from readout, after task 007 and 4.1–4.4 and 1.12b.
+- [ ] 4.11: the switch from readout. You switched on 2026-11-04, ahead of task 007 and 1.12b, and
+      `emend-publish` now has readout's trigger. Left for you: the sandbox exemptions, and
+      republishing the readout pages you keep before they expire around 2026-12-04.
 
 ## Done when
 
@@ -48,3 +50,6 @@ You have switched from readout (plan task 4.11), or dropped the switch.
 - 2026-11-04: 4.4 grows a pick-up window after Send and the "Not picked up yet" and "Picked up"
   states, from your feedback. A pick-up means the agent's CLI confirmed the delivery, never that
   the agent is working on it.
+- 2026-11-04: You retired readout and switched to emend alone, ahead of task 007. Your phone checks
+  of 4.3 and 4.4 passed. Your call: hunk-review-skill stays publisher-neutral, and the agent's
+  global config decides where a writeup is published.
