@@ -68,7 +68,7 @@ const allowed = [
   "wrangler --help",
   "wrangler --version",
   "git status",
-  "ls /home/sascha/src",
+  "ls /home/someone/src",
   "cat apps/web/home.tsx",
   'echo "$HOME"',
   "env",
