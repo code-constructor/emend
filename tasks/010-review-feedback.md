@@ -1,10 +1,10 @@
 ---
 id: 010
 title: Review feedback from using emend
-status: open
+status: done
 owner: agent + your approval
 depends_on: [005]
-done_on:
+done_on: 2026-11-04
 ---
 
 # 010 — Review feedback from using emend
@@ -30,7 +30,7 @@ per step, in this order.
 - [x] F.10: comments render Markdown, sanitized on the server.
 - [x] F.11: both review skills put tests that only follow the code into one folded skim topic.
 - [x] F.12: the inbox filters by kind: All, Reviews, Published.
-- [ ] You: check that file headers stick under the topic line once E.3 (2c67873) is deployed.
+- [x] You: check that file headers stick under the topic line once E.3 (2c67873) is deployed.
 
 ## Done when
 
@@ -40,3 +40,4 @@ All steps have landed and passed their reviews, and you have checked them in use
 
 - 2026-11-04: Opened from your feedback. GitHub refuses to be framed, so F.9 links out instead of
   showing the PR inline.
+- 2026-11-04: Done. You checked the sticky file headers in use.

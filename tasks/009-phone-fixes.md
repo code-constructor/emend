@@ -1,10 +1,10 @@
 ---
 id: 009
 title: Phone fixes after the hub setup
-status: open
+status: done
 owner: agent + your approval
 depends_on: [005]
-done_on:
+done_on: 2026-11-04
 ---
 
 # 009 — Phone fixes after the hub setup
@@ -38,3 +38,5 @@ All steps have landed and passed their reviews, and you have checked them on the
 - 2026-11-04: E.0 landed as 24591e2. On the phone the Diff tab no longer jumps back to the top.
 - 2026-11-04: E.1 landed as e457ae7; your phone check is still open. E.5 to E.7 added from your
   phone feedback, approved the same day.
+- 2026-11-04: Done. You checked E.1 to E.7 on the phone: the reading position stays, and Wrap in
+  the ⋯ menu works.
