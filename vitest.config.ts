@@ -20,6 +20,7 @@ export default defineConfig({
       })),
       {
         oxc: { jsx: { runtime: "automatic" } },
+        define: { __EMEND_VERSION__: JSON.stringify("0.0.0-test") },
         test: {
           name: "apps/web",
           root: "apps/web",

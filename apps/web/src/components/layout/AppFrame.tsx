@@ -1,25 +1,30 @@
 import { Link, useRouter } from "@tanstack/react-router";
 import {
   ChevronLeft,
+  Download,
   Ellipsis,
   Inbox,
   Link as LinkIcon,
   MessageSquarePlus,
   QrCode,
   RefreshCw,
+  RotateCw,
   Smartphone,
 } from "lucide-react";
 import type { CSSProperties, ReactNode } from "react";
+import { useAppUpdate } from "../../lib/app-update.ts";
 import { useLayout } from "../../lib/layout.ts";
 import { layoutStore, useLayoutPreferences } from "../../lib/layout-store.ts";
 import { requestPairingFromLink } from "../../lib/pairing-intent.ts";
 import { useRefresh } from "../../lib/refresh.ts";
 import { textSizeItems } from "../review/LayoutControls.tsx";
+import { Button } from "../ui/Button.tsx";
 import { Icon } from "../ui/Icon.tsx";
 import { IconButton } from "../ui/IconButton.tsx";
 import { Menu, type MenuItem } from "../ui/Menu.tsx";
 import { useToast } from "../ui/Toast.tsx";
 import { cn } from "../ui/utils.ts";
+import { UpdateGateContext, useUpdateGate } from "./UpdateGate.tsx";
 
 export function AppFrame({
   isReview = false,
@@ -35,6 +40,14 @@ export function AppFrame({
   const router = useRouter();
   const toast = useToast();
   const { refresh, busy } = useRefresh();
+  const update = useAppUpdate();
+  const gate = useUpdateGate();
+  const updateItems: MenuItem[] =
+    update.state === "available"
+      ? [{ label: "Update available", icon: Download, onSelect: () => gate.request("update") }]
+      : update.state === "reload-needed"
+        ? [{ label: "Reload to finish the update", icon: RotateCw, onSelect: () => gate.request("reload") }]
+        : [];
   const refreshItem: MenuItem = { label: "Refresh", icon: RefreshCw, disabled: busy, onSelect: () => void refresh() };
   async function copyLink() {
     try {
@@ -52,6 +65,7 @@ export function AppFrame({
   };
   const menuItems: MenuItem[] = isReview
     ? [
+        ...updateItems,
         refreshItem,
         { label: "Copy link", icon: LinkIcon, onSelect: () => void copyLink() },
         ...(onCommentReview
@@ -79,6 +93,7 @@ export function AppFrame({
         devices,
       ]
     : [
+        ...updateItems,
         refreshItem,
         devices,
         {
@@ -148,7 +163,18 @@ export function AppFrame({
           </div>
         )}
       </header>
-      {children}
+      <div role="status">
+        {update.state === "reload-needed" && (
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-line-1 bg-sunken py-1.5 pr-2 pl-4 text-13 text-fg-2">
+            <p>emend was updated in another window. Reload to keep working.</p>
+            <Button size="sm" icon={RotateCw} onClick={() => gate.request("reload")}>
+              Reload
+            </Button>
+          </div>
+        )}
+      </div>
+      <UpdateGateContext.Provider value={gate.request}>{children}</UpdateGateContext.Provider>
+      {gate.dialog}
     </div>
   );
 }

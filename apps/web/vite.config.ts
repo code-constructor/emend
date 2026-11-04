@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
@@ -49,7 +50,12 @@ function mermaidFrame(): Plugin {
   };
 }
 
+const emendPackage: { version: string } = JSON.parse(
+  readFileSync(fileURLToPath(new URL("../emend/package.json", import.meta.url)), "utf8"),
+);
+
 export default defineConfig({
+  define: { __EMEND_VERSION__: JSON.stringify(emendPackage.version) },
   plugins: [react(), tailwindcss(), mermaidFrame(), diffBuildPruning(), serviceWorker()],
   worker: { format: "es", plugins: () => [diffBuildPruning(true)] },
   build: {

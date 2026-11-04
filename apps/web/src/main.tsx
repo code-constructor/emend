@@ -1,6 +1,7 @@
 import { configureBrowserValidation } from "@emend/contract/browser";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { appUpdate } from "./lib/app-update.ts";
 import { rememberPairingSecret } from "./lib/pairing-secret.ts";
 import "./styles.css";
 
@@ -25,8 +26,4 @@ createRoot(root).render(
   </StrictMode>,
 );
 
-if (import.meta.env.PROD && "serviceWorker" in navigator) {
-  void navigator.serviceWorker.register("/sw.js").catch(() => {
-    // Network or browser policy may prevent installation; the online app remains usable.
-  });
-}
+appUpdate.start();

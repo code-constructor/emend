@@ -132,6 +132,25 @@ export function clearDraftIfUnchanged(key: string, submitted: string) {
   clearDraft(key);
   return true;
 }
+export type UnsavedWork = { saving: boolean; sending: boolean; unstored: boolean };
+/**
+ * What a reload could lose: a save or a send in flight, or text that only this tab's memory holds
+ * because storage could not keep it. Text that localStorage already holds survives a reload.
+ */
+export function unsavedWork(): UnsavedWork {
+  let unstored = false;
+  for (const [key, body] of texts) {
+    if (!body?.trim()) continue;
+    try {
+      if (localStorage.getItem(key) === body) continue;
+    } catch {
+      /* Storage cannot be read, so it cannot be trusted to hold the text. */
+    }
+    unstored = true;
+    break;
+  }
+  return { saving: saving.size > 0 || reviewSaves.size > 0, sending: sending.size > 0, unstored };
+}
 export function isDraftSaving(key: string) {
   return saving.has(key);
 }

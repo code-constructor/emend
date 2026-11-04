@@ -229,12 +229,14 @@ test.each(["/pairs#x", "/pair/x#y"])("startup and navigation leave %s alone", as
 
 test.each([false, true])("registers the root service worker only in production (%s)", async (production) => {
   vi.stubEnv("PROD", production);
-  const register = vi.fn(async () => ({}));
-  vi.stubGlobal("navigator", { serviceWorker: { register } });
+  const registration = { waiting: null, installing: null, update: vi.fn(async () => {}), addEventListener() {} };
+  const register = vi.fn(async () => registration);
+  vi.stubGlobal("navigator", { serviceWorker: { register, controller: null, addEventListener() {} } });
   window.history.replaceState(null, "", "/pair");
   try {
     await boot();
     expect(register.mock.calls).toEqual(production ? [["/sw.js"]] : []);
+    await waitFor(() => expect(registration.update).toHaveBeenCalledTimes(production ? 1 : 0));
   } finally {
     vi.unstubAllEnvs();
   }

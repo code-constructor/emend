@@ -43,8 +43,10 @@ test("built frame rejects diagram theme overrides without dynamic code generatio
   const handlers = new Map<string, (event: unknown) => void>();
   const addAll = vi.fn(async (_urls: string[]) => {});
   const respondWith = vi.fn();
+  const skipWaiting = vi.fn(async () => {});
   runInNewContext(String(serviceWorker.source), {
     URL,
+    skipWaiting,
     location: { origin: "https://hub.example.ts.net" },
     caches: { open: async () => ({ addAll }) },
     addEventListener: (type: string, handler: (event: unknown) => void) => handlers.set(type, handler),
@@ -79,6 +81,24 @@ test("built frame rejects diagram theme overrides without dynamic code generatio
       respondWith,
     });
   expect(respondWith).not.toHaveBeenCalled();
+  // Installing never skips waiting; only the exact message does.
+  expect(skipWaiting).not.toHaveBeenCalled();
+  for (const data of [
+    undefined,
+    null,
+    "SKIP_WAITING",
+    ["SKIP_WAITING"],
+    {},
+    { type: "skip_waiting" },
+    { type: "OTHER" },
+    { type: { type: "SKIP_WAITING" } },
+    { data: { type: "SKIP_WAITING" } },
+    { type: "SKIP_WAITING", extra: true },
+  ])
+    handlers.get("message")?.({ data });
+  expect(skipWaiting).not.toHaveBeenCalled();
+  handlers.get("message")?.({ data: { type: "SKIP_WAITING" } });
+  expect(skipWaiting).toHaveBeenCalledTimes(1);
   expect(workerModules.size).toBeGreaterThan(0);
   expect([...workerModules.keys()].some((name) => /\/worker-/.test(name))).toBe(true);
   for (const [name, modules] of workerModules) {

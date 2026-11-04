@@ -14,7 +14,9 @@ const worker = globalThis as unknown as {
   caches: CacheStorage;
   fetch: typeof fetch;
   clients: { claim(): Promise<void> };
+  skipWaiting(): Promise<void>;
   addEventListener(type: "install" | "activate", handler: (event: WorkerEvent) => void): void;
+  addEventListener(type: "message", handler: (event: { data?: unknown }) => void): void;
   addEventListener(type: "fetch", handler: (event: FetchEvent) => void): void;
 };
 const name = `${SHELL_CACHE_PREFIX}${__EMEND_BUILD_ID__}`;
@@ -23,6 +25,14 @@ worker.addEventListener("install", (event) => {
 });
 worker.addEventListener("activate", (event) => {
   event.waitUntil(activateShell(worker.caches, name).then(() => worker.clients.claim()));
+});
+// A waiting worker activates only when the reviewer asks for it, with exactly this message.
+worker.addEventListener("message", (event) => {
+  const data = event.data;
+  if (typeof data !== "object" || data === null || Array.isArray(data)) return;
+  const keys = Object.keys(data);
+  if (keys.length === 1 && keys[0] === "type" && Reflect.get(data, "type") === "SKIP_WAITING")
+    void worker.skipWaiting();
 });
 worker.addEventListener("fetch", (event) => {
   const route = routeShellRequest(event.request, worker.location.origin, __EMEND_SHELL__);

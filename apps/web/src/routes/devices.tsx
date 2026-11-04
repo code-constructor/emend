@@ -1,15 +1,85 @@
 import { DeviceList, type DeviceView } from "@emend/contract";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, Outlet, useRouter } from "@tanstack/react-router";
-import { LogOut, MonitorSmartphone, QrCode, Server } from "lucide-react";
+import { Download, LogOut, MonitorSmartphone, QrCode, RefreshCw, RotateCw, Server } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ApiError, change, get } from "../api/client.ts";
 import { AppFrame } from "../components/layout/AppFrame.tsx";
+import { useRequestUpdate } from "../components/layout/UpdateGate.tsx";
 import { Button } from "../components/ui/Button.tsx";
 import { Dialog } from "../components/ui/Dialog.tsx";
 import { Icon } from "../components/ui/Icon.tsx";
+import { type AppUpdateSnapshot, appUpdate, buildTag, useAppUpdate } from "../lib/app-update.ts";
 import { requestPairingFromLink } from "../lib/pairing-intent.ts";
-import { relativeTime } from "../lib/time.ts";
+import { checkedText, relativeTime } from "../lib/time.ts";
+
+function updateStatus(update: AppUpdateSnapshot) {
+  switch (update.state) {
+    case "unsupported":
+      return "Updates need the installed app over a secure connection.";
+    case "checking":
+      return "Checking for updates…";
+    case "current":
+      return "This is the newest version.";
+    case "available":
+      return "An update is ready.";
+    case "updating":
+      return "Updating…";
+    case "reload-needed":
+      return "Another window installed an update. Reload to use it.";
+    case "error":
+      return `Could not check for updates: ${update.reason ?? "the check failed"}.`;
+    default:
+      return "";
+  }
+}
+
+function AppSection({ now }: { now: number }) {
+  const update = useAppUpdate();
+  const request = useRequestUpdate();
+  const tag = buildTag();
+  const busy = update.state === "checking" || update.state === "updating";
+  const checked = update.checkedAt === null ? "" : checkedText(new Date(update.checkedAt).toISOString(), now);
+  return (
+    <section aria-labelledby="app-heading" className="mt-10">
+      <h2 id="app-heading" className="text-18 font-semibold leading-(--lh-snug)">
+        App
+      </h2>
+      <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-line-1 bg-surface px-3.5 py-3">
+        <div className="min-w-0 flex-1 basis-60">
+          <p className="text-14 font-semibold">{`emend ${__EMEND_VERSION__}${tag ? ` (${tag})` : ""}`}</p>
+          <p aria-live="polite" className="mt-0.5 text-12 text-fg-3">
+            {updateStatus(update)}
+          </p>
+          {checked && update.state !== "unsupported" && <p className="text-12 text-fg-3">{checked}</p>}
+        </div>
+        {update.state === "available" && (
+          <Button size="sm" variant="primary" icon={Download} onClick={() => request("update")}>
+            Update now
+          </Button>
+        )}
+        {update.state === "reload-needed" && (
+          <Button size="sm" variant="primary" icon={RotateCw} onClick={() => request("reload")}>
+            Reload
+          </Button>
+        )}
+        {update.state !== "unsupported" && (
+          // aria-disabled, not disabled: the button keeps keyboard focus while a check runs.
+          <Button
+            size="sm"
+            icon={RefreshCw}
+            aria-disabled={busy}
+            onClick={() => {
+              if (!busy) void appUpdate.checkForUpdate();
+            }}
+          >
+            Check for update
+          </Button>
+        )}
+      </div>
+    </section>
+  );
+}
 
 export function DevicesPage() {
   const router = useRouter();
@@ -109,6 +179,7 @@ export function DevicesPage() {
               ))}
             </ul>
           )}
+          <AppSection now={now} />
         </div>
       </main>
       {selected && (
