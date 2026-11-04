@@ -12,6 +12,7 @@
 @import "./styles/diff.css";
 @import "./styles/files.css";
 @import "./styles/layout.css";
+@import "./styles/touch-fields.css";
 
 @layer components {
   @media (prefers-reduced-motion: no-preference) {

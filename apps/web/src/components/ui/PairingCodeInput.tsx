@@ -68,6 +68,7 @@ export function PairingCodeInput({
       <input
         {...props}
         id={field.id}
+        data-own-size
         type="text"
         value={displayed}
         maxLength={9}

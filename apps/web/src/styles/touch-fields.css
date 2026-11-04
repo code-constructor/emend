@@ -1,0 +1,25 @@
+/* iOS Safari zooms the page in when a focused text field is under 16px and does not zoom back out.
+   Touch screens get 16px on every text-entry field, once, here. The rule is deliberately outside
+   every cascade layer: unlayered styles beat all layers, including Tailwind's utilities, so no
+   per-field text-13 or text-14 class can override it. A field of 16px or more sets data-own-size
+   and keeps its size. The viewport meta stays zoomable. */
+@media (hover: none) and (pointer: coarse) {
+  input:not(
+    [type="checkbox"],
+    [type="radio"],
+    [type="button"],
+    [type="submit"],
+    [type="reset"],
+    [type="range"],
+    [type="file"],
+    [type="color"],
+    [type="image"],
+    [type="hidden"],
+    [data-own-size]
+  ),
+  textarea:not([data-own-size]),
+  select:not([data-own-size]),
+  [contenteditable]:not([contenteditable="false"], [data-own-size]) {
+    font-size: 16px;
+  }
+}
