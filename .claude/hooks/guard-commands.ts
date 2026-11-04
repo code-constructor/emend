@@ -10,7 +10,7 @@
 //   1. A raw-text backstop that ignores quoting, escapes and variables.
 //   2. A structured pass over segments, wrappers, package scripts, script files and git.
 import { execFileSync } from "node:child_process";
-import { lstatSync, readFileSync } from "node:fs";
+import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -44,7 +44,18 @@ const GIT_TIMEOUT_MS = 1500;
 
 let deadline = Number.POSITIVE_INFINITY;
 
+export type BranchPolicy = "main-only" | "feature-branches";
+// Until the first release all work lands on main and agents never push. Setting this to
+// "feature-branches" is how feature-branch pull request work starts; change it together with the
+// Delivery section of AGENTS.md.
+const AGENT_BRANCH_POLICY: BranchPolicy = "main-only";
+
 const PUSH_MESSAGE = "Agents never push in this repo. The owner pushes.";
+const FEATURE_PUSH_MESSAGE =
+  "Push only a named feature branch, never main, a tag, a deletion or a forced push. The owner merges.";
+const FORCE_MESSAGE = `Plain force pushes are not allowed. Use --force-with-lease --force-if-includes. ${FEATURE_PUSH_MESSAGE}`;
+const pushMessage = (policy: BranchPolicy): string =>
+  policy === "feature-branches" ? FEATURE_PUSH_MESSAGE : PUSH_MESSAGE;
 const COMMIT_HINT =
   "If this is only a commit message, write it to a file and use `git commit -F <file>`. " +
   "Inside the sandbox, `.git` is read-only, so follow the global commit-signing rule instead.";
@@ -188,8 +199,108 @@ const WRANGLER_TOKEN = /(?:^|\/)(?:cf-)?wrangler2?(?:@[^/\s]*)?(?:\.js)?$/;
 const ENV_NAMES =
   /(?<![a-z0-9_])(?:git_config\w*|git_dir|git_work_tree|git_ssh\w*|git_exec_path|git_askpass|claudecode|claude_code_\w*|codex_\w*|cloudflare_\w*|wrangler_\w*)(?![a-z0-9_])/;
 
+// Names that redirect git, gh or a shell to configuration the agent wrote. A name is blocked wherever
+// it appears as a whole identifier (case-sensitive, not next to [A-Za-z0-9_]); only reads, `$NAME`
+// and `${NAME...}` without an `=` inside the braces, are allowed.
+const REDIRECT_NAME = /(?<![A-Za-z0-9_])(?:HOME|XDG_CONFIG_HOME|BASH_ENV|ENV|ZDOTDIR|GH_[A-Z0-9_]*)(?![A-Za-z0-9_])/g;
+const REDIRECT_NAME_EXACT = /^(?:HOME|XDG_CONFIG_HOME|BASH_ENV|ENV|ZDOTDIR|GH_[A-Z0-9_]*)$/;
+const IFS_SPACE = "(?:\\s|\\$\\{IFS\\}|\\$IFS)";
+// A `$` where a variable name goes: the name is then built at runtime, so it cannot be checked.
+const DYNAMIC_NAME_POSITIONS = [
+  new RegExp("\\b(?:export|declare|typeset|readonly|local)" + IFS_SPACE + "+(?:-[-\\w]*" + IFS_SPACE + "+)*[^\\s=]*\\$"),
+  /\b(?:printf|print)\s+(?:\S+\s+)*?-v\s*\$/,
+  /\bread\b[^;&|\n<]*\s\$/,
+  /\bgetopts\s+\S+\s+\$/,
+  // A `$` in a let argument, a nameref target (`declare -n R=$X$Y`), the legacy `$[ ]` arithmetic, or
+  // an assignment through a zsh `${(P)...}` expansion builds or reaches a name at runtime.
+  /\blet\b[^;&|\n]*\$/,
+  /\b(?:declare|typeset|local)\s+(?:-\w+\s+)*-\w*n\w*\s+[^\s;&|]*\$/,
+  /\$\[/,
+  /\$\{\([^)]*P[^)]*\)[^;&|\n]*=/,
+];
+
+/** The first protected name in `text` that is not just read. */
+function redirectNameIn(text: string): string | null {
+  for (const match of text.matchAll(REDIRECT_NAME)) {
+    const before = text.slice(0, match.index);
+    if (before.endsWith("$")) continue;
+    if (before.endsWith("${")) {
+      const rest = text.slice(match.index + match[0].length);
+      const close = rest.indexOf("}");
+      if (close !== -1 && !rest.slice(0, close).includes("=")) continue;
+    }
+    return match[0];
+  }
+  return null;
+}
+
+const CLEARS_ENVIRONMENT =
+  "env -i, env - and exec -c are blocked: they clear the environment, which drops the owner's git and gh settings";
+
+/**
+ * Why `env`/`exec` flags in `tokens` are blocked, or null: `env -i`, `env -`, `env --ignore-environment`
+ * and `exec -c` clear the environment the guard checks, and `env -uNAME` unsets a protected name.
+ */
+function envFlagReason(tokens: string[]): string | null {
+  for (let i = 0; i < tokens.length; i += 1) {
+    const program = path.posix.basename(tokens[i]);
+    if (program !== "env" && program !== "exec") continue;
+    // Letters that take a value: the rest of the cluster (or the next word) is that value.
+    const valueLetters = program === "env" ? "uCSP" : "a";
+    const clearLetter = program === "env" ? "i" : "c";
+    for (let j = i + 1; j < tokens.length; j += 1) {
+      const t = tokens[j];
+      if (!t.startsWith("-")) {
+        if (t.includes("=") && program === "env") continue;
+        break;
+      }
+      if (program === "env" && (t === "-" || t === "--ignore-environment")) return CLEARS_ENVIRONMENT;
+      if (t === "--") break;
+      if (t.startsWith("--")) continue;
+      for (let k = 1; k < t.length; k += 1) {
+        if (t[k] === clearLetter) return CLEARS_ENVIRONMENT;
+        if (valueLetters.includes(t[k])) {
+          if (t[k] === "u" && REDIRECT_NAME_EXACT.test(t.slice(k + 1))) {
+            return `environment variable ${t.slice(k + 1)} is blocked: it can point git, gh or the shell at configuration the agent wrote`;
+          }
+          if (k === t.length - 1) j += 1;
+          break;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Blocks commands that could redirect git, gh or the shell. A reader or `printenv` segment is skipped
+ * only when it has no `$`, because an expansion such as `${HOME::=x}` can assign inside a reader.
+ */
+function envRedirectReason(command: string): string | null {
+  for (const segment of segments(command)) {
+    const text = segment.join(" ");
+    // A reader that starts the segment only reads. Leading assignments or wrappers keep it a command.
+    const plainReader = isReaderSegment(segment) && unwrap(segment).argv[0] === segment[0];
+    if ((plainReader || path.posix.basename(segment[0] ?? "") === "printenv") && !text.includes("$")) continue;
+    const name = redirectNameIn(text);
+    if (name !== null) {
+      return `environment variable ${name} is blocked: it can point git, gh or the shell at configuration the agent wrote`;
+    }
+    const flagReason = envFlagReason(segment);
+    if (flagReason !== null) return flagReason;
+  }
+  // Raw segments keep parentheses, which the zsh `${(P)...}` form needs.
+  for (const segment of rawSegments(command)) {
+    const text = segment.join(" ");
+    if (DYNAMIC_NAME_POSITIONS.some((pattern) => pattern.test(text))) {
+      return "a variable name built at runtime is blocked: it could set HOME or a gh variable. Write the name out";
+    }
+  }
+  return null;
+}
+
 function isAssignment(token: string): boolean {
-  return /^[A-Za-z_][A-Za-z0-9_]*=/.test(token);
+  return /^[A-Za-z_][A-Za-z0-9_]*\+?=/.test(token);
 }
 
 /** The program name: basename without an `@version` suffix, a `.js` suffix or a leading `=`. */
@@ -545,12 +656,16 @@ function layer1(command: string): Layer1 {
     }
   }
 
-  const envName = ENV_NAMES.exec(command.toLowerCase())?.[0];
+  // Quotes and backslashes can split a name (`export H\\OME=x`), so look at a copy without them.
+  const bare = command.toLowerCase().replace(/[\\'"]/g, "");
+  const envName = ENV_NAMES.exec(bare)?.[0];
   if (envName !== undefined) {
     return stop(
       `environment variable ${envName.toUpperCase()} is blocked: it can change git, Claude Code, Codex, Cloudflare or wrangler behavior`,
     );
   }
+  const redirectReason = envRedirectReason(command);
+  if (redirectReason !== null) return stop(redirectReason);
 
   if (
     allTokens.some(
@@ -609,6 +724,8 @@ function layer1(command: string): Layer1 {
 
 interface Run {
   ctx: GuardContext;
+  /** Whether agents may push feature branches. */
+  policy: BranchPolicy;
   depth: number;
   /** The working directory after literal `cd` commands, or null when unknown. */
   dir: string | null;
@@ -698,36 +815,60 @@ function validBranch(b: string): boolean {
 
 function checkPush(rest: string[], run: Run, dir: string | null): string | null {
   const positional: string[] = [];
+  let lease = false;
+  let includes = false;
   for (const a of rest) {
     if (a.startsWith("-")) {
+      if (positional.length === 0 && run.policy === "feature-branches") {
+        // Rebasing a pull request branch needs a lease; a plain force could overwrite others' work.
+        if (a === "--force-if-includes") {
+          includes = true;
+          continue;
+        }
+        if (a === "--force-with-lease") {
+          lease = true;
+          continue;
+        }
+        if (a === "--force" || /^-[A-Za-z]*f[A-Za-z]*$/.test(a)) return FORCE_MESSAGE;
+      }
       if (positional.length > 0 || !PUSH_OPTIONS.has(a)) {
-        return `git push ${a} is not allowed. ${PUSH_MESSAGE}`;
+        return `git push ${a} is not allowed. ${pushMessage(run.policy)}`;
       }
     } else {
       positional.push(a);
     }
   }
-  if (positional.length !== 2) return `git push needs exactly a remote and a branch. ${PUSH_MESSAGE}`;
+  // A lease needs both flags, and only the bare form: a lease value can name a tag or notes ref.
+  if (lease !== includes) return FORCE_MESSAGE;
+  if (positional.length !== 2) return `git push needs exactly a remote and a branch. ${pushMessage(run.policy)}`;
   const [remote, ref] = positional;
   if (!/^[A-Za-z0-9._-]+$/.test(remote)) {
-    return `git push to remote "${remote}" is not allowed. ${PUSH_MESSAGE}`;
+    return `git push to remote "${remote}" is not allowed. ${pushMessage(run.policy)}`;
   }
+  if (run.policy === "feature-branches" && ref.startsWith("+")) return FORCE_MESSAGE;
   const colon = ref.indexOf(":");
   let branch = ref;
   if (colon !== -1) {
     const src = ref.slice(0, colon);
     branch = ref.slice(colon + 1);
-    if (src !== "HEAD" && src !== branch) return `git push ${ref} is not allowed. ${PUSH_MESSAGE}`;
+    if (src !== "HEAD" && src !== branch) return `git push ${ref} is not allowed. ${pushMessage(run.policy)}`;
   }
-  if (!validBranch(branch)) return `git push ${ref} is not allowed. ${PUSH_MESSAGE}`;
   const where = requireDir(dir, "git push");
-  if (run.ctx.tagNames(where).has(branch)) return `git push ${ref} names a tag. ${PUSH_MESSAGE}`;
+  if (run.policy === "feature-branches" && colon === -1 && branch === "HEAD") {
+    const current = run.ctx.currentBranch(where);
+    if (current === null) return `git push HEAD needs a checked-out branch. ${pushMessage(run.policy)}`;
+    branch = current;
+  }
+  if (!validBranch(branch)) return `git push ${ref} is not allowed. ${pushMessage(run.policy)}`;
+  if (run.ctx.tagNames(where).has(branch)) return `git push ${ref} names a tag. ${pushMessage(run.policy)}`;
   const followTags = run.ctx.pushConfig(where)["push.followtags"];
   if (followTags !== undefined && /^(?:true|yes|on|1)$/i.test(followTags.trim())) {
-    return `git config push.followTags is true, so this push would send tags. ${PUSH_MESSAGE}`;
+    return `git config push.followTags is true, so this push would send tags. ${pushMessage(run.policy)}`;
   }
-  // Even a well-formed push to a feature branch publishes it: the repo is public.
-  return `git push ${ref} is blocked. ${PUSH_MESSAGE}`;
+  // In main-only mode even a well-formed push to a feature branch is blocked.
+  if (run.policy === "main-only") return `git push ${ref} is blocked. ${pushMessage(run.policy)}`;
+  run.pushes += 1;
+  return null;
 }
 
 function aliasPushes(name: string, aliases: Record<string, string>, depth = 0): boolean {
@@ -789,18 +930,18 @@ function checkGit(args: string[], run: Run, xargs: boolean): string | null {
   const lower = sub.toLowerCase();
 
   if (BLOCKED_GIT_SUBS.has(lower)) {
-    return `git ${sub} is blocked: it pushes or applies patches that can change the guard files. ${PUSH_MESSAGE}`;
+    return `git ${sub} is blocked: it pushes or applies patches that can change the guard files. ${pushMessage(run.policy)}`;
   }
   if (lower.startsWith("credential")) {
     return `git ${sub} is blocked: it handles credentials`;
   }
   if (lower === "push") {
     if (globalOptions.length > 0) {
-      return `git ${globalOptions[0]} before push is not allowed. ${PUSH_MESSAGE}`;
+      return `git ${globalOptions[0]} before push is not allowed. ${pushMessage(run.policy)}`;
     }
-    if (xargs) return `git push with arguments from xargs is not allowed. ${PUSH_MESSAGE}`;
+    if (xargs) return `git push with arguments from xargs is not allowed. ${pushMessage(run.policy)}`;
     if (run.tagPresent) {
-      return `this command also creates a tag, so the push is not allowed. ${PUSH_MESSAGE}`;
+      return `this command also creates a tag, so the push is not allowed. ${pushMessage(run.policy)}`;
     }
     return checkPush(rest, run, dir);
   }
@@ -808,7 +949,7 @@ function checkGit(args: string[], run: Run, xargs: boolean): string | null {
 
   const aliases = run.ctx.aliases(requireDir(dir, "git aliases"));
   if (aliasPushes(lower, aliases)) {
-    return `git ${sub} is an alias that pushes or runs a shell command. ${PUSH_MESSAGE}`;
+    return `git ${sub} is an alias that pushes or runs a shell command. ${pushMessage(run.policy)}`;
   }
   if (lower === "config") return checkGitConfig(rest);
   return null;
@@ -824,79 +965,187 @@ function checkGitConfig(args: string[]): string | null {
   return "git config writes are the owner's step. Only reads are allowed: --get, --get-all, --get-regexp, --list, --show-origin, --show-scope or a single key";
 }
 
-function ghMethods(args: string[]): string[] {
-  const methods: string[] = [];
+/** Short `gh api` flags that take a value, and those that do not. Any other letter blocks. */
+const GH_API_VALUE_FLAGS = new Set(["X", "f", "F", "H", "q", "t", "p"]);
+const GH_API_PLAIN_FLAGS = new Set(["i", "s", "h"]);
+
+/** Long `gh api` flags that take a value (the next argument unless written with `=`), and those that do not. */
+const GH_API_LONG_VALUE_FLAGS = new Set([
+  "method",
+  "header",
+  "jq",
+  "template",
+  "preview",
+  "cache",
+  "hostname",
+  "input",
+  "field",
+  "raw-field",
+]);
+const GH_API_LONG_PLAIN_FLAGS = new Set(["include", "paginate", "slurp", "silent", "verbose", "help"]);
+
+/**
+ * Reads the HTTP method and field flags of `gh api`, including clustered short flags such as
+ * `-iXPUT` or `-iX PUT`, and consumes the value of every value-taking flag so that a value such as
+ * `-XGET` after `--preview` is not mistaken for a flag. A flag the guard cannot parse is reported
+ * as unparseable.
+ */
+function ghApiFlags(args: string[]): { methods: string[]; writes: boolean; unparseable: boolean } {
+  const out = { methods: [] as string[], writes: false, unparseable: false };
   for (let i = 0; i < args.length; i += 1) {
     const a = args[i];
-    if (a === "-X" || a === "--method") methods.push((args[i + 1] ?? "").toUpperCase());
-    else if (a.startsWith("--method=")) methods.push(a.slice("--method=".length).toUpperCase());
-    else if (/^-X./.test(a)) methods.push(a.slice(2).toUpperCase());
+    if (a.startsWith("--")) {
+      const eq = a.indexOf("=");
+      const name = eq === -1 ? a.slice(2) : a.slice(2, eq);
+      if (GH_API_LONG_VALUE_FLAGS.has(name)) {
+        const value = eq === -1 ? (args[(i += 1)] ?? "") : a.slice(eq + 1);
+        if (name === "method") out.methods.push(value.toUpperCase());
+        else if (name === "field" || name === "raw-field" || name === "input") out.writes = true;
+      } else if (!GH_API_LONG_PLAIN_FLAGS.has(name) || eq !== -1) {
+        out.unparseable = true;
+      }
+    } else if (/^-[^-]/.test(a)) {
+      for (let j = 1; j < a.length; j += 1) {
+        const letter = a[j];
+        if (GH_API_VALUE_FLAGS.has(letter)) {
+          const rest = a.slice(j + 1).replace(/^=/, "");
+          const value = rest !== "" ? rest : (args[(i += 1)] ?? "");
+          if (letter === "X") out.methods.push(value.toUpperCase());
+          else if (letter === "f" || letter === "F") out.writes = true;
+          break;
+        }
+        if (!GH_API_PLAIN_FLAGS.has(letter)) {
+          out.unparseable = true;
+          break;
+        }
+      }
+    }
   }
-  return methods;
+  return out;
 }
 
-function checkGh(args: string[]): string | null {
+/** The read-only actions of each gh group (gh 2.103.3). Every other action, and every other group, blocks. */
+const GH_READ_ACTIONS: Record<string, readonly string[]> = {
+  pr: ["view", "list", "ls", "status", "diff", "checks"],
+  issue: ["view", "list", "ls", "status"],
+  repo: ["view", "list", "ls", "read-dir", "read-file", "gitignore", "license"],
+  release: ["view", "list", "ls", "verify", "verify-asset"],
+  gist: ["view", "list", "ls"],
+  run: ["view", "list", "ls", "watch"],
+  workflow: ["view", "list", "ls"],
+  label: ["list", "ls"],
+  cache: ["list", "ls"],
+  ruleset: ["view", "list", "ls", "check"],
+  project: ["view", "list", "field-list", "item-list"],
+  variable: ["get", "list"],
+  org: ["list"],
+  search: ["code", "commits", "issues", "prs", "repos"],
+  auth: ["status"],
+  config: ["get", "list"],
+};
+
+/** Read-only-looking gh commands that write files into the working tree (`gh co` is `pr checkout`). */
+const GH_FILE_WRITERS = new Set(["pr checkout", "run download", "release download"]);
+
+/** Pull request actions the feature-branch policy adds: they change the agent's own pull request. */
+const GH_BRANCH_PR_ACTIONS = ["create", "new", "edit", "ready", "comment"];
+
+function checkGh(args: string[], policy: BranchPolicy = AGENT_BRANCH_POLICY): string | null {
   const positional: string[] = [];
+  let groupIndex = -1;
+  // A flag before the action could make gh read a different action than the guard does, so only
+  // the repository and host flags may appear there.
+  let stray = false;
+  let strayBeforeGroup = false;
   for (let i = 0; i < args.length; i += 1) {
     const a = args[i];
     if (a === "-R" || a === "--repo" || a === "--hostname") i += 1;
-    else if (!a.startsWith("-")) positional.push(a);
+    else if (/^-R./.test(a) || a.startsWith("--repo=") || a.startsWith("--hostname=")) continue;
+    else if (!a.startsWith("-")) {
+      if (positional.length === 0) groupIndex = i;
+      positional.push(a);
+    } else if (positional.length < 2 && !["--help", "-h", "--version"].includes(a)) {
+      stray = true;
+      if (positional.length === 0) strayBeforeGroup = true;
+    }
   }
   const [group, action] = positional;
+  const label = [group, action].filter(Boolean).join(" ");
   const blocked = (): string =>
-    `gh ${[group, action].filter(Boolean).join(" ")} is blocked: merges, approvals, settings, secrets and visibility are the owner's step`;
-  const credentials = (): string =>
-    `gh ${[group, action].filter(Boolean).join(" ")} is blocked: it handles credentials, keys or extensions`;
+    `gh ${label} is blocked: only read-only gh commands are allowed; merges, approvals, settings, secrets and visibility are the owner's step`;
+  const ownerStep = "Only read-only gh commands are allowed; the rest is the owner's step.";
+  const credentials = (): string => `gh ${label} is blocked: it handles credentials, keys or extensions`;
+  if (group === undefined) return null;
+  // A flag before the group can make gh resolve a later word as the command (`gh --title co pr create`),
+  // so it blocks for every group, including the aliases and info commands below.
+  if (strayBeforeGroup) {
+    return `gh ${label} is blocked: a flag before the command is not allowed; put flags after it. ${ownerStep}`;
+  }
+  // `gh help <topic>` and `gh status` only print information.
+  if (group === "help" || group === "status") return null;
+  // `gh co` is the alias of `gh pr checkout`: check it as that command.
+  if (group === "co") return checkGh([...args.slice(0, groupIndex), "pr", "checkout", ...args.slice(groupIndex + 1)], policy);
+  if (action !== undefined && GH_FILE_WRITERS.has(`${group} ${action}`)) {
+    return `gh ${label} is blocked: it writes files into the working tree, which is the owner's step. ${ownerStep}`;
+  }
+  if (stray && group !== "api") {
+    return `gh ${label} is blocked: a flag before the action is not allowed; put flags after the action. ${ownerStep}`;
+  }
   switch (group) {
-    case "pr":
-      if (action === "merge") return blocked();
-      if (action === "review" && args.some((a) => a === "-a" || a.startsWith("--approve"))) return blocked();
-      return null;
-    case "repo":
-      if (action === "deploy-key" || action === "sync") return credentials();
-      return ["create", "edit", "delete", "archive", "rename", "transfer", "set-default"].includes(action)
-        ? blocked()
-        : null;
-    case "auth":
-      return action === "status" && !args.some((a) => a === "--show-token" || a === "-t") ? null : credentials();
     case "ssh-key":
     case "gpg-key":
     case "extension":
       return credentials();
-    case "config":
-      return action === "set" ? credentials() : null;
     case "secret":
     case "alias":
       return blocked();
-    case "gist":
-      return action === "create" && args.some((a) => a === "--public" || a === "-p") ? blocked() : null;
-    case "variable":
-      return action === "set" || action === "delete" ? blocked() : null;
-    case "release":
-      return ["create", "delete", "edit", "upload"].includes(action) ? blocked() : null;
-    case "workflow":
-      return ["run", "enable", "disable"].includes(action) ? blocked() : null;
+    case "auth":
+      return action === "status" && !args.some((a) => a === "--show-token" || a === "-t") ? null : credentials();
+    case "config":
+      return action === "get" || action === "list" ? null : credentials();
+    case "repo":
+      if (action === "deploy-key" || action === "sync") return credentials();
+      break;
     case "api": {
-      const methods = ghMethods(args);
-      if (methods.length > 1) return blocked();
-      if (methods.length === 1 && methods[0] !== "GET") return blocked();
-      if (action === "graphql" && args.some((a) => a.includes("mutation"))) return blocked();
-      if (methods.length === 0) {
-        const writes = args.some(
-          (a) =>
-            /^-[fF]./.test(a) ||
-            ["-f", "-F", "--field", "--raw-field", "--input"].includes(a) ||
-            a.startsWith("--field=") ||
-            a.startsWith("--raw-field=") ||
-            a.startsWith("--input="),
-        );
-        if (writes) return blocked();
-      }
+      const flags = ghApiFlags(args);
+      if (flags.unparseable) return blocked();
+      if (flags.methods.length > 1) return blocked();
+      if (flags.methods.length === 1 && flags.methods[0] !== "GET") return blocked();
+      if (args.includes("graphql") && args.some((a) => a.includes("mutation"))) return blocked();
+      if (flags.methods.length === 0 && flags.writes) return blocked();
       return null;
     }
+    case "pr":
+      if ((action === "create" || action === "new") && policy === "main-only") {
+        // gh pushes the current branch while it creates a pull request.
+        return `\`gh pr create\` can push the branch. ${pushMessage(policy)}`;
+      }
+      if (policy === "feature-branches" && action !== undefined && GH_BRANCH_PR_ACTIONS.includes(action)) {
+        if (args.some((a) => a === "-R" || a === "--repo" || a.startsWith("--repo=") || /^-R./.test(a))) {
+          return `gh pr ${action} with -R or --repo is not allowed: it could reach another repository. ${pushMessage(policy)}`;
+        }
+        if (action === "create" || action === "new") {
+          // Without --head gh pushes whatever branch is checked out, so the branch must be named.
+          const heads: string[] = [];
+          for (let i = 0; i < args.length; i += 1) {
+            const a = args[i];
+            if (a === "--head" || a === "-H") heads.push(args[(i += 1)] ?? "");
+            else if (a.startsWith("--head=")) heads.push(a.slice("--head=".length));
+            else if (/^-H./.test(a)) heads.push(a.slice(2));
+          }
+          if (heads.length !== 1 || !validBranch(heads[0])) {
+            return `gh pr ${action} needs one --head <feature-branch>, because gh would otherwise push the current branch. ${pushMessage(policy)}`;
+          }
+        }
+        return null;
+      }
+      break;
     default:
-      return null;
+      break;
   }
+  if (!Object.hasOwn(GH_READ_ACTIONS, group)) return blocked();
+  if (action === undefined || GH_READ_ACTIONS[group].includes(action)) return null;
+  return blocked();
 }
 
 /** Resolves the package script a package manager command runs and checks its body. */
@@ -952,7 +1201,7 @@ function checkPackageManager(pm: string, args: string[], run: Run): string | nul
     if (run.depth + 1 > MAX_SCRIPT_DEPTH) {
       return `script "${script}" nests deeper than ${MAX_SCRIPT_DEPTH} levels, so it is blocked`;
     }
-    const reason = evaluateFull(body, run.ctx, run.depth + 1, dir);
+    const reason = evaluateFull(body, run.ctx, run.depth + 1, dir, run.policy);
     if (reason !== null) return `script "${script}": ${reason}`;
   }
   // pnpm, yarn and bun fall back to a binary of that name when no script matches.
@@ -969,7 +1218,7 @@ function checkScriptFile(file: string, run: Run): string | null {
   const content = run.ctx.readScript(path.resolve(dir, file));
   if (content === null) return unreadable("is missing, not a regular file or over 64 KB");
   if (run.depth + 1 > MAX_SCRIPT_DEPTH) return unreadable(`nests deeper than ${MAX_SCRIPT_DEPTH} levels`);
-  const reason = evaluateFull(content, run.ctx, run.depth + 1, dir);
+  const reason = evaluateFull(content, run.ctx, run.depth + 1, dir, run.policy);
   return reason === null ? null : `script file "${file}": ${reason}`;
 }
 
@@ -986,7 +1235,7 @@ function evaluateSegment(raw: string[], run: Run): string | null {
     return "a program that comes from a variable is blocked: write the command out";
   }
   if (BLOCKED_GIT_PROGRAMS.has(program)) {
-    return `${program} is blocked: it pushes. ${PUSH_MESSAGE}`;
+    return `${program} is blocked: it pushes. ${pushMessage(run.policy)}`;
   }
   if (program === "patch") {
     return "patch is blocked: it can change the guard files. Use the editor tools";
@@ -1017,7 +1266,7 @@ function evaluateSegment(raw: string[], run: Run): string | null {
       return checkGit(args, run, xargs);
     case "gh": {
       if (xargs) return `gh ${viaStdin}`;
-      const reason = checkGh(args);
+      const reason = checkGh(args, run.policy);
       if (reason === null) run.seen.gh += 1;
       return reason;
     }
@@ -1031,7 +1280,13 @@ function evaluateSegment(raw: string[], run: Run): string | null {
   }
 }
 
-function evaluateFull(command: string, ctx: GuardContext, depth: number, dir: string | null): string | null {
+function evaluateFull(
+  command: string,
+  ctx: GuardContext,
+  depth: number,
+  dir: string | null,
+  policy: BranchPolicy,
+): string | null {
   if (command.length > MAX_COMMAND_CHARS) {
     return `the command is longer than ${MAX_COMMAND_CHARS} characters, so it is blocked. Split it up`;
   }
@@ -1044,6 +1299,7 @@ function evaluateFull(command: string, ctx: GuardContext, depth: number, dir: st
   }
   const run: Run = {
     ctx,
+    policy,
     depth,
     dir,
     pushes: 0,
@@ -1066,7 +1322,7 @@ function evaluateFull(command: string, ctx: GuardContext, depth: number, dir: st
   }
   const pushWords = first.tokens.filter((t) => PUSH_WORDS.has(path.posix.basename(t))).length;
   if (first.tokens.some(isGitToken) && pushWords > run.pushes) {
-    return `push form not recognized. ${PUSH_MESSAGE}`;
+    return `push form not recognized. ${pushMessage(run.policy)}`;
   }
   return null;
 }
@@ -1077,10 +1333,14 @@ function commitsWithMessage(command: string): boolean {
 }
 
 /** Returns the reason a command is blocked, or null when it may run. */
-export function evaluate(command: string, ctx: GuardContext): string | null {
+export function evaluate(
+  command: string,
+  ctx: GuardContext,
+  policy: BranchPolicy = AGENT_BRANCH_POLICY,
+): string | null {
   let reason: string | null;
   try {
-    reason = evaluateFull(command, ctx, 0, ctx.cwd);
+    reason = evaluateFull(command, ctx, 0, ctx.cwd, policy);
   } catch (error) {
     reason = `the command could not be checked (${(error as Error).message}), so it is blocked`;
   }
@@ -1104,20 +1364,37 @@ const CODEX_SESSION_TOOLS = new Set(["mcp__codex__codex", "mcp__codex__codex-sta
 /**
  * Outside the project, the project's Codex config (no network) and rules do not apply, and a
  * workspace-write session could change files such as ~/.gitconfig that later git commands run.
+ * Below the root, a planted nested .codex/config.toml can add MCP servers or widen the sandbox.
  */
+/** A cwd is the repository root only as that exact string, its real path, or ".". */
+function cwdIsRoot(cwd: string, root: string): boolean {
+  if (cwd === ".") return true;
+  // path.resolve and realpathSync fold `link/..` lexically, but the kernel resolves the link first,
+  // and a symlink can be retargeted after the check, so every other spelling is refused.
+  const stripped = cwd.length > 1 ? cwd.replace(/\/+$/, "") : cwd;
+  return stripped === root || stripped === realpathSync.native(root);
+}
+
 function codexCwdReason(name: string, toolInput: unknown, root: string): string | null {
   const hasCwd = typeof toolInput === "object" && toolInput !== null && Object.hasOwn(toolInput, "cwd");
   if (!CODEX_SESSION_TOOLS.has(name) && !hasCwd) return null;
   const cwd = hasCwd ? (toolInput as { cwd?: unknown }).cwd : undefined;
-  const message = `Codex sessions start in this repository (${root}) or below it`;
+  const message = `Codex sessions must start at the repository root (${root}), because Codex reads nested .codex/config.toml files`;
   if (typeof cwd !== "string" || cwd === "" || cwd.includes("\0")) return `${message}; the cwd is missing`;
-  const target = path.resolve(root, cwd);
-  if (target !== root && !target.startsWith(`${root}${path.sep}`)) return `${message}; ${cwd} is outside it`;
+  try {
+    if (!cwdIsRoot(cwd, root)) return `${message}; ${cwd} is not the root, so write the root path exactly`;
+  } catch {
+    return `${message}; ${cwd} cannot be resolved`;
+  }
   return null;
 }
 
 /** Checks one hook payload. Returns the reason to block, or null. */
-export function evaluateTool(input: unknown, ctx?: GuardContext): string | null {
+export function evaluateTool(
+  input: unknown,
+  ctx?: GuardContext,
+  policy: BranchPolicy = AGENT_BRANCH_POLICY,
+): string | null {
   if (typeof input !== "object" || input === null) return "unreadable hook input";
   const {
     tool_name: toolName,
@@ -1148,7 +1425,7 @@ export function evaluateTool(input: unknown, ctx?: GuardContext): string | null 
   const command = (toolInput as { command?: unknown } | null)?.command;
   if (typeof command !== "string") return null;
   const context = ctx ?? realContext(typeof cwd === "string" ? cwd : process.cwd());
-  return evaluate(command, context);
+  return evaluate(command, context, policy);
 }
 
 function git(dir: string, args: string[]): string {

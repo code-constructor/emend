@@ -24,6 +24,9 @@ interface CtxOptions {
   packages?: Record<string, PackageInfo | null>;
   files?: Record<string, string>;
   fail?: boolean;
+  cwd?: string;
+  /** The checked-out branch; null means a detached HEAD. */
+  branch?: string | null;
 }
 
 const DEFAULT_SCRIPTS: Record<string, string> = {
@@ -46,8 +49,8 @@ function fakeContext(options: CtxOptions = {}): GuardContext {
     return value;
   };
   return {
-    cwd: ROOT,
-    currentBranch: () => "feat/x",
+    cwd: options.cwd ?? ROOT,
+    currentBranch: () => (options.branch === undefined ? "feat/x" : options.branch),
     tagNames: () => failing(new Set(options.tags ?? [])),
     aliases: () => failing(options.aliases ?? {}),
     pushConfig: () => failing(options.config ?? {}),
@@ -65,8 +68,13 @@ const allowed = [
   "wrangler --help",
   "wrangler --version",
   "git status",
+  "ls /home/sascha/src",
+  "cat apps/web/home.tsx",
+  'echo "$HOME"',
+  "env",
+  "printenv HOME",
+  "read -r line < f",
   "git log --oneline",
-  "gh pr create --fill",
   "gh pr view 3 --json mergeable",
   "gh api repos/o/r/pulls",
   "gh auth status",
@@ -355,6 +363,35 @@ const blocked: BlockedCase[] = [
   { command: "unset CLAUDECODE", reason: ENV },
   { command: "CLAUDE_CODE_FOO=1 ls", reason: ENV },
   { command: "export CODEX_HOME=/tmp", reason: ENV },
+  { command: "GH_CONFIG_DIR=./cfg gh co", reason: ENV },
+  { command: "HOME=./cfg git p origin feat/x", reason: ENV },
+  { command: "XDG_CONFIG_HOME=./cfg git status", reason: ENV },
+  { command: "GH_REPO=other/repo gh pr create --head feat/x", reason: ENV },
+  { command: "export HOME=/tmp/x; git push", reason: ENV },
+  { command: "env GH_REPO=o/r gh pr view 1", reason: ENV },
+  { command: "env HOME=/tmp/x git status", reason: ENV },
+  { command: "unset GH_CONFIG_DIR", reason: ENV },
+  { command: "env -u HOME git status", reason: ENV },
+  { command: "cd /tmp && XDG_CONFIG_HOME=x git log", reason: ENV },
+  { command: "HOME+=/x git p origin feat/x", reason: ENV },
+  { command: "export \"HOME=/r\"", reason: ENV },
+  { command: "export 'HOME'=/r", reason: ENV },
+  { command: "export H\\OME=/r", reason: ENV },
+  { command: "unset \"HOME\"", reason: ENV },
+  { command: "env -S 'HOME=/p git p origin feat/x'", reason: ENV },
+  { command: "export GIT_DI\\R=x", reason: ENV },
+  { command: "echo \"HOME=$HOME\"", reason: ENV, note: "expected false positive" },
+  { command: "printf -v HOME /p", reason: ENV },
+  { command: "read HOME <<< /q", reason: ENV },
+  { command: "read -r HOME < f", reason: ENV },
+  { command: "mapfile HOME < f", reason: ENV },
+  { command: "unset -- HOME", reason: ENV },
+  { command: "env -uHOME git status", reason: ENV },
+  { command: "set -a; unset -- HOME; : ${HOME:=/s}", reason: ENV },
+  { command: ": ${GH_CONFIG_DIR:=/s}", reason: ENV },
+  { command: "BASH_ENV=./rc bash -c 'git status'", reason: ENV },
+  { command: "ENV=./rc sh -c 'git status'", reason: ENV },
+  { command: "ZDOTDIR=./z zsh -c 'git status'", reason: ENV },
   { command: "env -u GIT_SSH_COMMAND git status", reason: ENV },
   { command: "unset CLOUDFLARE_API_TOKEN; $(echo wrang)ler deploy", reason: ENV },
   { command: "env -u CLOUDFLARE_API_TOKEN node_modules/.bin/wrangle? deploy", reason: ENV },
@@ -459,6 +496,9 @@ const blocked: BlockedCase[] = [
   { command: "gh repo sync", reason: CREDENTIALS },
   // gh
   { command: "gh pr merge 1 --squash", reason: OWNER },
+  { command: "gh pr create --fill", reason: /`gh pr create` can push the branch/ },
+  { command: "gh pr create --head feat/x --fill", reason: /`gh pr create` can push the branch/ },
+  { command: "gh pr create --head owner:feat/x", reason: PUSH },
   { command: "gh pr review 1 --approve", reason: OWNER },
   { command: "gh pr review 1 --approve=true", reason: OWNER },
   { command: "gh pr review 1 -a", reason: OWNER, note: "layer 2 only" },
@@ -581,32 +621,118 @@ test("evaluateTool blocks Codex danger-full-access anywhere in the input", () =>
   assert.match(evaluateTool(input, fakeContext()) ?? "", /danger-full-access is blocked/);
 });
 
+function codexRoot(): string {
+  const root = mkdtempSync(path.join(tmpdir(), "codex-root-"));
+  temps.push(root);
+  mkdirSync(path.join(root, "apps", "emend"), { recursive: true });
+  mkdirSync(path.join(root, "apps", "web"), { recursive: true });
+  return root;
+}
+
 test("evaluateTool accepts Codex workspace-write", () => {
-  const input = { tool_name: "mcp__codex__codex", tool_input: { sandbox: "workspace-write", cwd: ROOT } };
-  assert.equal(evaluateTool(input, fakeContext()), null);
+  const root = codexRoot();
+  const input = { tool_name: "mcp__codex__codex", tool_input: { sandbox: "workspace-write", cwd: root } };
+  assert.equal(evaluateTool(input, fakeContext({ cwd: root })), null);
 });
 
-test("evaluateTool accepts a Codex session below the project root", () => {
-  for (const cwd of [`${ROOT}/apps/emend`, "apps/web"]) {
+test("evaluateTool accepts a Codex session at the project root spelled exactly", () => {
+  const root = codexRoot();
+  for (const cwd of [root, `${root}/`, "."]) {
     const input = { tool_name: "mcp__codex__codex-start", tool_input: { sandbox: "read-only", cwd } };
-    assert.equal(evaluateTool(input, fakeContext()), null, cwd);
+    assert.equal(evaluateTool(input, fakeContext({ cwd: root })), null, cwd);
   }
+});
+
+test("evaluateTool blocks every other spelling of the project root", () => {
+  const root = codexRoot();
+  symlinkSync(root, path.join(root, "apps", "self"));
+  symlinkSync(path.join(root, "apps", "web"), path.join(root, "link"));
+  const cwds = [
+    `${root}/link/..`,
+    `${root}/apps/..`,
+    `${root}/apps/self`,
+    "apps/self",
+    `${root}/./`,
+    `${root}//apps/..`,
+    `${root}/apps/web/../..`,
+    "./",
+    "..",
+  ];
+  for (const cwd of cwds) {
+    const input = { tool_name: "mcp__codex__codex", tool_input: { sandbox: "workspace-write", cwd } };
+    assert.match(evaluateTool(input, fakeContext({ cwd: root })) ?? "", /must start at the repository root/, cwd);
+  }
+});
+
+test("evaluateTool accepts the real path of a project root that is itself a symlink", () => {
+  const real = codexRoot();
+  const holder = mkdtempSync(path.join(tmpdir(), "codex-link-"));
+  temps.push(holder);
+  const linked = path.join(holder, "repo");
+  symlinkSync(real, linked);
+  const input = { tool_name: "mcp__codex__codex", tool_input: { sandbox: "workspace-write", cwd: real } };
+  assert.equal(evaluateTool(input, fakeContext({ cwd: linked })), null);
+});
+
+test("evaluateTool blocks a Codex session in a subdirectory of the project", () => {
+  const root = codexRoot();
+  for (const cwd of [`${root}/apps/emend`, "apps/web", "apps"]) {
+    const input = { tool_name: "mcp__codex__codex-start", tool_input: { sandbox: "read-only", cwd } };
+    assert.match(evaluateTool(input, fakeContext({ cwd: root })) ?? "", /nested \.codex\/config\.toml/, cwd);
+  }
+});
+
+test("evaluateTool blocks a Codex session through a symlink to a subdirectory", () => {
+  const root = codexRoot();
+  symlinkSync(path.join(root, "apps", "web"), path.join(root, "link-to-web"));
+  const input = { tool_name: "mcp__codex__codex", tool_input: { sandbox: "workspace-write", cwd: "link-to-web" } };
+  assert.match(evaluateTool(input, fakeContext({ cwd: root })) ?? "", /is not the root/);
 });
 
 test("evaluateTool blocks a Codex session outside the project", () => {
-  for (const cwd of ["/work", "/work/emend-other", `${ROOT}/../x`, "/", ""]) {
+  const root = codexRoot();
+  for (const cwd of ["/work", `${root}-other`, `${root}/../x`, "/", "", "/tmp"]) {
     const input = { tool_name: "mcp__codex__codex", tool_input: { sandbox: "workspace-write", cwd } };
-    assert.match(evaluateTool(input, fakeContext()) ?? "", /Codex sessions start in this repository/, cwd);
+    assert.match(
+      evaluateTool(input, fakeContext({ cwd: root })) ?? "",
+      /Codex sessions must start at the repository root/,
+      cwd,
+    );
   }
   const missing = { tool_name: "mcp__codex__codex-start", tool_input: { sandbox: "workspace-write" } };
-  assert.match(evaluateTool(missing, fakeContext()) ?? "", /the cwd is missing/);
+  assert.match(evaluateTool(missing, fakeContext({ cwd: root })) ?? "", /the cwd is missing/);
   const fork = { tool_name: "mcp__codex__codex-thread-fork", tool_input: { cwd: "/tmp" } };
-  assert.match(evaluateTool(fork, fakeContext()) ?? "", /outside it/);
+  assert.match(evaluateTool(fork, fakeContext({ cwd: root })) ?? "", /is not the root/);
 });
 
 test("evaluateTool lets a Codex call without a session cwd through", () => {
-  const input = { tool_name: "mcp__codex__codex-reply", tool_input: { threadId: "t", prompt: "go on" } };
+  const input = { tool_name: "mcp__codex__codex-status", tool_input: { jobId: "j" } };
   assert.equal(evaluateTool(input, fakeContext()), null);
+});
+
+// The mcp-agents daemon keeps threads per project, so thread-reuse calls need no lookup here.
+test("evaluateTool lets Codex thread-reuse calls through", () => {
+  const root = codexRoot();
+  for (const tool of [
+    "mcp__codex__codex-reply",
+    "mcp__codex__codex-reply-start",
+    "mcp__codex__codex-thread-fork",
+    "mcp__codex__codex-review-start",
+    "mcp__codex__codex-steer",
+  ]) {
+    const input = { tool_name: tool, tool_input: { threadId: "0190a000-0000-7000-8000-000000000001", prompt: "go on" } };
+    assert.equal(evaluateTool(input, fakeContext({ cwd: root })), null, tool);
+  }
+});
+
+test("evaluateTool applies the root-only cwd rule to every Codex tool that carries a cwd", () => {
+  const root = codexRoot();
+  for (const tool of ["mcp__codex__codex", "mcp__codex__codex-start", "mcp__codex__codex-thread-list"]) {
+    const sub = { tool_name: tool, tool_input: { cwd: `${root}/apps/web` } };
+    assert.match(evaluateTool(sub, fakeContext({ cwd: root })) ?? "", /must start at the repository root/, tool);
+    const ok = { tool_name: tool, tool_input: { cwd: root, sandbox: "read-only" } };
+    assert.equal(evaluateTool(ok, fakeContext({ cwd: root })), null, tool);
+  }
 });
 
 test("evaluateTool blocks accepting a Codex request", () => {
@@ -738,6 +864,399 @@ test("evaluate with the real context blocks a feature-branch push in a temp repo
     assert.match(evaluate("git push -u origin feat/x", realContext(dir)) ?? "", PUSH);
     assert.match(evaluate("git push -u origin main", realContext(dir)) ?? "", PUSH);
   });
+});
+
+// gh: the "new" aliases, clustered short flags, the read-only allowlist.
+const GH_CREATE_ALIASES: { command: string; reason: RegExp }[] = [
+  { command: "gh pr new --fill", reason: /`gh pr create` can push the branch/ },
+  { command: "gh pr new --head feat/x", reason: /`gh pr create` can push the branch/ },
+  { command: "gh repo new x --public --source . --push", reason: OWNER },
+  { command: "gh release new v1", reason: OWNER },
+  { command: "gh gist new --public f", reason: OWNER },
+];
+for (const { command, reason } of GH_CREATE_ALIASES) {
+  test(`blocks the gh alias ${JSON.stringify(command)}`, () => {
+    assert.match(evaluate(command, fakeContext()) ?? "", reason);
+  });
+}
+
+const GH_API_BLOCKED = [
+  "gh api -iXPUT repos/o/r/pulls/1/merge",
+  "gh api -iX PUT repos/o/r/pulls/1/merge",
+  "gh api -iX=PUT repos/o/r/pulls/1/merge",
+  "gh api -iF ref=refs/heads/x repos/o/r/git/refs",
+  "gh api -if ref=refs/heads/x repos/o/r/git/refs",
+  "gh api -sXDELETE repos/o/r/git/refs/heads/x",
+  "gh api -X GET -iXPOST repos/o/r",
+  "gh api -iZ repos/o/r",
+];
+for (const command of GH_API_BLOCKED) {
+  test(`blocks ${JSON.stringify(command)}`, () => {
+    assert.match(evaluate(command, fakeContext()) ?? "", OWNER);
+  });
+}
+
+const GH_API_ALLOWED = [
+  "gh api -i repos/o/r",
+  "gh api -iXGET repos/o/r",
+  "gh api -iH 'Accept: application/json' repos/o/r",
+  "gh api -X GET search/issues -f q=x",
+];
+for (const command of GH_API_ALLOWED) {
+  test(`allows ${JSON.stringify(command)}`, () => {
+    assert.equal(evaluate(command, fakeContext()), null);
+  });
+}
+
+const GH_READ_ONLY = [
+  "gh pr view 1",
+  "gh pr list --state open",
+  "gh pr ls",
+  "gh pr status",
+  "gh pr diff 1",
+  "gh pr checks 1 --watch",
+  "gh issue view 1",
+  "gh issue list",
+  "gh repo view",
+  "gh run list",
+  "gh run view 1 --log",
+  "gh run watch 1",
+  "gh pr --repo o/r view 1",
+  "gh pr -R o/r view 1",
+  "gh pr -Ro/r view 1",
+  "gh pr --repo=o/r view 1",
+  "gh api repos/o/r --jq .name --paginate",
+  "gh workflow list",
+  "gh release view v1",
+  "gh gist list",
+  "gh label list",
+  "gh cache list",
+  "gh ruleset check main",
+  "gh project item-list 1",
+  "gh variable list",
+  "gh org list",
+  "gh search prs foo",
+  "gh config get git_protocol",
+  "gh status",
+  "gh --version",
+  "gh help pr",
+];
+for (const command of GH_READ_ONLY) {
+  test(`allows the read-only ${JSON.stringify(command)}`, () => {
+    assert.equal(evaluate(command, fakeContext()), null);
+  });
+}
+
+const GH_WRITES = [
+  "gh pr update-branch 1",
+  "gh pr revert 1",
+  "gh pr close 1",
+  "gh pr reopen 1",
+  "gh pr lock 1",
+  "gh pr edit 1 --title x",
+  "gh pr ready 1",
+  "gh pr comment 1 --body hi",
+  "gh pr review 1 --comment",
+  "gh issue create",
+  "gh issue comment 1 --body hi",
+  "gh issue develop 1 --name x",
+  "gh run rerun 1",
+  "gh run cancel 1",
+  "gh codespace list",
+  "gh codespace ssh",
+  "gh repo clone o/r",
+  "gh repo fork o/r",
+  "gh release upload v1 f",
+  "gh gist clone 1",
+  "gh label create x",
+  "gh cache delete 1",
+  "gh project edit 1",
+  "gh browse",
+  "gh frobnicate now",
+  "gh config list-all",
+];
+for (const command of GH_WRITES) {
+  test(`blocks the gh write ${JSON.stringify(command)}`, () => {
+    assert.match(evaluate(command, fakeContext()) ?? "", /gh .* is blocked/);
+  });
+}
+
+const GH_FLAG_SHIFT_BLOCKED = [
+  "gh pr --title view create",
+  "gh repo --description view new x --source . --push",
+  "gh release --title view new v1",
+  "gh pr --body view revert 1",
+  "gh pr --json view merge 1",
+  "gh --title co pr create",
+  "gh --description co repo new x --push",
+  "gh --title status pr merge 1",
+  "gh --title api pr merge 1",
+];
+for (const command of GH_FLAG_SHIFT_BLOCKED) {
+  test(`blocks a flag before the action in ${JSON.stringify(command)}`, () => {
+    assert.match(evaluate(command, fakeContext()) ?? "", /gh .* is blocked/);
+  });
+}
+
+const GH_API_LONG_BLOCKED = [
+  "gh api repos/o/r/merges --preview -XGET -f base=main -f head=feat",
+  "gh api repos/o/r --jq -XGET -f a=b",
+  "gh api repos/o/r --template -XGET -f a=b",
+  "gh api repos/o/r --header -XGET -f a=b",
+  "gh api repos/o/r --frobnicate",
+  "gh api repos/o/r --paginate=x",
+  "gh api graphql --jq .x -f query=mutation{x}",
+];
+for (const command of GH_API_LONG_BLOCKED) {
+  test(`blocks ${JSON.stringify(command)}`, () => {
+    assert.match(evaluate(command, fakeContext()) ?? "", OWNER);
+  });
+}
+
+// Redirect names are blocked wherever they appear, in both branch policies.
+const REDIRECT_NAMES = ["HOME", "XDG_CONFIG_HOME", "BASH_ENV", "ENV", "ZDOTDIR", "GH_CONFIG_DIR"];
+const REDIRECT_BLOCKED: string[] = [
+  ...REDIRECT_NAMES.map((n) => `for ${n} in /p; do git status; done`),
+  ...REDIRECT_NAMES.map((n) => `(( ${n} = 0 ))`),
+  ...REDIRECT_NAMES.map((n) => `let '${n} = 0'`),
+  ...REDIRECT_NAMES.map((n) => `getopts a ${n} -a`),
+  ...REDIRECT_NAMES.map((n) => `${n}[0]=/p`),
+  ...REDIRECT_NAMES.map((n) => `${n}[1,-1]=/p`),
+  ...REDIRECT_NAMES.map((n) => `: \${${n}::=/p}`),
+  ...REDIRECT_NAMES.map((n) => `: \${${n}:=/p}`),
+  ...REDIRECT_NAMES.map((n) => `print -v ${n} /p`),
+  "X=HOME; export $X=/p",
+  'X=HOME; export "$X=/p"',
+  'X=HOME; printf -v "$X" /p',
+  'X=HOME; read -r "$X" <<< /p',
+  "X=HOME; : ${(P)X::=/p}",
+  "declare -n R=HOME; R=/p",
+  'export "$X=/p"',
+  'printf -v "$X" /p',
+  'read -r "$X" <<< /p',
+  "read $X",
+  "typeset -x $X=/p",
+  "export${IFS}HOME=/p",
+  "export${IFS}$X=/p",
+  "getopts a $X -a",
+  "env -i git push",
+  "env - git push",
+  "env --ignore-environment git push",
+  "env -iu X git status",
+  "exec -c git push",
+  "exec -cl git push",
+  "exec -a x -c git push",
+  "sudo env -i git status",
+  'echo "HOME=$HOME"',
+  "cat ${HOME::=/p}; git status",
+  "ls $[HOME=0]",
+  "ls ${a[HOME=0]}",
+  "cat ${PWD:HOME=0}",
+  "printenv ${HOME::=/p}",
+  "cat <<< ${HOME::=/p}",
+  "git log ${HOME::=/p}",
+  "head -n $[HOME=0] f",
+  "X=HO; Y=ME; declare -n R=$X$Y; R=/p",
+  'let "$X$Y=0"',
+  "let n=$X",
+  ": $[ $X$Y = 0 ]",
+  ": ${(P)${:-$X$Y}::=/p}",
+  "ls ${(P)X::=/p}",
+  "typeset -n R=$X$Y",
+  "local -n R=${X}",
+];
+const REDIRECT_ALLOWED: string[] = [
+  "env",
+  "printenv",
+  "printenv HOME",
+  "env | sort",
+  "echo $HOME",
+  "echo ${HOME}",
+  "echo ${HOME:-x}",
+  "ls $HOME/.config",
+  'export PATH="$HOME/bin:$PATH"',
+  "read -r line < file",
+  'while read -r l; do echo "$l"; done < f',
+  "pnpm env use 22",
+  "pnpm env use --global 22",
+  "pnpm test -- --env=node",
+  "NODE_ENV=test pnpm test",
+  "gh pr view 3",
+  "rg -n 'HOME=' src",
+  "grep -rn 'read HOME' .",
+  "echo already read home",
+  "env -u FOO git status",
+  "env FOO=1 git status",
+  "rg x $HOME/src",
+  'ls "$HOME"',
+  "printenv | grep GH_",
+  "declare -n R=OTHER",
+  "declare -x A=$B",
+];
+test("a runtime-built name in (( )) keeps blocking and legacy $[ ] arithmetic blocks", () => {
+  for (const command of ["(( $X$Y = 0 ))", "echo $[1+1]"]) {
+    assert.notEqual(evaluate(command, fakeContext()), null, command);
+  }
+});
+
+for (const policy of ["main-only", "feature-branches"] as const) {
+  for (const command of REDIRECT_BLOCKED) {
+    test(`blocks ${JSON.stringify(command)} in ${policy}`, () => {
+      assert.match(evaluate(command, fakeContext(), policy) ?? "", /environment variable|variable name built at runtime|clear the environment/);
+    });
+  }
+  for (const command of REDIRECT_ALLOWED) {
+    test(`allows ${JSON.stringify(command)} in ${policy}`, () => {
+      assert.equal(evaluate(command, fakeContext({ scripts: { ...DEFAULT_SCRIPTS, test: "vitest run" } }), policy), null);
+    });
+  }
+}
+
+const GH_FILE_WRITER_COMMANDS = [
+  "gh co 3",
+  "gh co -f 3",
+  "gh co 3 --repo o/r",
+  "gh co -R o/r 3",
+  "gh -R o/r co 3",
+  "gh pr checkout 3",
+  "gh run download 123",
+  "gh run download 123 -n report",
+  "gh run download -D x 123",
+  "gh release download v1",
+  "gh release download v1 -p '*.tgz'",
+];
+const GH_STILL_READ = ["gh pr view 3", "gh run view 123 --log", "gh run list", "gh release view v1", "gh pr checks 3"];
+for (const policy of ["main-only", "feature-branches"] as const) {
+  for (const command of GH_FILE_WRITER_COMMANDS) {
+    test(`blocks the file-writing ${JSON.stringify(command)} in ${policy}`, () => {
+      assert.match(evaluate(command, fakeContext(), policy) ?? "", /writes files into the working tree/);
+    });
+  }
+  for (const command of GH_STILL_READ) {
+    test(`still allows ${JSON.stringify(command)} in ${policy}`, () => {
+      assert.equal(evaluate(command, fakeContext(), policy), null);
+    });
+  }
+}
+
+// The branch policy: main-only is the default, feature-branches is dormant.
+interface PolicyCase {
+  command: string;
+  options?: CtxOptions;
+}
+
+const FEATURE_ALLOWED: PolicyCase[] = [
+  { command: "git push -u origin feat/x" },
+  { command: "git push origin feat/x" },
+  { command: "git push --dry-run origin feat/x" },
+  { command: "git push origin HEAD:feat/x" },
+  { command: "git push -u origin HEAD" },
+  { command: "git push --force-with-lease --force-if-includes origin feat/x" },
+  { command: "gh pr create --head feat/x --fill" },
+  { command: "gh pr new --head feat/x" },
+  { command: "gh pr create --head=feat/x --fill" },
+  { command: "gh pr create -H feat/x --fill" },
+  { command: "gh pr edit 1 --title x" },
+  { command: "gh pr ready 1" },
+  { command: "gh pr comment 1 --body hi" },
+  { command: "gh pr view 1" },
+];
+
+const FEATURE_BLOCKED: PolicyCase[] = [
+  { command: "gh pr create --fill" },
+  { command: "gh pr new --fill" },
+  { command: "gh pr create --head main --fill" },
+  { command: "gh pr create --head feat/x --head feat/y" },
+  { command: "gh pr create --head owner:feat/x" },
+  { command: "gh pr create -R o/r --head feat/x" },
+  { command: "gh pr create --repo o/r --head feat/x" },
+  { command: "gh pr create --repo=o/r --head feat/x" },
+  { command: "gh pr edit 1 -R o/r --title x" },
+  { command: "git push --force-with-lease=v1:abc --force-if-includes origin HEAD:v1" },
+  { command: "git push --force-with-lease=feat/x --force-if-includes origin feat/x" },
+  { command: "git push --force-with-lease origin feat/x" },
+  { command: "git push --force-if-includes origin feat/x" },
+  { command: "git push origin main" },
+  { command: "git push origin master" },
+  { command: "git push origin HEAD:main" },
+  { command: "git push -u origin HEAD", options: { branch: "main" } },
+  { command: "git push -u origin HEAD", options: { branch: null } },
+  { command: "git push --force origin feat/x" },
+  { command: "git push -f origin feat/x" },
+  { command: "git push --force origin feat/x" },
+  { command: "git push -fu origin feat/x" },
+  { command: "git push --force-with-lease origin main" },
+  { command: "git push --force-with-lease --force-if-includes origin HEAD:main" },
+  { command: "git push --force-with-lease --force-if-includes origin +feat/x" },
+  { command: "git push --force-with-lease --force-if-includes --tags" },
+  { command: "git push --force-with-lease --delete origin feat/x" },
+  { command: "git push --force-with-lease --mirror" },
+  { command: "git push origin +feat/x" },
+  { command: "git push --tags" },
+  { command: "git push origin refs/tags/x" },
+  { command: "git push origin v1", options: { tags: ["v1"] } },
+  { command: "git push --delete origin feat/x" },
+  { command: "git push origin :feat/x" },
+  { command: "git push --mirror" },
+  { command: "git push --all" },
+  { command: "git push" },
+  { command: "git push --no-verify origin feat/x" },
+  { command: "git tag v9 && git push origin feat/x" },
+  { command: "gh pr merge 1 --squash" },
+  { command: "gh pr close 1" },
+  { command: "gh pr update-branch 1" },
+  { command: "gh pr revert 1" },
+  { command: "gh pr review 1 --approve" },
+  { command: "gh release create v1" },
+  { command: "gh release new v1" },
+  { command: "gh repo create x --public" },
+  { command: "gh repo new x --public" },
+  { command: "gh issue create" },
+  { command: "gh api -X PUT repos/o/r/pulls/1/merge" },
+];
+
+for (const { command, options } of FEATURE_ALLOWED) {
+  test(`feature-branches allows ${JSON.stringify(command)}`, () => {
+    assert.equal(evaluate(command, fakeContext(options), "feature-branches"), null);
+  });
+}
+
+for (const { command, options } of FEATURE_BLOCKED) {
+  test(`feature-branches blocks ${JSON.stringify(command)}`, () => {
+    assert.notEqual(evaluate(command, fakeContext(options), "feature-branches"), null);
+  });
+}
+
+test("main-only blocks every command the feature-branches table allows, except reads", () => {
+  for (const { command, options } of FEATURE_ALLOWED) {
+    if (command === "gh pr view 1") continue;
+    const reason = evaluate(command, fakeContext(options), "main-only") ?? "";
+    assert.notEqual(reason, "", command);
+  }
+  assert.match(evaluate("git push -u origin feat/x", fakeContext(), "main-only") ?? "", PUSH);
+  assert.match(evaluate("gh pr create --fill", fakeContext(), "main-only") ?? "", PUSH);
+});
+
+test("the default policy is main-only", () => {
+  assert.match(evaluate("git push -u origin feat/x", fakeContext()) ?? "", PUSH);
+});
+
+test("a plain force in feature-branches mode points to the lease flags", () => {
+  for (const command of ["git push --force origin feat/x", "git push origin +feat/x"]) {
+    const reason = evaluate(command, fakeContext(), "feature-branches") ?? "";
+    assert.match(reason, /--force-with-lease --force-if-includes/, command);
+  }
+});
+
+test("main-only blocks lease force pushes", () => {
+  const reason = evaluate("git push --force-with-lease --force-if-includes origin feat/x", fakeContext());
+  assert.match(reason ?? "", PUSH);
+});
+
+test("the feature-branches message does not claim agents never push", () => {
+  const reason = evaluate("git push origin main", fakeContext(), "feature-branches") ?? "";
+  assert.doesNotMatch(reason, /Agents never push/);
+  assert.match(reason, /named feature branch/);
 });
 
 // main, through the real process.
