@@ -45,12 +45,24 @@ export type DiffPostRender = NonNullable<FileDiffOptions<ReactElement, undefined
 type Annotation = DiffLineAnnotation<ReactElement> & { startLine?: number };
 type BodyState = { diff?: ParsedDiff; blocked: boolean; loading?: boolean };
 type SlotState = { names: Set<string>; rendered: boolean };
+// Highlighting costs about 0.09 ms per line, so a 5000-line file takes about half a second on either path.
+export const TOKENIZE_MAX_LINES = 5000;
 const poolOptions = { workerFactory: () => new DiffWorker(), poolSize: 2 };
 const highlighterOptions = {
   theme: diffTheme.name,
   preferredHighlighter: "shiki-js" as const,
   tokenizeMaxLineLength: 1000,
 };
+// Pierre skips highlighting when either side of the whole file has more lines than the cap.
+export function HighlightNote({ diff }: { diff: ParsedDiff }) {
+  const lines = Math.max(diff.additionLines.length, diff.deletionLines.length);
+  if (lines <= TOKENIZE_MAX_LINES) return null;
+  return (
+    <p className="em-diff-summary">
+      Not highlighted: {lines.toLocaleString("en-US")} lines is over {TOKENIZE_MAX_LINES.toLocaleString("en-US")}.
+    </p>
+  );
+}
 export function DiffWorkers({ children, workerFactory }: { children: ReactNode; workerFactory?: () => Worker }) {
   const pool = useMemo(() => (workerFactory ? { ...poolOptions, workerFactory } : poolOptions), [workerFactory]);
   return (
@@ -126,7 +138,7 @@ export function DiffView({
   const options = useMemo<FileDiffOptions<string, undefined>>(
     () => ({
       preferredHighlighter: "shiki-js",
-      tokenizeMaxLength: 1000,
+      tokenizeMaxLength: TOKENIZE_MAX_LINES,
       diffStyle,
       theme: diffTheme.name,
       themeType: "system",
@@ -641,17 +653,20 @@ function FileBody({
         </p>
       )}
       {parsed.data ? (
-        <DiffWorkers>
-          <DiffView
-            fileDiff={parsed.data}
-            diffStyle={context.diffStyle}
-            overflow={context.overflow}
-            annotations={annotations}
-            onSlots={onSlots}
-            onSelect={onSelect}
-            selected={selection}
-          />
-        </DiffWorkers>
+        <>
+          <HighlightNote diff={parsed.data} />
+          <DiffWorkers>
+            <DiffView
+              fileDiff={parsed.data}
+              diffStyle={context.diffStyle}
+              overflow={context.overflow}
+              annotations={annotations}
+              onSlots={onSlots}
+              onSelect={onSelect}
+              selected={selection}
+            />
+          </DiffWorkers>
+        </>
       ) : (
         <p role="status" className="p-3">
           Loading diff…
