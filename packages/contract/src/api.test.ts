@@ -21,6 +21,7 @@ test("exports the v1 API, limits, file vocabulary and reserved fallback", () => 
   expect(MIN_CLIENT_VERSION).toBe("0.1.0");
   expect(LIMITS).toEqual({
     inboxItems: 200,
+    agentReviews: 100,
     importRevisions: 1000,
     importThreads: 1000,
     importComments: 10000,

@@ -44,3 +44,16 @@ Docs must be in the current worktree or an allowed `docRoots` folder. For anothe
 `emend config add docRoots <folder>` yourself first; temporary folders need permission too.
 Publishing while the server is stopped saves the review and prints its URL; run `emend` or
 `emend service install` to open it. An attached machine publishes to its hub.
+
+## List your reviews and check the connection
+
+`emend ls` lists the reviews this machine published, newest first, one line each: id, state, last
+update, title and URL. It also lists snoozed and finished reviews, and it never shows comments. The
+update time is UTC. Add `--json` for one JSON object with an `items` list. It shows at most the
+newest 100.
+
+`emend status` shows whether this machine is `local` or `attached`, the server or hub address,
+the hub name when attached, this machine's instance name, whether the server or hub answers, and
+the `emend` version. Add `--json` for the same fields as JSON, where `address: none` and
+`instance: none` in the human form are `null`. It prints no token, creates no file, and reports a
+server or hub that does not answer instead of failing.

@@ -4,7 +4,7 @@ import type { Io } from "../main.ts";
 import { ApiError } from "../server/http/errors.ts";
 import { StateDirModeError, StateFolderWriteError, stateFolderWritable } from "../state/files.ts";
 import { VERSION } from "../version.ts";
-import { escapeReference, quoteShellArgument } from "./escape.ts";
+import { escapeJson, escapeReference, quoteShellArgument } from "./escape.ts";
 import { discover } from "./server-client.ts";
 import type { Target } from "./target.ts";
 
@@ -74,6 +74,14 @@ export const jsonLine = (value: unknown): string => `${JSON.stringify(value)}\n`
 export async function printJson(io: Io, value: unknown): Promise<void> {
   try {
     await (io.stdoutAsync ?? io.stdout)(jsonLine(value));
+  } catch {
+    throw new CliError("Could not write to stdout.");
+  }
+}
+/** Like printJson, with controls and invisible characters escaped for a terminal; JSON.parse gives the same value. */
+export async function printTerminalJson(io: Io, value: unknown): Promise<void> {
+  try {
+    await (io.stdoutAsync ?? io.stdout)(`${escapeJson(JSON.stringify(value))}\n`);
   } catch {
     throw new CliError("Could not write to stdout.");
   }

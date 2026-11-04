@@ -48,6 +48,17 @@ export const InboxItem = z.object({
 export type InboxItem = z.infer<typeof InboxItem>;
 export const InboxList = z.object({ items: z.array(InboxItem).max(LIMITS.inboxItems * ReviewList.options.length) });
 export type InboxList = z.infer<typeof InboxList>;
+/** One row of the agent's own list: no comments, writeup, docs or other owners' ids. */
+export const AgentReviewItem = z.object({
+  id: z.uuid(),
+  title: PublishRequest.shape.title,
+  state: ReviewState,
+  updatedAt: z.iso.datetime(),
+  url: z.url({ protocol: /^https?$/ }).max(LIMITS.pathChars),
+});
+export type AgentReviewItem = z.infer<typeof AgentReviewItem>;
+export const AgentReviewList = z.object({ items: z.array(AgentReviewItem).max(LIMITS.agentReviews) });
+export type AgentReviewList = z.infer<typeof AgentReviewList>;
 export const ReviewView = InboxItem.extend({
   importedAt: z.iso.datetime().nullable().default(null),
   revisions: z.array(z.object({ seq: z.int().positive(), createdAt: z.iso.datetime() })),

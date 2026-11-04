@@ -30,6 +30,8 @@ export async function run(argv: string[], io: Io): Promise<number> {
   emend wait <review> [--timeout <seconds>] [--save <folder>]
   emend feedback <review> [--save <folder>]
   emend reply <comment> --status <outcome> (--body <text> | --body-file <path | ->)
+  emend ls [--json]
+  emend status [--json]
   emend mcp
   emend service install [serve options] | uninstall | status
   emend skills install [--dir <path>] [--dry-run]
@@ -43,9 +45,21 @@ export async function run(argv: string[], io: Io): Promise<number> {
     return 0;
   }
   if (
-    ["wait", "feedback", "reply", "mcp", "service", "skills", "config", "pair", "devices", "attach", "detach"].includes(
-      argv[0] ?? "",
-    )
+    [
+      "wait",
+      "feedback",
+      "reply",
+      "ls",
+      "status",
+      "mcp",
+      "service",
+      "skills",
+      "config",
+      "pair",
+      "devices",
+      "attach",
+      "detach",
+    ].includes(argv[0] ?? "")
   ) {
     const { CliUsageError, CliSignalExit, errorLine } = await import("./cli/http.ts");
     try {
@@ -57,6 +71,8 @@ export async function run(argv: string[], io: Io): Promise<number> {
         wait: () => import("./cli/commands/wait.ts").then((m) => m.waitCommand),
         feedback: () => import("./cli/commands/feedback.ts").then((m) => m.feedbackCommand),
         reply: () => import("./cli/commands/reply.ts").then((m) => m.replyCommand),
+        ls: () => import("./cli/commands/ls.ts").then((m) => m.lsCommand),
+        status: () => import("./cli/commands/status.ts").then((m) => m.statusCommand),
         mcp: () => import("./cli/commands/mcp.ts").then((m) => m.mcpCommand),
         service: () => import("./cli/commands/service.ts").then((m) => m.serviceCommand),
         skills: () => import("./cli/commands/skills.ts").then((m) => m.skillsCommand),

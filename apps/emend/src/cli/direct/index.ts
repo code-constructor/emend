@@ -8,6 +8,7 @@ import {
   SCOPES_BY_KIND,
   type WaitResult,
 } from "@emend/contract";
+import { listAgentReviews } from "../../db/repo/agent-reviews.ts";
 import { replyToComment } from "../../db/repo/replies.ts";
 import { beginWait, endWait, renewWait } from "../../db/repo/waiters.ts";
 import type { Principal } from "../../server/auth/principal.ts";
@@ -106,6 +107,12 @@ export function replyDirect(stateDir: string, commentId: string, input: ReplyReq
       await replyToComment(state.db, principal, commentId, ReplyRequest.parse(input), Date.now()),
     );
   });
+}
+
+export function listDirect(stateDir: string) {
+  return withState(stateDir, async (state, principal) =>
+    listAgentReviews(state.db, principal, await savedBaseUrl(stateDir)),
+  );
 }
 
 export function takeDirect(

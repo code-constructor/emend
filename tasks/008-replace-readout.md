@@ -23,7 +23,9 @@ task 007.
 - [x] 4.4: the Send bar says whether an agent waits; one resume command for any agent. After a
       Send, a window waits for the agent to pick it up and shows the resume command if none does;
       a review shows "Not picked up yet" or "Picked up" from the agent's confirmation.
-- [ ] 4.5: agent commands `emend ls` and `emend status`.
+- [x] 4.5: agent commands `emend ls` and `emend status`. Whether they join the sandbox exemptions
+      is your call: the security review advises `status` only, because `ls` shows every review on
+      the machine.
 - [ ] 4.6: built-in features for HTML docs. Waits for your go on plan task 1.12b.
 - [ ] 4.7: any text file as a doc, shown as source.
 - [ ] 4.8: larger size limits, measured first.

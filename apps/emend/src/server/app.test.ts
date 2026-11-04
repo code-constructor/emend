@@ -177,7 +177,8 @@ test("every documented API endpoint enforces its scope even before its handler e
       if (!(SCOPES_BY_KIND[kind] as readonly string[]).includes(endpoint.scope))
         await error(response, "forbidden", endpoint.method === "HEAD");
       else if (path === "/api/v1/pairings") expect(response.status).toBe(201);
-      else if (path === "/api/v1/reviews" || path === "/api/v1/devices") expect(response.status).toBe(200);
+      else if (["/api/v1/reviews", "/api/v1/devices", "/api/v1/agent/reviews"].includes(path))
+        expect(response.status).toBe(200);
       else if (path === "/api/v1/events") {
         expect(response.status).toBe(200);
         await response.body?.cancel();

@@ -92,6 +92,7 @@ a machine token reaches only reviews from its own instance.
 | POST | `/api/v1/publish` | Agent | Create a review or add a revision. |
 | POST | `/api/v1/import` | Agent | Copy one `ImportBundle`; return `ImportResult` (201, or 200 when skipped); machine tokens only. |
 | GET | `/api/v1/reviews` | Reviewer | List reviews in the inbox. |
+| GET | `/api/v1/agent/reviews` | Agent | List the token's own instance's reviews, newest first, as `AgentReviewList`. |
 | GET | `/api/v1/reviews/:id` | Reviewer | Read a review. |
 | GET | `/api/v1/reviews/:id/revisions/:seq` | Reviewer | Read one revision. |
 | PUT | `/api/v1/reviews/:id/viewed` | Reviewer | Mark or unmark diff files as viewed; return 204. |
@@ -365,12 +366,26 @@ A requested revision at or before that Send has no changed blocks.
 Every query is owner-scoped. Missing/foreign reviews return `404 unknown_review`; missing or
 invalid sequences of an owned review return `404 not_found`. Agent tokens receive `403 forbidden`.
 
+`GET /api/v1/agent/reviews` returns `AgentReviewList = { items: AgentReviewItem[] }` with
+`AgentReviewItem = { id, title, state: ReviewState, updatedAt, url }`. It needs the agent `publish`
+scope and lists only the principal owner's reviews whose origin is the token's own instance, so a
+machine token never sees another instance's or another owner's reviews. Items run newest
+`updatedAt` first, review id as the stable tie breaker, at most `agentReviews` (100) rows, with no
+pagination. The list has no inbox filter: snoozed, approved and retired reviews appear with their
+stored `state` (`open`, `approved` or `settled`). `updatedAt` is an ISO 8601 UTC string. `url` is
+the review's address on this server. The list carries no comment bodies,
+writeup text, doc content, tokens or other ids. A reviewer session receives `403 forbidden`.
+
 Read-view bounds follow the write-side validators and rendering budgets; no history is truncated
 to make a read fit a per-Send or per-revision limit. The limits below apply to the schemas above.
 
 | Field | Bound and write-side source |
 | --- | --- |
 | `InboxList.items` | `inboxItems` (200), the inbox query limit |
+| `AgentReviewList.items` | `agentReviews` (100), the agent list query limit |
+| `AgentReviewItem.title` | `titleChars` (200), as in `InboxItem.title` |
+| `AgentReviewItem.updatedAt` | ISO 8601 UTC datetime string (`z.iso.datetime()`) |
+| `AgentReviewItem.url` | HTTP(S) URL of at most `pathChars` (4096) characters |
 | `InboxItem.title` | `titleChars` (200), including publish's nonblank requirement |
 | `InboxItem.repo` | Nullable `Sha256`: exactly 64 lowercase hex characters, the published repository key, not the repository name |
 | `InboxItem.branch` | Nullable, otherwise 1 through `pathChars` (4096) characters, as in `PublishRequest` |
@@ -1023,6 +1038,7 @@ limit with `413 too_large` before parsing. Upload content also has the role's by
 | Constant key | Maximum |
 | --- | ---: |
 | `inboxItems` | 200 reviews returned in the inbox |
+| `agentReviews` | 100 reviews returned in the agent list |
 | `importRevisions` | 1000 revisions per import |
 | `importThreads` | 1000 threads per import |
 | `importComments` | 10000 comments per import |

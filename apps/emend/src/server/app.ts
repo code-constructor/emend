@@ -17,6 +17,7 @@ import { hostGuard } from "./http/host-guard.ts";
 import { originGuard } from "./http/origin-guard.ts";
 import { appPage } from "./http/pages.ts";
 import type { Executor } from "./publish/work.ts";
+import { agentReviewRoutes } from "./routes/agent-reviews.ts";
 import { blobRoutes } from "./routes/blobs.ts";
 import { capabilitiesRoutes } from "./routes/capabilities.ts";
 import { commentRoutes } from "./routes/comments.ts";
@@ -70,6 +71,7 @@ export const ENDPOINTS = [
   { method: "PUT", path: "/api/v1/blobs/:sha256", scope: "publish" },
   { method: "POST", path: "/api/v1/publish", scope: "publish" },
   { method: "POST", path: "/api/v1/import", scope: "publish" },
+  { method: "GET", path: "/api/v1/agent/reviews", scope: "publish" },
   { method: "GET", path: "/api/v1/reviews", scope: "read" },
   { method: "GET", path: "/api/v1/reviews/:id", scope: "read" },
   { method: "GET", path: "/api/v1/reviews/:id/revisions/:seq", scope: "read" },
@@ -162,6 +164,7 @@ export function createApp(deps: AppDeps) {
   importRoutes(app, deps);
   blobRoutes(app, deps);
   publishRoutes(app, deps);
+  agentReviewRoutes(app, deps);
   reviewRoutes(app, deps);
   lifecycleRoutes(app, deps);
   viewedRoutes(app, deps);
