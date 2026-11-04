@@ -1,6 +1,7 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
-import { type ComponentProps, type ReactNode, type RefObject, useRef } from "react";
+import { type ComponentProps, type ReactNode, type RefObject, useCallback, useRef, useState } from "react";
+import { useVisualViewportInset } from "../../lib/visual-viewport.ts";
 import { IconButton } from "./IconButton.tsx";
 import { isToastInteraction, overlayClass } from "./overlay.ts";
 import { cn } from "./utils.ts";
@@ -25,7 +26,7 @@ const sides = {
     "inset-y-0 right-0 w-[min(400px,92%)] rounded-l-xl border-l border-line-1 animate-[em-sheet-right_var(--dur-3)_var(--ease-out)]",
   left: "inset-y-0 left-0 w-[min(340px,92%)] rounded-r-xl border-r border-line-1 animate-[em-sheet-left_var(--dur-3)_var(--ease-out)]",
   bottom:
-    "inset-x-0 bottom-0 max-h-[85dvh] rounded-t-xl pb-[env(safe-area-inset-bottom)] animate-[em-sheet-up_var(--dur-3)_var(--ease-out)]",
+    "inset-x-0 bottom-[var(--keyboard-inset,0px)] max-h-[calc(var(--visual-height,100dvh)*0.85)] rounded-t-xl pb-[var(--sheet-safe-bottom,env(safe-area-inset-bottom))] animate-[em-sheet-up_var(--dur-3)_var(--ease-out)]",
 };
 
 export function Sheet({
@@ -43,13 +44,19 @@ export function Sheet({
 }: SheetProps) {
   const content = useRef<HTMLDivElement>(null);
   const opener = useRef<HTMLElement | null>(null);
+  const [node, setNode] = useState<HTMLDivElement | null>(null);
+  const attach = useCallback((el: HTMLDivElement | null) => {
+    content.current = el;
+    setNode(el);
+  }, []);
+  useVisualViewportInset(side === "bottom" ? node : null);
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       {trigger && <Dialog.Trigger asChild>{trigger}</Dialog.Trigger>}
       <Dialog.Portal>
         <Dialog.Overlay className={overlayClass} />
         <Dialog.Content
-          ref={content}
+          ref={attach}
           onInteractOutside={(event) => {
             if (isToastInteraction(event)) event.preventDefault();
             else onInteractOutside?.(event);
