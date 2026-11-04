@@ -134,6 +134,8 @@ export const ThreadView = z.object({
       id: z.uuid(),
       author: z.enum(["user", "agent"]),
       body: CommentBody,
+      // The body as server-rendered, sanitized HTML; null (or absent) means show `body` as plain text.
+      html: z.string().nullable().optional(),
       outcome: Outcome.optional(),
       sent: z.boolean(),
       sentOn: z.int().positive().nullable(),

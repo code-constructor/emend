@@ -35,6 +35,24 @@ test("line counts treat CRLF as one delimiter and lone CR as content, with no ph
   }
 });
 
+test("comment Markdown renders in the worker, in order, with repoUrl links", async () => {
+  const execute = workerExecutor();
+  try {
+    const result = await execute({
+      kind: "comment-md",
+      bodies: ["**one**", "see #5", "<script>alert(1)</script>ok"],
+      repoUrl: "https://github.com/o/r",
+    });
+    expect(result.kind).toBe("comment-md");
+    if (result.kind !== "comment-md") return;
+    expect(result.html[0]).toBe("<p><strong>one</strong></p>");
+    expect(result.html[1]).toContain('href="https://github.com/o/r/issues/5"');
+    expect(result.html[2]).not.toContain("<script");
+  } finally {
+    await execute.close();
+  }
+});
+
 test("breaker: writeup source is transferred, parsed and stripped in the worker", async () => {
   const execute = workerExecutor();
   try {

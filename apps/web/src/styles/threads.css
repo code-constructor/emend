@@ -211,6 +211,54 @@
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
+  /* Compact .em-prose for a comment: comment size and colour, tight margins, plain one-liners. */
+  .em-prose.em-comment-html {
+    font: inherit;
+    color: inherit;
+    max-width: none;
+  }
+  .em-comment-html > :first-child {
+    margin-top: 0;
+  }
+  .em-comment-html > :last-child {
+    margin-bottom: 0;
+  }
+  .em-prose.em-comment-html p {
+    margin: 0 0 6px;
+  }
+  .em-prose.em-comment-html :is(ul, ol) {
+    margin: 0 0 6px;
+    padding-left: 20px;
+  }
+  .em-prose.em-comment-html li {
+    margin: 2px 0;
+  }
+  .em-prose.em-comment-html :is(h1, h2, h3, h4, h5, h6) {
+    font: inherit;
+    font-weight: var(--weight-semibold);
+    text-transform: none;
+    letter-spacing: normal;
+    color: var(--fg-1);
+    margin: 8px 0 4px;
+  }
+  /* A fence scrolls inside the card and never widens it. */
+  .em-prose.em-comment-html pre {
+    margin: 0 0 6px;
+    padding: 8px 10px;
+    font-size: 0.9em;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+  .em-prose.em-comment-html blockquote {
+    margin: 0 0 6px;
+    padding-left: 10px;
+    border-left: 2px solid var(--border-1);
+  }
+  .em-prose.em-comment-html table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+  }
   .em-composer {
     display: flex;
     flex-direction: column;

@@ -10,6 +10,7 @@ import { writeSecretFile } from "../state/files.ts";
 import { type AppDeps, createApp } from "./app.ts";
 import { errorBody } from "./http/errors.ts";
 import { headersForPath } from "./http/headers.ts";
+import { closeCommentRenderer } from "./routes/comment-html.ts";
 
 import { initializeServerState } from "./state.ts";
 
@@ -117,6 +118,7 @@ export async function startServer(
           try {
             await stopServer(server);
           } finally {
+            await closeCommentRenderer();
             await state.db.close();
             await removeDiscovery(discovery, record);
           }

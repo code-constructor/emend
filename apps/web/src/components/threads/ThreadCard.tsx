@@ -29,6 +29,7 @@ import { useThreadJump } from "../../lib/thread-jump.ts";
 import type { ReviewSearch } from "../../router.tsx";
 import { useCommentCard } from "../diff/comment-lines.ts";
 import { targetLabel } from "../diff/targets.ts";
+import { CommentHtml } from "../reading/BlockView.tsx";
 import { useThreadComposer } from "../reading/ThreadComposerContext.ts";
 import { ChangedMarker } from "../status/ChangedMarker.tsx";
 import { OutcomeBadge } from "../status/OutcomeBadge.tsx";
@@ -377,6 +378,9 @@ function Comment({
             }}
             returnFocus={editButton.returnFocus}
           />
+        ) : // A null or absent html is the plain-text fallback.
+        typeof comment.html === "string" ? (
+          <CommentHtml html={comment.html} />
         ) : (
           <p className="em-comment__body">{comment.body}</p>
         )}

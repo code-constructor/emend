@@ -189,7 +189,7 @@ their local filename differs from the published path.
 When the work has a pull request, fixes an issue or opened one, add each URL to `links` with a
 short label such as `PR #42`. Use only URLs you have seen; never guess one. The review header
 shows them. When emend knows the repository's web address (see `repoUrl` in the manifest
-reference), `#123` in the writeup links to that issue.
+reference), `#123` in the writeup and in comments links to that issue.
 A doc's `source` must be inside the repository's worktree or inside a folder the user listed in
 `docRoots` in emend's own configuration.
 When publish prints `source is outside the allowed doc roots`, stop and ask the user to run `emend config add docRoots <folder>` for that folder, or to move the doc into the repository. Never run `emend config` or edit emend's configuration yourself.

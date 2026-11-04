@@ -43,6 +43,7 @@ import type { AppDeps } from "../app.ts";
 import type { AppEnv } from "../auth/principal.ts";
 import { ApiError } from "../http/errors.ts";
 import { noteView } from "../publish/notes.ts";
+import { commentHtml } from "./comment-html.ts";
 
 function publishMeta(rendered: unknown) {
   const meta = PublishMeta.safeParse(rendered);
@@ -358,6 +359,18 @@ async function revisionView(ownerId: string, q: Queries, deps: AppDeps, reviewId
     });
     byThread.set(comment.threadId, list);
   }
+  // Comment Markdown renders on read, never stored; null leaves the comment as plain text.
+  const meta = publishMeta(rendered);
+  const everyComment = [...byThread.values()].flat();
+  const htmls = await commentHtml(
+    deps,
+    ownerId,
+    everyComment.map((comment) => comment.body),
+    "repoUrl" in meta && meta.repoUrl ? meta.repoUrl : undefined,
+  );
+  everyComment.forEach((comment, index) => {
+    comment.html = htmls[index] ?? null;
+  });
   const lastSend = await q
     .select({ seq: revisions.seq })
     .from(sends)
@@ -434,7 +447,7 @@ async function revisionView(ownerId: string, q: Queries, deps: AppDeps, reviewId
     }),
     writeup: rendered,
     // The rendered blob carries the publish-level fields beside its sections; RenderedWriteup strips them.
-    ...publishMeta(rendered),
+    ...meta,
     docs,
     threads: threadRows.map(({ thread, createdOn, placement }) => ({
       id: thread.id,

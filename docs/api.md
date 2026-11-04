@@ -301,8 +301,27 @@ Other frame messages carry ready notifications, proposed quotes, quote highlight
 scroll requests; saving a comment requires the reviewer's explicit action.
 
 `ThreadView = { id, target: Target, state: ThreadState, placement: Placement, createdOn,
-comments: { id, author: "user" | "agent", body, outcome?: Outcome, sent: boolean,
+comments: { id, author: "user" | "agent", body, html?: string | null, outcome?: Outcome, sent: boolean,
 sentOn: number | null }[] }`.
+`html` is the comment `body`, a Markdown source, rendered on the server on every read through the same
+sanitize pipeline as docs (including `hardenLinks`, so absolute web links carry `target="_blank"` and
+`rel`, and `#123` links when the revision has a `repoUrl`), but without Shiki: a fence stays plain
+`<pre><code>`, and a `mermaid` fence is a plain code block, not a diagram. It is never stored. It is `null`
+(or absent) when the response's HTML budget is spent, when the comment is not rendered because the
+response's uncached source budget is spent, or when rendering failed or took longer than about 2 seconds.
+A comment that failed stays `null` for 10 minutes and is not retried on every read, and one failed
+comment never blanks the others. A client then shows `body` as plain text. `#123` in a comment links to
+the issue of the viewed revision's `repoUrl`. Unlike docs and the writeup, a comment keeps a single line
+break inside a paragraph as a line break, as GitHub comments do; fences, inline code and raw HTML are
+unchanged. `html` appears only here: hand-offs, `emend wait` and `emend feedback` output, MCP tools, export,
+import and attach bundles keep the raw Markdown `body` and carry no `html`, and comment inputs are
+unchanged. Budgets per response: 1 MiB of HTML in all, and 256 KiB of Markdown that is not already in
+the server's cache. One comment's HTML is also capped at 256 Ki characters (a body that expands past it is
+`null`, as a failure), and a body whose link and image references resolve to more than 32 Ki characters of
+URL and title text in all is `null` too, before it is converted. One read waits at most 2.5 seconds for comment rendering; comments not done by then
+are `null` in that response and fill the cache for the next read, and at most 64 renders wait in the
+queue. The server keeps an in-process cache of at most 2000 rendered comments and 16 MiB
+(each character counts as two bytes), keyed by the owner, the body and the `repoUrl`, and never writes it to disk.
 `createdOn` is the creation revision's sequence. Placement belongs to the requested revision;
 an absent placement is `unplaced/not-placed`. Comments are in durable insertion order,
 regardless of clock changes. `sent` means the comment has a Send; agent replies retain their outcome.

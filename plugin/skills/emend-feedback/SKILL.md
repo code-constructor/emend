@@ -162,6 +162,9 @@ emend reply <comment-id> --status explained --body-file "<review-folder>/reply.m
 A `not_found` from `emend reply` usually means a thread id was passed. Use the comment's `id` from the hand-off.
 
 Write reply body files as `.md` files only in that folder, or use `--body-file -` to read the reply from stdin.
+Replies render as Markdown: lists, `code`, fenced code and links work. Write Markdown, not HTML, because most HTML is removed.
+When you name an issue or pull request, write its full URL, or `#123` when the review has a
+repository address, so the reviewer can open it.
 
 For replies and writeup text, answer first, then give the reason and relevant validation.
 Use one fact per sentence and short sentences of 20 words or fewer. Give a short summary in the

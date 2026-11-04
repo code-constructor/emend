@@ -10,18 +10,22 @@ paths:
 
 # Content isolation
 
-Writeups, docs, glossary entries and diffs are written by an agent or come from a repo under
-review. Treat every byte as hostile. A script that runs with the reviewer's session can send
-instructions to the waiting agent in the reviewer's name.
+Writeups, docs, glossary entries, diffs and comment bodies are written by an agent, come from a
+repo under review or are pasted in from elsewhere. Treat every byte as hostile. A script that runs
+with the reviewer's session can send instructions to the waiting agent in the reviewer's name.
 
 - Markdown renders on the server only: remark-parse → remark-gfm → remark-rehype →
   rehype-sanitize → link hardener → Shiki → rehype-stringify. Never skip rehype-sanitize. Shiki
-  runs after sanitize and is the only source of `style` attributes.
+  runs after sanitize and is the only source of `style` attributes. Comments add only two steps
+  before remark-rehype: a size check that rejects a body whose references expand too far, and a
+  line-break step that emits only `text` and `break` nodes. Any other step before sanitize needs
+  `emend-security-reviewer`.
 - Never widen the sanitize schema to allow `script`, `style`, `iframe`, `object`, `embed`, `form`,
   `svg`, `on*` attributes, author `style` attributes, or `javascript:`, `data:` or `vbscript:`
   URLs. Author `id`, `class` and `name` get the `user-content-` prefix; `data-*` is dropped.
-- `dangerouslySetInnerHTML` takes only server-rendered blocks, and only in `BlockView.tsx`. Client
-  code never sets `innerHTML`, `outerHTML` or `insertAdjacentHTML`.
+- `dangerouslySetInnerHTML` takes only server-rendered HTML, and only in `BlockView.tsx`: blocks
+  from the pipeline above, and comment `html` from the same pipeline through the link hardener,
+  without Shiki. Client code never sets `innerHTML`, `outerHTML` or `insertAdjacentHTML`.
 - Never serve agent-written HTML, JS or CSS on the app origin. HTML docs and their assets load
   only from `/content/<doc key>/…` with `Content-Security-Policy: sandbox allow-scripts; …` (plan,
   Global Constraints), in an iframe with `sandbox="allow-scripts"` and nothing else. Never add

@@ -16,10 +16,14 @@ import {
   type PlaceContext,
   placeThread,
   type RenderedWriteup,
+  renderCommentHtml,
   renderDoc,
   renderWriteup,
   resectionBlocks,
 } from "@emend/core";
+
+/** One comment's rendered HTML is at most this many characters; a larger one is null. */
+export const COMMENT_HTML_CHARS = 262144;
 
 export type SharedSides = { oldHash?: string; newHash?: string };
 export type WorkLast = { location: PlacementLocation; sides?: SharedSides } | null;
@@ -33,6 +37,7 @@ export type Work =
   | { kind: "writeup"; source: WriteupInput; topics: TopicMeta[]; links?: PublishLinks; repoUrl?: string }
   | { kind: "doc"; path: string; source: ArrayBuffer; repoUrl?: string }
   | { kind: "resection"; path: string; bytes: ArrayBuffer }
+  | { kind: "comment-md"; bodies: string[]; repoUrl?: string }
   | { kind: "changed"; previous: { format: "writeup" | "doc"; bytes: ArrayBuffer }[]; next: ArrayBuffer[] }
   | {
       kind: "place";
@@ -57,6 +62,7 @@ export type WorkResult =
   | ({ kind: "placement-doc" } & EncodedPlacementDoc)
   | ({ kind: "writeup" | "doc" } & RenderedBytes)
   | { kind: "changed"; bytes: ArrayBuffer }
+  | { kind: "comment-md"; html: (string | null)[] }
   | { kind: "place"; placements: { id: string; placement: Placement }[] };
 export type RenderedBytes = { bytes: ArrayBuffer; ids: ArrayBuffer; count: number };
 const decode = (bytes: ArrayBuffer) => new TextDecoder().decode(bytes);
@@ -112,6 +118,16 @@ export const executeWork: Executor = async (work) => {
     };
   if (work.kind === "doc")
     return { kind: "doc", ...serializeRendered(await renderDoc(decode(work.source), work.path, work.repoUrl)) };
+  if (work.kind === "comment-md") {
+    // One failing comment gives null for that comment alone.
+    const html: (string | null)[] = [];
+    for (const body of work.bodies) {
+      const rendered = await renderCommentHtml(body, work.repoUrl).catch(() => null);
+      // Reference links can multiply a short body; a result this large is not sent to the main thread.
+      html.push(rendered !== null && rendered.length > COMMENT_HTML_CHARS ? null : rendered);
+    }
+    return { kind: "comment-md", html };
+  }
   if (work.kind === "resection")
     return {
       kind: "doc",

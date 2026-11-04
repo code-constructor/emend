@@ -114,6 +114,48 @@ test.each([
   expect(form?.querySelector(".em-card__pill")?.textContent).toBe(pill);
 });
 
+test("a comment with server html renders it through CommentHtml; null or absent html stays plain text", () => {
+  const html = '<p>Use <strong>bold</strong> and <a href="https://example.test/x" target="_blank">a link</a></p>';
+  const thread: ThreadView = {
+    ...base,
+    comments: [
+      { id, author: "user", body: "**raw** one", html, sent: true, sentOn: 1 },
+      { id: "second", author: "agent", body: "**plain** two", html: null, sent: false, sentOn: null },
+      { id: "third", author: "agent", body: "**plain** three", sent: false, sentOn: null },
+    ],
+  };
+  mount(card(thread));
+  const rendered = document.querySelector(".em-comment-html");
+  expect(rendered?.classList.contains("em-prose")).toBe(true);
+  expect(rendered?.querySelector("strong")?.textContent).toBe("bold");
+  expect(rendered?.querySelector("a")?.getAttribute("target")).toBe("_blank");
+  expect(screen.queryByText("**raw** one")).toBeNull();
+  // The fallback shows the Markdown source as text, never as markup.
+  expect(screen.getByText("**plain** two").tagName).toBe("P");
+  expect(screen.getByText("**plain** three").classList.contains("em-comment__body")).toBe(true);
+  expect(document.querySelectorAll(".em-comment-html")).toHaveLength(1);
+});
+
+test("an agent reply with html renders it, and the raw body still seeds an edit draft", () => {
+  const thread: ThreadView = {
+    ...base,
+    comments: [
+      {
+        id,
+        author: "user",
+        body: "Please **fix** it",
+        html: "<p>Please <strong>fix</strong> it</p>",
+        sent: false,
+        sentOn: null,
+      },
+    ],
+  };
+  mount(card(thread));
+  expect(document.querySelector(".em-comment-html strong")?.textContent).toBe("fix");
+  fireEvent.click(screen.getByRole("button", { name: /^Edit/ }));
+  expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("Please **fix** it");
+});
+
 test("card CSS distinguishes idle composer, hover, focus and jump, and respects reduced motion", () => {
   const css = readFileSync(resolve(import.meta.dirname, "../../styles/threads.css"), "utf8");
   const rule = (selector: string) => css.slice(css.indexOf(`\n  ${selector}`)).split("}")[0];

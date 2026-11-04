@@ -54,7 +54,11 @@ afterEach(() => {
 function mount(
   style: "split" | "unified",
   threads: ThreadView[],
-  { fileDiff = parsed, composer = false }: { fileDiff?: ParsedDiff; composer?: boolean } = {},
+  {
+    fileDiff = parsed,
+    composer = false,
+    onSelect = () => {},
+  }: { fileDiff?: ParsedDiff; composer?: boolean; onSelect?: (range: unknown) => void } = {},
 ) {
   const ui = (
     values: ThreadView[],
@@ -68,7 +72,7 @@ function mount(
         fileDiff={fileDiff}
         diffStyle={diffStyle}
         overflow={overflow}
-        onSelect={() => {}}
+        onSelect={onSelect}
         selected={null}
         annotations={[
           ...values.map((value) => {
@@ -161,6 +165,36 @@ test.each([
     expect(marked(view.root)).toEqual([]);
   },
 );
+
+test("a link inside a comment card on the diff selects no lines and leaves the card as it is", async () => {
+  const value = thread("new", 3, 4);
+  const [first] = value.comments;
+  if (!first) throw new Error("Expected a comment");
+  value.comments = [
+    {
+      ...first,
+      html: '<p>see <a href="https://example.test/x" target="_blank" rel="noopener noreferrer nofollow">the link</a></p>',
+    },
+  ];
+  const onSelect = vi.fn();
+  const view = mount("split", [value], { onSelect });
+  await waitFor(() => expect(view.root.querySelector("[data-line]")).toBeTruthy());
+  const card = view.getByRole("article");
+  const anchor = within(card).getByRole("link", { name: "the link" });
+  const navigations = vi.fn((event: Event) => event.preventDefault());
+  document.addEventListener("click", navigations);
+  fireEvent.pointerDown(anchor);
+  fireEvent.mouseDown(anchor);
+  fireEvent.mouseUp(anchor);
+  fireEvent.click(anchor);
+  document.removeEventListener("click", navigations);
+  expect(navigations).toHaveBeenCalled();
+  expect(onSelect).not.toHaveBeenCalled();
+  expect(marked(view.root)).toEqual([]);
+  expect(view.getByRole("article")).toBe(card);
+  expect(within(card).getByRole("link", { name: "the link" })).toBe(anchor);
+  expect(within(card).getByRole("button", { name: "Reply" })).toBeTruthy();
+});
 
 test("two active cards combine; removing one preserves the other, and style changes retain its line", async () => {
   const first = thread("old", 2, 3, "first");

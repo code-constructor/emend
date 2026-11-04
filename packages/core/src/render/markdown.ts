@@ -14,6 +14,8 @@ import { type Block, blocksFromTree, type HtmlRoot, renderData, visitElements } 
 import { blockHash } from "./hash.ts";
 import { HIGHLIGHT_LINE_CHARS, type HighlightBudget, limitHighlighting } from "./highlight.ts";
 import { linkIssueRefs } from "./issue-refs.ts";
+import { commentLineBreaks } from "./line-breaks.ts";
+import { limitReferences } from "./reference-limit.ts";
 import {
   FOOTNOTE_NODE,
   hardenLinks,
@@ -44,6 +46,26 @@ function isolateDiagrams() {
   };
 }
 
+const keepLines = () => undefined;
+
+/** Everything up to and including link hardening: the part writeups, docs and comments share. */
+function sanitizedPipeline(lineBreaks = false) {
+  return unified()
+    .use(remarkParse)
+    .use(remarkGfm)
+    .use(lineBreaks ? commentLineBreaks : keepLines)
+    .use(lineBreaks ? limitReferences : keepLines)
+    .use(limitTables)
+    .use(remarkRehype, { allowDangerousHtml: true, clobberPrefix: "" })
+    .use(markFootnotes)
+    .use(rehypeRaw, { passThrough: [FOOTNOTE_NODE] })
+    .use(restoreFootnotes)
+    .use(namespaceClasses)
+    .use(rehypeSanitize, sanitizeSchema)
+    .use(linkIssueRefs)
+    .use(hardenLinks);
+}
+
 async function createProcessor() {
   // Explicit imports keep the server bundle to these grammars and the JavaScript engine.
   const highlighter = await createHighlighterCore({
@@ -66,18 +88,7 @@ async function createProcessor() {
       import("shiki/langs/diff.mjs"),
     ],
   });
-  return unified()
-    .use(remarkParse)
-    .use(remarkGfm)
-    .use(limitTables)
-    .use(remarkRehype, { allowDangerousHtml: true, clobberPrefix: "" })
-    .use(markFootnotes)
-    .use(rehypeRaw, { passThrough: [FOOTNOTE_NODE] })
-    .use(restoreFootnotes)
-    .use(namespaceClasses)
-    .use(rehypeSanitize, sanitizeSchema)
-    .use(linkIssueRefs)
-    .use(hardenLinks)
+  return sanitizedPipeline()
     .use(isolateDiagrams)
     .use(limitHighlighting, highlighter.getLoadedLanguages())
     .use(rehypeShiki, highlighter, {
@@ -115,6 +126,19 @@ export async function renderMarkdownWithBudget(
   return blocksFromTree(tree, section, (node) =>
     processor.stringify(node.type === "root" ? node : { type: "root", children: [node] }),
   );
+}
+
+// Comments need no highlighter or diagram frames: fences stay plain code, and loading Shiki is skipped.
+const commentProcessor = sanitizedPipeline(true).use(rehypeStringify);
+
+/** One comment's Markdown as sanitized HTML, through the same pipeline as docs, without Shiki or Mermaid. */
+export async function renderCommentHtml(markdown: string, repoUrl?: string): Promise<string> {
+  const { source, tables } = prepareTables(markdown);
+  const tree = await commentProcessor.run(commentProcessor.parse(source), {
+    value: source,
+    data: { largeTables: tables, repoUrl },
+  });
+  return commentProcessor.stringify(tree);
 }
 
 export function renderMarkdown(markdown: string, section: string, repoUrl?: string): Promise<Block[]> {

@@ -10,7 +10,7 @@ export { type Block, blockText, resectionBlocks } from "./render/blocks.ts";
 export { changedBlockIds } from "./render/changed.ts";
 export { blockHash } from "./render/hash.ts";
 export { HIGHLIGHT_FENCE_BYTES, HIGHLIGHT_LINE_CHARS, HIGHLIGHT_RENDER_BYTES } from "./render/highlight.ts";
-export { renderDoc, renderMarkdown } from "./render/markdown.ts";
+export { renderCommentHtml, renderDoc, renderMarkdown } from "./render/markdown.ts";
 export { normalizeText } from "./render/normalize.ts";
 export { type RenderedWriteup, renderWriteup } from "./render/writeup.ts";
 export { type ChangedPath, UnchangedFilesError, withOtherChanges } from "./topics.ts";
