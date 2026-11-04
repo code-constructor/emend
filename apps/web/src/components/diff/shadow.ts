@@ -9,6 +9,9 @@ export const diffShadowCSS = `
 [data-line-type="change-deletion"] {
   --diffs-computed-diff-line-bg: var(--diff-del-bg);
 }
+[data-overflow="scroll"] [data-gutter] {
+  background: var(--bg-surface);
+}
 [data-content-buffer],
 [data-gutter-buffer="buffer"] {
   background: var(--bg-sunken);

@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import type { CSSProperties, ReactNode } from "react";
 import { useLayout } from "../../lib/layout.ts";
-import { useLayoutPreferences } from "../../lib/layout-store.ts";
+import { layoutStore, useLayoutPreferences } from "../../lib/layout-store.ts";
 import { requestPairingFromLink } from "../../lib/pairing-intent.ts";
 import { useRefresh } from "../../lib/refresh.ts";
 import { textSizeItems } from "../review/LayoutControls.tsx";
@@ -59,6 +59,21 @@ export function AppFrame({
           : []),
         { separator: true },
         ...textSizeItems(preferences),
+        { heading: "Long lines" },
+        {
+          radioGroup: {
+            label: "Long lines",
+            segmented: true,
+            value: preferences.wrap ? "wrap" : "scroll",
+            onValueChange: (value) => {
+              if (value === "scroll" || value === "wrap") layoutStore.update({ wrap: value === "wrap" });
+            },
+            items: [
+              { value: "scroll", label: "Scroll" },
+              { value: "wrap", label: "Wrap" },
+            ],
+          },
+        },
         { separator: true },
         { label: "Inbox", icon: Inbox, asChild: true, children: <Link to="/">Inbox</Link> },
         devices,

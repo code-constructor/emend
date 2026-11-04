@@ -4,6 +4,7 @@ import { cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 import { DiffView } from "./FileDiff.tsx";
 import { parsePair } from "./parse.worker.ts";
+import { diffShadowCSS } from "./shadow.ts";
 import { diffTheme, syntaxVariables } from "./theme.ts";
 
 const stylesheet = readFileSync(resolve(import.meta.dirname, "../../styles/diff.css"), "utf8");
@@ -230,4 +231,11 @@ test("prose defaults and reader overrides resolve through the semantic size toke
   } finally {
     style.remove();
   }
+});
+
+test("the sticky gutter has an opaque base in scroll mode so scrolled code never shows through", () => {
+  expect(installed).toContain("[data-overflow=scroll] [data-gutter]{position:sticky;left:0");
+  expect(diffShadowCSS).toMatch(
+    /\[data-overflow="scroll"\] \[data-gutter\] \{\s*background: var\(--bg-surface\);\s*\}/,
+  );
 });

@@ -2657,6 +2657,29 @@ test("Topics map links open the Diff tab in Tabs mode", async () => {
   expect(screen.getByRole("tab", { name: "Diff" }).getAttribute("aria-selected")).toBe("true");
 });
 
+test("phone menu offers Long lines, scroll by default, and saves Wrap", async () => {
+  width = 390;
+  mount(`/r/${id}`);
+  await screen.findByText("Overview");
+  fireEvent.keyDown(screen.getByRole("button", { name: "More" }), { key: "ArrowDown" });
+  const menu = within(await screen.findByRole("menu", { name: "More" }));
+  const group = within(menu.getByRole("group", { name: "Long lines" }));
+  expect(group.getByRole("menuitemradio", { name: "Scroll" }).getAttribute("aria-checked")).toBe("true");
+  fireEvent.click(group.getByRole("menuitemradio", { name: "Wrap" }));
+  expect(JSON.parse(localStorage.getItem("emend.layout.v1") ?? "{}").wrap).toBe(true);
+  expect(group.getByRole("menuitemradio", { name: "Wrap" }).getAttribute("aria-checked")).toBe("true");
+});
+
+test("phone menu on the Diff tab still offers Long lines", async () => {
+  width = 390;
+  withDiff();
+  mount(`/r/${id}?tab=diff`);
+  await screen.findByRole("region", { name: "Diff" }).catch(() => screen.findByTestId("diff-pane"));
+  fireEvent.keyDown(screen.getByRole("button", { name: "More" }), { key: "ArrowDown" });
+  const menu = within(await screen.findByRole("menu", { name: "More" }));
+  expect(menu.getByRole("group", { name: "Long lines" })).toBeTruthy();
+});
+
 test.each([1280, 900, 390])("text menu changes validated app variables at %s px", async (size) => {
   width = size;
   localStorage.setItem("emend.layout.v1", JSON.stringify({ proseSize: "18px; color: red", codeSize: 100 }));

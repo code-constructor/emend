@@ -572,7 +572,7 @@ test("disabled storage still allows layout changes", async () => {
   expect(screen.getByTestId("rendered-diff").getAttribute("data-overflow")).toBe("wrap");
 });
 
-test("Wrap persists across mounts, controls overflow, and is forced on phones without changing the preference", async () => {
+test("Wrap persists across mounts, controls overflow, and follows the preference on phones", async () => {
   const value = revision([file()]);
   let mounted = await mount(value);
   near("source.ts");
@@ -588,11 +588,16 @@ test("Wrap persists across mounts, controls overflow, and is forced on phones wi
   fireEvent.click(screen.getByRole("button", { name: "Wrap" }));
   mounted.unmount();
   vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
+  mounted = await mount(value);
+  near("source.ts");
+  expect((await screen.findByTestId("rendered-diff")).getAttribute("data-overflow")).toBe("scroll");
+  expect(screen.queryByRole("button", { name: "Wrap" })).toBeNull();
+  expect(JSON.parse(localStorage.getItem("emend.layout.v1") ?? "{}").wrap).toBe(false);
+  mounted.unmount();
+  localStorage.setItem("emend.layout.v1", JSON.stringify({ wrap: true }));
   await mount(value);
   near("source.ts");
   expect((await screen.findByTestId("rendered-diff")).getAttribute("data-overflow")).toBe("wrap");
-  expect(screen.queryByRole("button", { name: "Wrap" })).toBeNull();
-  expect(JSON.parse(localStorage.getItem("emend.layout.v1") ?? "{}").wrap).toBe(false);
 });
 
 test("Wrap pressed styling follows the toggle state", async () => {

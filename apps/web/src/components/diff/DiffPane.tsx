@@ -188,7 +188,7 @@ export function DiffPane({
     parser,
     fileForTarget,
     diffStyle,
-    overflow: layout === "phone" || wrap ? ("wrap" as const) : ("scroll" as const),
+    overflow: wrap ? ("wrap" as const) : ("scroll" as const),
     counts,
     onParsed,
     onViewed,
