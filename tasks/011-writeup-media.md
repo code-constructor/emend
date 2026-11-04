@@ -1,10 +1,10 @@
 ---
 id: 011
 title: Screenshots in the writeup
-status: open
+status: done
 owner: agent + your approval
 depends_on: [005]
-done_on:
+done_on: 2026-11-04
 ---
 
 # 011 — Screenshots in the writeup
@@ -28,8 +28,8 @@ merged to `main`.
       emend review revision 1 on 2026-11-04.
 - [x] Merge to `main` after F.9 and F.10: the gate and all three reviews passed again on the
       merged tree.
-- [ ] You: publish a review with before and after screenshots and check it on the laptop and the
-      phone, in both themes.
+- [x] You: publish a review with before and after screenshots and check it on the laptop and the
+      phone, in both themes. At your request, checked in headless Chromium instead.
 
 ## Done when
 
@@ -43,3 +43,8 @@ the phone.
 - 2026-11-04: Merged onto `main` after F.9 (links and `repoUrl`) and F.10 (Markdown in
   comments). Writeup rendering now takes `{ links, repoUrl, media }`. Comments and Markdown docs
   pass no media, so every image there keeps no source.
+- 2026-11-04: Done. At your request the check ran in headless Chromium against a throwaway server:
+  laptop (1440 × 900) and phone (390 × 844), light and dark. Every image loaded with its caption,
+  the media route answered 401 without the session cookie, a remote image kept no source, and the
+  page never scrolled sideways. Before and After sit side by side in the wide Tabs layout and stack
+  in Split and on the phone, where the column is narrower than two 18rem images.
