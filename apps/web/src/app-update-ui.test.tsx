@@ -64,7 +64,8 @@ test("the phone menu offers Update available only while an update waits", async 
   menu = await openMenu();
   expect(menu.queryByRole("menuitem", { name: "Reload to finish the update" })).toBeNull();
   fireEvent.click(menu.getByRole("menuitem", { name: "Update available" }));
-  expect(fake.current.installUpdate).toHaveBeenCalledTimes(1);
+  // The item opens the gate's dialog, so it runs once the menu has closed.
+  await waitFor(() => expect(fake.current.installUpdate).toHaveBeenCalledTimes(1));
   expect(screen.queryByRole("alertdialog")).toBeNull();
 });
 
@@ -75,7 +76,7 @@ test("the phone menu offers a reload after another window installed an update", 
   const menu = await openMenu();
   expect(menu.queryByRole("menuitem", { name: "Update available" })).toBeNull();
   fireEvent.click(menu.getByRole("menuitem", { name: "Reload to finish the update" }));
-  expect(fake.current.reloadNow).toHaveBeenCalledTimes(1);
+  await waitFor(() => expect(fake.current.reloadNow).toHaveBeenCalledTimes(1));
   expect(fake.current.installUpdate).not.toHaveBeenCalled();
 });
 

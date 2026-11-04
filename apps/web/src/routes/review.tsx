@@ -1,8 +1,9 @@
 import type { ReviewView, RevisionView } from "@emend/contract";
-import { useQuery } from "@tanstack/react-query";
-import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link, useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import { type MouseEvent, type Ref, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { placeSpan } from "../../../../packages/core/src/place/span.ts";
+import { ApiError } from "../api/client.ts";
 import { mutationMessage, useViewedErrors, useViewedMutation, useViewedRevision } from "../api/mutations.ts";
 import { reviewQuery, revisionQuery } from "../api/queries.ts";
 import { LazyDiffPane } from "../components/diff/LazyDiffPane.tsx";
@@ -33,6 +34,7 @@ import { openingView } from "../lib/opening-view.ts";
 import { readingPositionKey } from "../lib/reading-position.ts";
 import { revealReadingTarget } from "../lib/reading-reveal.ts";
 import { type IntentState, useReadingPosition } from "../lib/use-reading-position.ts";
+import { useWakeTimer } from "../lib/wake-timer.ts";
 import { type ReviewSearch, validateReviewSearch } from "../router.tsx";
 
 function Reading({
@@ -199,6 +201,12 @@ function LoadedReview({
   const onViewed = (paths: string[], viewed: boolean) => viewedMutation.mutate({ revision: seq, paths, viewed });
   const { counts: diffCounts } = useDiffCounts();
   const navigate = useNavigate({ from: "/r/$reviewId" });
+  const client = useQueryClient();
+  // A timed snooze ends on the server without an event: ask again when this one passes.
+  useWakeTimer([review.snoozedUntil], () => {
+    void client.invalidateQueries({ queryKey: ["review", review.id] });
+    void client.invalidateQueries({ queryKey: ["inbox"] });
+  });
   const layout = useLayout();
   const paneMode = usePaneMode();
   const readingId = useId();
@@ -533,6 +541,18 @@ function LoadedReview({
               revisionError={query.isError}
               unsentCount={review.unsentCount}
               approved={review.state === "approved"}
+              lifecycle={{
+                title: review.title,
+                state: review.state,
+                snoozed: review.snoozed,
+                snoozedUntil: review.snoozedUntil,
+                onDeleted: () => {
+                  void navigate({ to: "/" }).then(() => {
+                    client.removeQueries({ queryKey: ["review", review.id] });
+                    client.removeQueries({ queryKey: ["revision", review.id] });
+                  });
+                },
+              }}
               phone={layout === "phone"}
             />
           }
@@ -702,6 +722,16 @@ export function ReviewPage() {
       titleRef.current?.focus();
     }
   }, [reviewId, query.data, query.isError]);
+  // A refetch that answers 404 keeps the old data, so this check comes first.
+  if (query.error instanceof ApiError && query.error.status === 404 && query.error.code === "unknown_review")
+    return (
+      <AppFrame isReview>
+        <main className="p-5">
+          <p role="status">This review was deleted or never existed.</p>
+          <Link to="/">Back to the inbox</Link>
+        </main>
+      </AppFrame>
+    );
   if (query.data)
     return (
       <LoadedReview

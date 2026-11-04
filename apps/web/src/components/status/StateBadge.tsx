@@ -13,7 +13,7 @@ const states = {
   },
   settled: {
     icon: CheckCheck,
-    label: "Settled",
+    label: "Retired",
     pill: "bg-state-settled-bg text-state-settled-fg inset-ring-1 inset-ring-line-1",
     inline: "text-fg-3",
   },

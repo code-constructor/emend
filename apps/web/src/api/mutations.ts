@@ -1,4 +1,4 @@
-import type { RevisionView, ViewedRequest } from "@emend/contract";
+import type { RetireRequest, RevisionView, SnoozeRequest, ViewedRequest } from "@emend/contract";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useSyncExternalStore } from "react";
 import {
@@ -71,6 +71,40 @@ export function mutationMessage(error: Error) {
       ? error.message
       : "The request failed. Try again.";
 }
+export type LifecycleAction =
+  | { action: "snooze"; body: SnoozeRequest }
+  | { action: "unsnooze" }
+  | { action: "retire"; body: RetireRequest }
+  | { action: "reopen" }
+  | { action: "delete" };
+
+/** Snooze, unsnooze, retire, reopen and delete. The server's own message reaches the caller as an ApiError. */
+export function useLifecycleMutation(reviewId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: LifecycleAction) => {
+      const path = `/api/v1/reviews/${encodeURIComponent(reviewId)}`;
+      if (input.action === "delete") {
+        await change(path, "DELETE");
+        // No wait: the page navigates away first, and a refetch of this review would answer 404.
+        void client.invalidateQueries({ queryKey: ["inbox"] });
+        return;
+      }
+      await change(`${path}/${input.action}`, "POST", "body" in input ? input.body : undefined);
+      // The caller closes its dialog when the server answers; the refetch lands after.
+      void client.invalidateQueries({ queryKey: ["review", reviewId] });
+      void client.invalidateQueries({ queryKey: ["inbox"] });
+    },
+    onError: (error) => {
+      // Unsent comments appeared elsewhere: refetch so the dialog can name the new count.
+      if (error instanceof ApiError && error.code === "unsent_comments") {
+        void client.invalidateQueries({ queryKey: ["review", reviewId] });
+        void client.invalidateQueries({ queryKey: ["inbox"] });
+      }
+    },
+  });
+}
+
 export function useReviewMutation(reviewId: string, key?: string) {
   const client = useQueryClient();
   const pending = useSyncExternalStore(subscribeDrafts, () => (key ? isDraftSaving(key) : false));

@@ -35,7 +35,7 @@ test.each(["pill", "inline"] as const)("state badges label all states in %s form
   rerender(<StateBadge state="approved" variant={variant} revision={3} />);
   expect(screen.getByText("Approved · rev 3")).toBeTruthy();
   rerender(<StateBadge state="settled" variant={variant} revision={3} />);
-  expect(screen.getByText("Settled")).toBeTruthy();
+  expect(screen.getByText("Retired")).toBeTruthy();
   expect(screen.queryByRole("status")).toBeNull();
 });
 

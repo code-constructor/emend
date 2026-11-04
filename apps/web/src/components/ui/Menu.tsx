@@ -1,7 +1,7 @@
 import * as Primitive from "@radix-ui/react-dropdown-menu";
 import { Slottable } from "@radix-ui/react-slot";
 import { Check, Ellipsis } from "lucide-react";
-import type { ReactElement, ReactNode } from "react";
+import { type ReactElement, type ReactNode, type Ref, useRef } from "react";
 import { Icon, type IconComponent } from "./Icon.tsx";
 import { IconButton } from "./IconButton.tsx";
 import { Kbd } from "./Kbd.tsx";
@@ -26,6 +26,8 @@ export type MenuItem =
       hint?: string;
       kbd?: string;
       onSelect?: () => void;
+      /** The item can open a dialog: `onSelect` then runs after the menu has closed and unmounted. */
+      opensDialog?: boolean;
       disabled?: boolean;
       danger?: boolean;
       /** Supply a Link as children when asChild is true. */
@@ -39,16 +41,31 @@ export interface MenuProps {
   size?: "sm" | "md" | "lg";
   items: MenuItem[];
   defaultOpen?: boolean;
+  /** Receives the trigger element, so a dialog an item opens can return focus to it. */
+  triggerRef?: Ref<HTMLButtonElement>;
 }
 
-export function Menu({ label, trigger, align = "right", size = "md", items, defaultOpen }: MenuProps) {
+/**
+ * An item with `opensDialog` runs its `onSelect` after the menu has closed and unmounted. A dialog
+ * opened while the menu closes would start under the menu's modal layer: Radix saves the menu's
+ * `pointer-events: none` as the page's own and restores it when the dialog closes, which leaves the
+ * page unclickable. Focus is back on the trigger by then, so the dialog records it as the element
+ * to return to. Other items run `onSelect` at once, inside the user's gesture (clipboard, reload).
+ */
+export function Menu({ label, trigger, align = "right", size = "md", items, defaultOpen, triggerRef }: MenuProps) {
+  const selected = useRef<(() => void) | null>(null);
   return (
     <Primitive.Root defaultOpen={defaultOpen}>
-      <Primitive.Trigger asChild aria-label={label}>
+      <Primitive.Trigger asChild aria-label={label} ref={triggerRef}>
         {trigger ?? <IconButton label={label} icon={Ellipsis} size={size} />}
       </Primitive.Trigger>
       <Primitive.Portal>
         <Primitive.Content
+          onCloseAutoFocus={() => {
+            const run = selected.current;
+            selected.current = null;
+            run?.();
+          }}
           align={align === "left" ? "start" : "end"}
           sideOffset={4}
           collisionPadding={8}
@@ -145,7 +162,13 @@ export function Menu({ label, trigger, align = "right", size = "md", items, defa
                 key={index}
                 asChild={item.asChild}
                 disabled={item.disabled}
-                onSelect={item.onSelect}
+                onSelect={
+                  item.opensDialog
+                    ? () => {
+                        selected.current = item.onSelect ?? null;
+                      }
+                    : item.onSelect
+                }
                 title={item.title}
                 className={cn(
                   "flex h-8 w-full items-center gap-2.5 rounded-[6px] border-0 bg-transparent px-2.5 text-left font-sans text-13 font-medium leading-(--lh-snug) font-[450] text-fg-1 no-underline hover:text-fg-1 data-highlighted:bg-hover data-disabled:pointer-events-none data-disabled:opacity-45 [@media(pointer:coarse)]:h-11 [&>svg]:text-fg-3",

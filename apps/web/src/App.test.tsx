@@ -1971,10 +1971,11 @@ test("inbox row shows machine, title, branch, local time, counts and attention w
 test.each(["approved", "settled"] as const)(
   "%s row replaces time with state and has no attention mark",
   async (state) => {
-    withInbox([{ ...item, state }]);
+    withInbox([{ ...item, state, list: "done" }]);
     mount();
+    fireEvent.click(await screen.findByRole("button", { name: /Done/ }));
     const row = await screen.findByRole("link", { name: /Synthetic review/ });
-    expect(within(row).getByText(state === "approved" ? "Approved" : "Settled")).toBeTruthy();
+    expect(within(row).getByText(state === "approved" ? "Approved" : "Retired")).toBeTruthy();
     expect(row.querySelector("time")).toBeNull();
     expect(within(row).queryByText("Needs you.")).toBeNull();
   },

@@ -79,12 +79,12 @@ test.each([
   { state: "open" as const, agentWaiting: false, pendingSend: true, agent: "No agent waiting", badge: null },
   { state: "open" as const, agentWaiting: false, pendingSend: false, agent: null, badge: null },
   { state: "approved" as const, agentWaiting: true, pendingSend: true, agent: null, badge: "Approved" },
-  { state: "settled" as const, agentWaiting: false, pendingSend: false, agent: null, badge: "Settled" },
+  { state: "settled" as const, agentWaiting: false, pendingSend: false, agent: null, badge: "Retired" },
 ])("header state $state and agent status $agent do not duplicate approval", ({ agent, badge, ...metadata }) => {
   mount({ metadata: { ...review, ...metadata } });
   for (const label of ["Agent waiting", "No agent waiting"])
     expect(screen.queryByText(label) !== null).toBe(label === agent);
-  for (const label of ["Open", "Approved", "Settled"])
+  for (const label of ["Open", "Approved", "Retired"])
     expect(screen.queryAllByText(label)).toHaveLength(label === badge ? 1 : 0);
   expect(screen.queryByText(/Approved.*rev/i)).toBeNull();
 });

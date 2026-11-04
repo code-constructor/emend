@@ -1,4 +1,4 @@
-import { createContext, type ReactNode, useContext, useState } from "react";
+import { createContext, type ReactNode, type RefObject, useContext, useState } from "react";
 import { appUpdate } from "../../lib/app-update.ts";
 import { type UnsavedWork, unsavedWork } from "../../lib/drafts.ts";
 import { Button } from "../ui/Button.tsx";
@@ -39,7 +39,7 @@ export function lossText(work: UnsavedWork) {
  * Update and Reload act at once, unless a reload could lose work. Then a dialog asks first, and
  * asks again if the work at risk changed while the dialog was open. Render `dialog` once.
  */
-export function useUpdateGate(): { request: Request; dialog: ReactNode } {
+export function useUpdateGate(returnFocus?: RefObject<HTMLElement | null>): { request: Request; dialog: ReactNode } {
   const [pending, setPending] = useState<{ action: UpdateAction; work: UnsavedWork } | null>(null);
   function request(action: UpdateAction) {
     const work = unsavedWork();
@@ -59,6 +59,7 @@ export function useUpdateGate(): { request: Request; dialog: ReactNode } {
   const dialog = pending && (
     <Dialog
       open
+      returnFocus={returnFocus}
       onOpenChange={(open) => {
         if (!open) setPending(null);
       }}

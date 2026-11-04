@@ -2,7 +2,7 @@ import type { InboxItem } from "@emend/contract";
 import { Link } from "@tanstack/react-router";
 import { MessageSquare, Pencil } from "lucide-react";
 import { plural } from "../../lib/count.ts";
-import { relativeTime } from "../../lib/time.ts";
+import { relativeTime, wakeHasPassed, wakeTime } from "../../lib/time.ts";
 import { agentDotClasses, agentStatusLabels, agentStatusOf } from "../status/AgentStatus.tsx";
 import { OriginBadge } from "../status/OriginBadge.tsx";
 import { StateBadge } from "../status/StateBadge.tsx";
@@ -10,7 +10,9 @@ import { Icon } from "../ui/Icon.tsx";
 import { cn } from "../ui/utils.ts";
 
 export function needsAttention(review: InboxItem) {
-  return review.state === "open" && !review.movedTo && (review.agentWaiting || review.unsentCount > 0);
+  return (
+    review.state === "open" && !review.snoozed && !review.movedTo && (review.agentWaiting || review.unsentCount > 0)
+  );
 }
 
 export function ReviewRow({
@@ -35,7 +37,19 @@ export function ReviewRow({
         <span className="truncate">{review.origin.name}</span>
       </span>
       <span className="col-start-2 row-start-1 inline-flex items-center whitespace-nowrap text-12 font-normal text-fg-3 tabular-nums">
-        {review.state === "open" ? (
+        {review.snoozed ? (
+          review.snoozedUntil ? (
+            wakeHasPassed(review.snoozedUntil, now) ? (
+              <span>waking up</span>
+            ) : (
+              <time dateTime={review.snoozedUntil} title={new Date(review.snoozedUntil).toLocaleString()}>
+                until {wakeTime(review.snoozedUntil, now)}
+              </time>
+            )
+          ) : (
+            <span>until it changes</span>
+          )
+        ) : review.state === "open" ? (
           <time dateTime={review.updatedAt} title={new Date(review.updatedAt).toLocaleString()}>
             {relativeTime(review.updatedAt, now)}
           </time>

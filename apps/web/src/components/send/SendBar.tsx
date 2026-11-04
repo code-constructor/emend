@@ -24,6 +24,7 @@ import { Textarea } from "../ui/Textarea.tsx";
 import { useToast } from "../ui/Toast.tsx";
 import { cn } from "../ui/utils.ts";
 import { ModePicker } from "./ModePicker.tsx";
+import { ReviewActions, type ReviewLifecycle } from "./ReviewActions.tsx";
 
 export function SendBar({
   reviewId,
@@ -32,6 +33,7 @@ export function SendBar({
   revisionError = false,
   unsentCount,
   approved = false,
+  lifecycle,
   phone = false,
 }: {
   reviewId: string;
@@ -40,6 +42,8 @@ export function SendBar({
   revisionError?: boolean;
   unsentCount: number;
   approved?: boolean;
+  /** Snooze, retire and delete. Without it the bar has no actions menu. */
+  lifecycle?: ReviewLifecycle;
   phone?: boolean;
 }) {
   const [mode, setMode] = useState<GoMode>(DEFAULT_MODE);
@@ -98,20 +102,23 @@ export function SendBar({
   const sendReasonId = useId();
   const revisionStatus = useId();
   const olderReasonId = useId();
+  const retired = lifecycle?.state === "settled";
   const unavailable =
     revision === undefined ? (revisionError ? "Could not load this revision." : "Loading revision…") : undefined;
   const olderReason =
     revision !== undefined && revision < newestRevision
       ? `Revision ${newestRevision} is newer. Switch to it to send or approve.`
       : undefined;
-  const disabled = sending || commentSaving || unsavedCount > 0 || revision === undefined || !!olderReason;
-  const approveBlocked = unsentCount > 0 && !approved;
+  const disabled = sending || commentSaving || unsavedCount > 0 || revision === undefined || !!olderReason || retired;
+  const approveBlocked = unsentCount > 0 && !approved && !retired;
   const unsavedReason = unsavedCount
     ? unsavedCount === 1
       ? "1 unsaved comment: save or discard it first."
       : `${unsavedCount} unsaved comments: save or discard them first.`
     : undefined;
+  const retiredReason = retired ? "This review is retired. Reopen it to send or approve." : undefined;
   const sendReason =
+    retiredReason ??
     unsavedReason ??
     (instruction.length > LIMITS.instructionChars
       ? `Shorten the instructions to ${LIMITS.instructionChars} characters.`
@@ -187,7 +194,7 @@ export function SendBar({
       aria-describedby={
         [
           approveBlocked && blocked,
-          unsavedReason && sendReasonId,
+          (unsavedReason || retiredReason) && sendReasonId,
           unavailable && revisionStatus,
           olderReason && olderReasonId,
         ]
@@ -199,8 +206,11 @@ export function SendBar({
       {approved ? "Approved" : phone || revision === undefined ? "Approve" : `Approve revision ${revision}`}
     </Button>
   );
+  const actions = lifecycle && (
+    <ReviewActions reviewId={reviewId} lifecycle={lifecycle} unsentCount={unsentCount} phone={phone} />
+  );
   const status = (
-    <div className={cn("flex min-w-0 flex-col gap-0.5", phone && "flex-1")}>
+    <div className={cn("flex min-w-0 flex-col gap-0.5", phone && "flex-1 overflow-hidden")}>
       <span className="flex items-center gap-1.5 whitespace-nowrap text-13 font-semibold leading-[1.2] text-fg-1">
         {unsentCount > 0 && (
           <span
@@ -230,9 +240,10 @@ export function SendBar({
   return (
     <section aria-label="Send and approve" className="shrink-0 border-t border-line-1 bg-surface">
       {phone ? (
-        <div className="flex min-h-[52px] items-center gap-2.5 py-1.5 pr-2.5 pl-3.5">
+        <div className="flex min-h-[52px] flex-nowrap items-center gap-2.5 py-1.5 pr-2.5 pl-3.5">
           {status}
-          <div className="flex shrink-0 gap-2">
+          <div className="flex shrink-0 flex-nowrap items-center gap-1.5 [&>*]:shrink-0">
+            {actions}
             {approveButton}
             <Sheet
               side="bottom"
@@ -250,7 +261,11 @@ export function SendBar({
                   disabled={disabled}
                   loading={sending}
                   aria-describedby={
-                    [unavailable && revisionStatus, unsavedReason && sendReasonId, olderReason && olderReasonId]
+                    [
+                      unavailable && revisionStatus,
+                      (unsavedReason || retiredReason) && sendReasonId,
+                      olderReason && olderReasonId,
+                    ]
                       .filter(Boolean)
                       .join(" ") || undefined
                   }
@@ -365,7 +380,8 @@ export function SendBar({
             </div>
             <ModePicker value={mode} onChange={changeMode} disabled={sending} />
           </div>
-          <div className="flex shrink-0 gap-2">
+          <div className="flex shrink-0 items-center gap-2">
+            {actions}
             {approveButton}
             <Button
               type="submit"
@@ -381,7 +397,9 @@ export function SendBar({
         </form>
       )}
       {(!phone || !sheetOpen) &&
-        (unavailable || (phone && (approveBlocked || olderReason || unsavedReason)) || mutation.error) && (
+        (unavailable ||
+          (phone && (approveBlocked || olderReason || unsavedReason || retiredReason)) ||
+          mutation.error) && (
           <div className="space-y-1 px-4 pb-2">
             {unavailable && (
               <p
@@ -393,7 +411,7 @@ export function SendBar({
               </p>
             )}
             {phone && approveBlocked && <p className="m-0 text-fg-3 [font:var(--type-meta)]">{approvalReason}</p>}
-            {phone && unsavedReason && reason}
+            {phone && (unsavedReason || retiredReason) && reason}
             {phone && olderReason && <p className="m-0 text-fg-3 [font:var(--type-meta)]">{olderMessage}</p>}
             {feedback}
           </div>

@@ -11,7 +11,7 @@ import {
   RotateCw,
   Smartphone,
 } from "lucide-react";
-import type { CSSProperties, ReactNode } from "react";
+import { type CSSProperties, type ReactNode, useRef } from "react";
 import { useAppUpdate } from "../../lib/app-update.ts";
 import { useLayout } from "../../lib/layout.ts";
 import { layoutStore, useLayoutPreferences } from "../../lib/layout-store.ts";
@@ -41,12 +41,21 @@ export function AppFrame({
   const toast = useToast();
   const { refresh, busy } = useRefresh();
   const update = useAppUpdate();
-  const gate = useUpdateGate();
+  // The phone menu's trigger: the update dialog it can open returns focus there.
+  const moreRef = useRef<HTMLButtonElement>(null);
+  const gate = useUpdateGate(moreRef);
   const updateItems: MenuItem[] =
     update.state === "available"
-      ? [{ label: "Update available", icon: Download, onSelect: () => gate.request("update") }]
+      ? [{ label: "Update available", icon: Download, opensDialog: true, onSelect: () => gate.request("update") }]
       : update.state === "reload-needed"
-        ? [{ label: "Reload to finish the update", icon: RotateCw, onSelect: () => gate.request("reload") }]
+        ? [
+            {
+              label: "Reload to finish the update",
+              icon: RotateCw,
+              opensDialog: true,
+              onSelect: () => gate.request("reload"),
+            },
+          ]
         : [];
   const refreshItem: MenuItem = { label: "Refresh", icon: RefreshCw, disabled: busy, onSelect: () => void refresh() };
   async function copyLink() {
@@ -145,6 +154,7 @@ export function AppFrame({
           <Menu
             label="More"
             size="lg"
+            triggerRef={moreRef}
             trigger={<IconButton label="More" icon={Ellipsis} size="lg" tooltip={false} />}
             items={menuItems}
           />

@@ -718,3 +718,37 @@ test.each([
     expect(fetchMock).toHaveBeenCalledTimes(ownToast ? 2 : 1);
   },
 );
+
+const retiredLifecycle = {
+  title: "Synthetic review",
+  state: "settled" as const,
+  snoozed: false,
+  snoozedUntil: null,
+  onDeleted: vi.fn(),
+};
+test.each([false, true])("a retired review disables Send and Approve with the reason (phone %s)", (phone) => {
+  mount({ phone, unsentCount: 1, lifecycle: retiredLifecycle });
+  const reason = "This review is retired. Reopen it to send or approve.";
+  for (const name of [/^Send/, /^Approve/]) {
+    expect(button(name).disabled).toBe(true);
+    expect(description(button(name))).toContain(reason);
+    fireEvent.click(button(name));
+  }
+  expect(screen.getAllByText(reason).length).toBeGreaterThan(0);
+  expect(screen.queryByText("Send or delete before approving")).toBeNull();
+  expect(fetchMock).not.toHaveBeenCalled();
+});
+
+test.each([false, true])("the actions menu sits beside Approve and Send (phone %s)", (phone) => {
+  mount({ phone, lifecycle: { ...retiredLifecycle, state: "open" } });
+  const bar = within(screen.getByRole("region", { name: "Send and approve" }));
+  const names = bar.getAllByRole("button").map((node) => node.getAttribute("aria-label") ?? node.textContent ?? "");
+  expect(names.filter((name) => /More review actions|Approve|^Send/.test(name))).toEqual(
+    phone ? ["More review actions", "Approve", "Send"] : ["More review actions", "Approve revision 3", "Send"],
+  );
+});
+
+test("without a lifecycle the bar has no actions menu", () => {
+  mount();
+  expect(screen.queryByRole("button", { name: "More review actions" })).toBeNull();
+});

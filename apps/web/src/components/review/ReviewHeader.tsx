@@ -1,7 +1,8 @@
 import type { ReviewView, RevisionView } from "@emend/contract";
-import { FileText, GitBranch, GitCommitHorizontal, MessageSquarePlus } from "lucide-react";
+import { BellOff, FileText, GitBranch, GitCommitHorizontal, MessageSquarePlus } from "lucide-react";
 import type { Ref } from "react";
 import { plural } from "../../lib/count.ts";
+import { wakeHasPassed, wakeTime } from "../../lib/time.ts";
 import { AgentStatus, agentStatusOf } from "../status/AgentStatus.tsx";
 import { OriginBadge } from "../status/OriginBadge.tsx";
 import { StateBadge } from "../status/StateBadge.tsx";
@@ -73,6 +74,21 @@ export function ReviewHeader({
               ·
             </span>
             <StateBadge state={review.state} />
+          </>
+        )}
+        {review.snoozed && (
+          <>
+            <span aria-hidden="true" className="text-line-strong">
+              ·
+            </span>
+            <span className="inline-flex items-center gap-1 whitespace-nowrap font-medium">
+              <Icon icon={BellOff} size={12} />
+              {!review.snoozedUntil
+                ? "Snoozed until it changes"
+                : wakeHasPassed(review.snoozedUntil, Date.now())
+                  ? "Waking up"
+                  : `Snoozed until ${wakeTime(review.snoozedUntil, Date.now())}`}
+            </span>
           </>
         )}
         {(agent === "waiting" || agent === "none") && (

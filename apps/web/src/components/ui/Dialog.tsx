@@ -1,5 +1,5 @@
 import * as Primitive from "@radix-ui/react-dialog";
-import { type ComponentProps, type ReactNode, useRef } from "react";
+import { type ComponentProps, type ReactNode, type RefObject, useRef } from "react";
 import { isToastInteraction, overlayClass } from "./overlay.ts";
 
 export interface DialogProps {
@@ -11,9 +11,20 @@ export interface DialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onInteractOutside?: ComponentProps<typeof Primitive.Content>["onInteractOutside"];
+  /** Gets focus back when the element focused at opening is gone, as a menu item is. */
+  returnFocus?: RefObject<HTMLElement | null>;
 }
 
-export function Dialog({ title, description, actions, children, open, onOpenChange, onInteractOutside }: DialogProps) {
+export function Dialog({
+  title,
+  description,
+  actions,
+  children,
+  open,
+  onOpenChange,
+  onInteractOutside,
+  returnFocus,
+}: DialogProps) {
   const content = useRef<HTMLDivElement>(null);
   const opener = useRef<HTMLElement | null>(null);
   return (
@@ -36,9 +47,10 @@ export function Dialog({ title, description, actions, children, open, onOpenChan
             }
           }}
           onCloseAutoFocus={(event) => {
-            if (opener.current?.isConnected) {
+            const target = opener.current?.isConnected ? opener.current : returnFocus?.current;
+            if (target) {
               event.preventDefault();
-              opener.current.focus();
+              target.focus();
             }
           }}
           className="fixed top-1/2 left-1/2 z-[calc(var(--z-sheet)+1)] flex max-h-[85dvh] w-[min(440px,92%)] -translate-x-1/2 -translate-y-1/2 animate-[em-fade_var(--dur-2)_var(--ease-out)] flex-col overflow-y-auto rounded-xl border border-line-1 bg-surface shadow-3"
