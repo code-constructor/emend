@@ -2,10 +2,17 @@ import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-quer
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { ComponentProps, ReactNode } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { reconnectReviewEvents } from "../../lib/event-stream.ts";
 import { ToastProvider } from "../ui/Toast.tsx";
-import { HANDOFF_CLOSE_MS, HANDOFF_WAIT_MS, type SendAgent } from "./HandOver.tsx";
+import { HANDOFF_CLOSE_MS, HANDOFF_REFETCH_MS, HANDOFF_WAIT_MS, type SendAgent } from "./HandOver.tsx";
 import type { ReviewLifecycle } from "./ReviewActions.tsx";
 import { SendBar } from "./SendBar.tsx";
+
+// The live stream is not under test here: by default no stream reopens, as with no subscription.
+vi.mock("../../lib/event-stream.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../lib/event-stream.ts")>()),
+  reconnectReviewEvents: vi.fn(() => Promise.resolve(false)),
+}));
 
 const reviewId = "11111111-1111-4111-8111-111111111111";
 const command = `/emend:emend-feedback ${reviewId}`;
@@ -31,6 +38,8 @@ let invalidate: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   vi.useFakeTimers();
+  vi.mocked(reconnectReviewEvents).mockReset().mockResolvedValue(false);
+  probe.mode = "ok";
   localStorage.clear();
   client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   invalidate = vi.spyOn(client, "invalidateQueries");
@@ -256,26 +265,34 @@ const pickedAt = "2026-03-05T12:00:00.000Z";
 const pickedText = "The agent picked up your feedback.";
 const nextRevision = (pendingSend: boolean): SendAgent => ({ ...waiting, pendingSend, newestRevision: 4 });
 
-/** A registered review query; once `hang.on` is set its fetch never settles. */
-const hang = { on: false };
+/** A registered review query: its fetch answers, never settles or fails, by `probe.mode`. */
+const probe: { mode: "ok" | "hang" | "fail" } = { mode: "ok" };
 function Probe() {
   useQuery({
     queryKey: ["review", reviewId],
-    queryFn: () => (hang.on ? new Promise<never>(() => {}) : Promise.resolve(null)),
+    queryFn: () =>
+      probe.mode === "hang"
+        ? new Promise<never>(() => {})
+        : probe.mode === "fail"
+          ? Promise.reject(new TypeError("Failed to fetch"))
+          : Promise.resolve(null),
   });
   return null;
 }
-
-test("the fallback shows at 15 seconds even when the refetch never settles", async () => {
-  hang.on = false;
+function mountProbe() {
   render(
     <QueryClientProvider client={client}>
       <Probe />
     </QueryClientProvider>,
   );
+}
+
+test("the fallback shows at 15 seconds even when the refetch never settles", async () => {
+  probe.mode = "ok";
+  mountProbe();
   mount({ agent: waiting });
   await send();
-  hang.on = true;
+  probe.mode = "hang";
   await settle(HANDOFF_WAIT_MS);
   expect(screen.getByText(pickedUp)).toBeTruthy();
   expect(within(screen.getByRole("alertdialog")).getByText(command)).toBeTruthy();
@@ -486,4 +503,82 @@ test("on the phone, the window waits for the Send sheet's exit animation to end"
   await settle();
   expect(screen.queryByRole("dialog", { name: "Send feedback" })).toBeNull();
   expect(screen.getByRole("dialog", { name: "Sent" })).toBeTruthy();
+});
+
+const lostText =
+  "emend cannot reach its server right now, so a pick-up may not show here. If no agent has it yet, hand it over with the command below.";
+
+test("a Send answered by the server opens the window and frees the button while the refetch never settles", async () => {
+  mountProbe();
+  await settle();
+  probe.mode = "hang";
+  mount({ agent: idle });
+  await send();
+  expect(screen.getByRole("alertdialog", { name: "Sent" })).toBeTruthy();
+  const sendButton = screen.getByRole("button", { name: "Send 1", hidden: true });
+  expect(sendButton.getAttribute("aria-busy")).not.toBe("true");
+  expect((sendButton as HTMLButtonElement).disabled).toBe(false);
+});
+
+test("an Approve answered by the server shows its toast and frees the button while the refetch never settles", async () => {
+  mountProbe();
+  await settle();
+  probe.mode = "hang";
+  mount({ agent: idle, unsentCount: 0 });
+  fireEvent.click(screen.getByRole("button", { name: "Approve revision 3" }));
+  await settle();
+  expect(screen.getByText("Approved revision 3")).toBeTruthy();
+  const approve = screen.getByRole<HTMLButtonElement>("button", { name: "Approve revision 3" });
+  expect(approve.getAttribute("aria-busy")).not.toBe("true");
+  expect(approve.disabled).toBe(false);
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+});
+
+test.each(["hang", "fail"] as const)(
+  "the window says the server cannot be reached when the stream stays closed and the refetch %ss",
+  async (mode) => {
+    mountProbe();
+    await settle();
+    mount({ agent: waiting });
+    await send();
+    probe.mode = mode;
+    await settle(HANDOFF_WAIT_MS);
+    // The fallback never waits on the network: a stalled fetch leaves the usual wording until the
+    // refetch's own limit passes, while a failed one is known at once.
+    if (mode === "hang") expect(screen.getByText(pickedUp)).toBeTruthy();
+    await settle(HANDOFF_REFETCH_MS);
+    expect(screen.getByText(lostText)).toBeTruthy();
+    const dialog = screen.getByRole("alertdialog");
+    expect(within(dialog).getByText(command)).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: "Copy" })).toBeTruthy();
+    expect(within(dialog).getByText(/and handle the result with the emend-feedback skill\.$/)).toBeTruthy();
+  },
+);
+
+test("the window keeps the normal wording when the stream reopens", async () => {
+  vi.mocked(reconnectReviewEvents).mockResolvedValue(true);
+  mountProbe();
+  await settle();
+  mount({ agent: waiting });
+  await send();
+  probe.mode = "hang";
+  const review = reviewRefetches();
+  await settle(HANDOFF_WAIT_MS + HANDOFF_REFETCH_MS * 2);
+  expect(screen.getByText(pickedUp)).toBeTruthy();
+  expect(screen.queryByText(lostText)).toBeNull();
+  // A reopened stream refetches by itself: the window adds no refetch of its own.
+  expect(reviewRefetches()).toBe(review);
+});
+
+test("a late pick-up after the connection-lost wording switches the window to picked up", async () => {
+  mountProbe();
+  await settle();
+  probe.mode = "fail";
+  const { update } = mount({ agent: idle });
+  await send();
+  await settle(HANDOFF_REFETCH_MS * 2);
+  expect(screen.getByText(lostText)).toBeTruthy();
+  update({ agent: { ...idle, pickedUpAt: pickedAt } });
+  expect(screen.getByText(pickedText)).toBeTruthy();
+  expect(screen.queryByText(lostText)).toBeNull();
 });

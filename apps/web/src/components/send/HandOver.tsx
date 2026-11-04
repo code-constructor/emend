@@ -1,5 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
+import { type RefObject, useEffect, useRef, useState } from "react";
+import { reconnectReviewEvents } from "../../lib/event-stream.ts";
 import { shortDate } from "../../lib/time.ts";
 import { Button } from "../ui/Button.tsx";
 import { Dialog } from "../ui/Dialog.tsx";
@@ -25,6 +26,9 @@ export interface SendBaseline {
 
 /** How long the window waits for a pick-up before it asks the server again. */
 export const HANDOFF_WAIT_MS = 15_000;
+const TOO_SLOW = new Error("The review refetch did not finish in time.");
+/** How long the window's one refetch may take before it counts as a lost connection. */
+export const HANDOFF_REFETCH_MS = 3_000;
 /** How long the window stays open after a pick-up. */
 export const HANDOFF_CLOSE_MS = 3_000;
 
@@ -99,26 +103,74 @@ export function HandoffWindow({
   // Once the reader touches the window (pointer, key, selection) it stays until they close it.
   const [held, setHeld] = useState(false);
   const status = useRef<HTMLSpanElement>(null);
-  // Never awaited: the fallback must not wait on the network.
-  const refetch = useCallback(() => {
-    void Promise.all([
-      client.invalidateQueries({ queryKey: ["review", reviewId] }),
-      client.invalidateQueries({ queryKey: ["inbox"] }),
-    ]).catch(() => undefined);
-  }, [client, reviewId]);
+  // True once the window could not reach the server: the stream did not reopen and the refetch
+  // failed or did not settle in time. A pick-up may then exist without showing here.
+  const [lost, setLost] = useState(false);
+  // A later successful review fetch (from any source) shows the server is reachable again.
+  useEffect(() => {
+    if (!lost) return;
+    return client.getQueryCache().subscribe((event) => {
+      const [name, id] = event.query.queryKey;
+      // A manual write (setQueryData, such as the accepted-Send update) is not a fetch: it proves nothing.
+      if (
+        name === "review" &&
+        id === reviewId &&
+        event.type === "updated" &&
+        event.action.type === "success" &&
+        !event.action.manual
+      )
+        setLost(false);
+    });
+  }, [lost, client, reviewId]);
   useEffect(() => {
     if (pickedUp) return;
+    let live = true;
+    let slow: number | undefined;
+    // Asks once, in the background: the fallback text never waits on it. A reopened stream
+    // refetches every query by itself; otherwise this refetches, and a failure or a stall says so.
+    const ask = async () => {
+      let reopened = false;
+      try {
+        reopened = await reconnectReviewEvents();
+      } catch {
+        reopened = false;
+      }
+      if (reopened || !live) return;
+      // Join a refetch already running (the Send's own) instead of cancelling and restarting it.
+      const options = { cancelRefetch: false };
+      void client.invalidateQueries({ queryKey: ["inbox"] }, options).catch(() => undefined);
+      try {
+        // Only the review decides "cannot reach": a slow inbox says nothing about the server.
+        await Promise.race([
+          client.invalidateQueries({ queryKey: ["review", reviewId] }, { ...options, throwOnError: true }),
+          new Promise<never>((_, reject) => {
+            slow = window.setTimeout(() => reject(TOO_SLOW), HANDOFF_REFETCH_MS);
+          }),
+        ]);
+      } catch (error) {
+        // A network failure or a fetch still unfinished counts; an HTTP error means the server answered.
+        if (live && (error === TOO_SLOW || error instanceof TypeError)) setLost(true);
+      }
+      window.clearTimeout(slow);
+    };
     // The stream may be dead after a suspend: ask once, and give the reader the way to hand over.
     if (!waited) {
-      refetch();
-      return;
+      void ask();
+      return () => {
+        live = false;
+        window.clearTimeout(slow);
+      };
     }
     const timer = window.setTimeout(() => {
       setFallback(true);
-      refetch();
+      void ask();
     }, HANDOFF_WAIT_MS);
-    return () => window.clearTimeout(timer);
-  }, [pickedUp, waited, refetch]);
+    return () => {
+      live = false;
+      window.clearTimeout(timer);
+      window.clearTimeout(slow);
+    };
+  }, [pickedUp, waited, client, reviewId]);
   useEffect(() => {
     if (!pickedUp || held) return;
     const timer = window.setTimeout(onClose, HANDOFF_CLOSE_MS);
@@ -139,7 +191,9 @@ export function HandoffWindow({
       {pickedUp
         ? "The agent picked up your feedback."
         : fallback
-          ? "No agent has picked this up yet. emend keeps it until one does."
+          ? lost
+            ? "emend cannot reach its server right now, so a pick-up may not show here. If no agent has it yet, hand it over with the command below."
+            : "No agent has picked this up yet. emend keeps it until one does."
           : "Waiting for the agent to pick this up…"}
     </span>
   );

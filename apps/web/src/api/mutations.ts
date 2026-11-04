@@ -1,5 +1,13 @@
-import type { RetireRequest, RevisionView, SnoozeRequest, ViewedRequest } from "@emend/contract";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import type {
+  InboxItem,
+  InboxList,
+  RetireRequest,
+  ReviewView,
+  RevisionView,
+  SnoozeRequest,
+  ViewedRequest,
+} from "@emend/contract";
+import { type QueryClient, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useSyncExternalStore } from "react";
 import {
   beginDraftSave,
@@ -105,6 +113,19 @@ export function useLifecycleMutation(reviewId: string) {
   });
 }
 
+/** Shows an accepted Send or Approve in the cached review and inbox item before the refetch lands. */
+function applyAccepted(client: QueryClient, reviewId: string, kind: "send" | "approve") {
+  const change = <T extends InboxItem>(item: T): T =>
+    kind === "approve" ? { ...item, state: "approved", list: "done" } : { ...item, unsentCount: 0, pendingSend: true };
+  // Only a loaded item changes; anything else in the cache is left to the refetch.
+  client.setQueryData<ReviewView>(["review", reviewId], (view) => (view?.id === reviewId ? change(view) : view));
+  client.setQueryData<InboxList>(["inbox"], (list) =>
+    Array.isArray(list?.items)
+      ? { ...list, items: list.items.map((item) => (item.id === reviewId ? change(item) : item)) }
+      : list,
+  );
+}
+
 export function useReviewMutation(reviewId: string, key?: string) {
   const client = useQueryClient();
   const pending = useSyncExternalStore(subscribeDrafts, () => (key ? isDraftSaving(key) : false));
@@ -115,29 +136,55 @@ export function useReviewMutation(reviewId: string, key?: string) {
       body,
       draft,
       deleteDraft,
+      refresh = "await",
+      accepted,
     }: {
       path: string;
       method?: "POST" | "PATCH" | "DELETE";
       body?: unknown;
       draft?: { key: string; text: string };
       deleteDraft?: string;
+      /**
+       * "background" resolves when the server answers and refetches without waiting, so a stalled
+       * network cannot keep the caller busy (Send, Approve). The default waits for the refetch: a
+       * saved comment must show in the unsent count before the Send bar judges it.
+       */
+      refresh?: "await" | "background";
+      /**
+       * What the server did when it accepted this write: the cached review and inbox item show it
+       * at once, the way the server will, until the refetch corrects them. This closes the gap in
+       * which a second Send or Approve would still look possible.
+       */
+      accepted?: "send" | "approve";
     }) => {
       if (draft && !beginDraftSave(draft.key)) throw new Error("This draft is already saving.");
       const finishReviewSave = draft || deleteDraft ? trackReviewDraftSave(reviewId) : undefined;
       try {
         let result: unknown;
         try {
-          result = await change(path, method, body);
+          try {
+            result = await change(path, method, body);
+          } catch (error) {
+            // A refused write usually means the bar was stale (empty_send, stale_revision): heal it.
+            if (refresh === "background") {
+              void client.invalidateQueries({ queryKey: ["review", reviewId] }).catch(() => undefined);
+              void client.invalidateQueries({ queryKey: ["inbox"] }).catch(() => undefined);
+            }
+            throw error;
+          }
+          if (accepted) applyAccepted(client, reviewId, accepted);
           if (draft) clearDraftIfUnchanged(draft.key, draft.text);
           if (deleteDraft) clearDraft(deleteDraft);
         } finally {
           if (draft) finishDraftSave(draft.key);
         }
-        await Promise.all([
+        const refetched = Promise.all([
           client.invalidateQueries({ queryKey: ["revision", reviewId] }),
           client.invalidateQueries({ queryKey: ["review", reviewId] }),
           client.invalidateQueries({ queryKey: ["inbox"] }),
         ]);
+        if (refresh === "background") void refetched.catch(() => undefined);
+        else await refetched;
         return result;
       } finally {
         finishReviewSave?.();

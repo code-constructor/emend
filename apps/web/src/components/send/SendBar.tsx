@@ -185,6 +185,9 @@ export function SendBar({
       await mutation.mutateAsync({
         path: `/api/v1/reviews/${encodeURIComponent(reviewId)}/sends`,
         body: kind === "approve" ? { revision, kind } : { revision, kind, mode, instruction },
+        // The server's answer finishes a Send; the refetch lands after and may be slow.
+        refresh: "background",
+        accepted: kind === "approve" ? "approve" : "send",
       });
       if (kind === "go") clearDraftIfUnchanged(storageKey, instruction);
       if (!mounted.current) return;

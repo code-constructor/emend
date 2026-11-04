@@ -17,7 +17,7 @@ per step, in this order.
 
 ## Steps
 
-- [ ] F.1: a Send finishes when the server answers, not when the refetch ends; the window after
+- [x] F.1: a Send finishes when the server answers, not when the refetch ends; the window after
       Send says when emend cannot reach its server.
 - [ ] F.2: fix the flaky comment-lines test at its root cause.
 - [ ] F.3: the Writeup uses a wider column, at most about 1000 px, with softer text.

@@ -91,13 +91,12 @@ test.each(["Send", "Approve"].flatMap((action) => ["success", "failure"].map((ou
       else pending.reject(new Error("Synthetic failure"));
     });
     if (outcome === "success") {
+      // The server's answer frees the bar; the refetch is still pending.
       await waitFor(() => expect(invalidate).toHaveBeenCalledTimes(3));
-      expect(button("Send").disabled).toBe(true);
-      expect(button(/^Approve/).disabled).toBe(true);
-      await act(async () => refresh.resolve());
     }
     await waitFor(() => expect(button("Send").disabled).toBe(false));
     expect(button(/^Approve/).disabled).toBe(false);
+    if (outcome === "success") await act(async () => refresh.resolve());
     expect(fetchMock).toHaveBeenCalledOnce();
   },
 );
