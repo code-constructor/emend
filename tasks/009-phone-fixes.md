@@ -16,6 +16,8 @@ sticky file headers, and a Writeup that keeps the reading position. You approved
 
 ## Steps
 
+- [ ] E.0: the Diff tab stops rebuilding every loaded file's diff on each render; this is the suspected
+      trigger of the jump back to the top on the phone. You approved it on 2026-11-04.
 - [ ] E.1: a Refresh control on every page; live updates reconnect after a suspend or a silent
       stream.
 - [ ] E.2: the Writeup, Docs and Comments keep their reading position across tabs, docs and
