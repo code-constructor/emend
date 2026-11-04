@@ -1,5 +1,14 @@
-import type { ReviewView, RevisionView } from "@emend/contract";
-import { BellOff, FileText, GitBranch, GitCommitHorizontal, MessageSquarePlus } from "lucide-react";
+import type { PublishLink, ReviewView, RevisionView } from "@emend/contract";
+import {
+  BellOff,
+  CircleDot,
+  ExternalLink,
+  FileText,
+  GitBranch,
+  GitCommitHorizontal,
+  GitPullRequest,
+  MessageSquarePlus,
+} from "lucide-react";
 import { type Ref, useEffect, useState } from "react";
 import { plural } from "../../lib/count.ts";
 import { wakeHasPassed, wakeTime } from "../../lib/time.ts";
@@ -12,6 +21,23 @@ import { Icon } from "../ui/Icon.tsx";
 import { cn } from "../ui/utils.ts";
 import { LayoutControls } from "./LayoutControls.tsx";
 import { RevisionPicker } from "./RevisionPicker.tsx";
+
+const linkIcon = { pr: GitPullRequest, issue: CircleDot, other: ExternalLink } as const;
+
+/** The server validates links; the browser checks again before it makes one clickable. */
+function safeLinks(links: PublishLink[] | undefined) {
+  return (links ?? []).flatMap((link) => {
+    try {
+      const url = new URL(link.url);
+      // `host` is punycode for a non-ASCII host, so a lookalike shows as what it is.
+      return url.protocol === "https:" && url.username === "" && url.password === ""
+        ? [{ ...link, host: url.host, href: url.href }]
+        : [];
+    } catch {
+      return [];
+    }
+  });
+}
 
 export function ReviewHeader({
   review,
@@ -44,6 +70,7 @@ export function ReviewHeader({
     [revision.base?.slice(0, 7), revision.head === "worktree" ? "working tree" : revision.head?.slice(0, 7)]
       .filter(Boolean)
       .join(" → ");
+  const links = safeLinks(revision?.links);
   const metaItem = "inline-flex min-w-0 items-center gap-[5px] wrap-anywhere";
   return (
     <div
@@ -127,6 +154,30 @@ export function ReviewHeader({
         )}
         <RevisionPicker review={review} seq={seq} onChange={onRevisionChange} />
       </div>
+      {links.length > 0 && (
+        <ul
+          aria-label="Links"
+          className="m-0 flex min-w-0 list-none flex-wrap items-center gap-1.5 p-0 text-12 leading-[1.2]"
+        >
+          {links.map((link, index) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: two links may share a URL; the list never reorders.
+            <li key={`${index}:${link.url}`} className="min-w-0 max-w-full">
+              <a
+                href={link.href}
+                title={link.href}
+                target="_blank"
+                rel="noopener noreferrer nofollow"
+                className="inline-flex max-w-full items-center gap-1 rounded-sm border border-line-1 px-1.5 py-[3px] text-fg-2 no-underline hover:bg-hover hover:text-fg-1"
+              >
+                <Icon icon={linkIcon[link.kind ?? "other"]} size={12} />
+                <span className="min-w-0 shrink-[0.2] truncate">{link.label}</span>
+                {/* An agent writes the label, so the real host stays visible; the host gives way first. */}
+                <span className="min-w-0 shrink-[3] truncate text-11 text-fg-3">{link.host}</span>
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
       {review.importedAt && (
         <p className="m-0 wrap-anywhere text-fg-3 [font:var(--type-meta)]">
           Copied from {review.origin.name} on {new Date(review.importedAt).toLocaleDateString()}. Comments, Sends and

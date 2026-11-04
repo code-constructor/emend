@@ -1,20 +1,32 @@
-import type { TopicMeta, WriteupInput } from "@emend/contract";
+import type { PublishLinks, TopicMeta, WriteupInput } from "@emend/contract";
 import type { Block } from "./blocks.ts";
 import { renderMarkdownWithBudget } from "./markdown.ts";
 
 export type RenderedWriteup = {
   sections: { key: string; label: string; topic: string | null; blocks: Block[] }[];
+  /** Publish-level links and the repo base, kept beside the sections in the stored blob. */
+  links?: PublishLinks;
+  repoUrl?: string;
 };
 
 const unwrittenDecisions =
   "Decisions and drift: not written. Only the session where the change was asked for can tell what drifted from it.";
 
-export async function renderWriteup(writeup: WriteupInput, topics: TopicMeta[]): Promise<RenderedWriteup> {
+export async function renderWriteup(
+  writeup: WriteupInput,
+  topics: TopicMeta[],
+  meta: { links?: PublishLinks; repoUrl?: string } = {},
+): Promise<RenderedWriteup> {
   const sections: RenderedWriteup["sections"] = [];
   const highlightBudget = { highlightedBytes: 0 };
   const append = async (key: string, label: string, markdown: string | undefined, topic: string | null = null) => {
     if (markdown === undefined) return;
-    sections.push({ key, label, topic, blocks: await renderMarkdownWithBudget(markdown, key, highlightBudget) });
+    sections.push({
+      key,
+      label,
+      topic,
+      blocks: await renderMarkdownWithBudget(markdown, key, highlightBudget, meta.repoUrl),
+    });
   };
   await append("overview", "Overview", writeup.overview);
   await append("tldr", "TL;DR", writeup.tldr);
@@ -29,5 +41,9 @@ export async function renderWriteup(writeup: WriteupInput, topics: TopicMeta[]):
     await append(`t-${topic.slug}-example`, `${topic.title} — Example`, content.example, topic.slug);
     await append(`t-${topic.slug}-body`, `${topic.title} — Details`, content.body, topic.slug);
   }
-  return { sections };
+  return {
+    sections,
+    ...(meta.links?.length ? { links: meta.links } : {}),
+    ...(meta.repoUrl ? { repoUrl: meta.repoUrl } : {}),
+  };
 }

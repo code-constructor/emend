@@ -510,6 +510,72 @@ test("kind follows the newest revision's writeup: publish when empty, review oth
   expect(await (await get("", "foreign")).json()).toEqual({ items: [] });
 });
 
+test("links and repoUrl come back on the revision, link issue numbers in the writeup and docs, and keep a doc publish a publish", async () => {
+  const empty = { overview: "", tldr: "", decisions: null, topics: {} };
+  const links = [{ url: "https://github.com/owner/name/pull/9", label: "PR 9", kind: "pr" }];
+  const repoUrl = "https://github.com/owner/name";
+  const { reviewId } = await publishReview(f, {
+    key: "1",
+    docs: { "notes.md": "Tracked in #77, not in `#78`." },
+    writeup: { ...empty, overview: "Closes #12." },
+    links,
+    repoUrl,
+  });
+  const revision = (await (await get(`/${reviewId}/revisions/1`)).json()) as {
+    links: unknown;
+    repoUrl: string | null;
+    writeup: { sections: { blocks: { html: string }[] }[] };
+    docs: { kind: string; blocks?: { html: string }[] }[];
+  };
+  expect(revision.links).toEqual(links);
+  expect(revision.repoUrl).toBe(repoUrl);
+  expect(revision.writeup.sections.flatMap((s) => s.blocks.map((b) => b.html)).join("")).toContain(
+    `href="${repoUrl}/issues/12"`,
+  );
+  const doc = revision.docs.flatMap((d) => d.blocks?.map((b) => b.html) ?? []).join("");
+  expect(doc).toContain(`href="${repoUrl}/issues/77"`);
+  expect(doc).not.toContain("issues/78");
+  const docOnly = await publishReview(f, { key: "2", docs: { "n.md": "x" }, writeup: empty, links, repoUrl });
+  const view = (await (await get(`/${docOnly.reviewId}`)).json()) as { kind: string };
+  expect(view.kind).toBe("publish");
+  // A revision without them omits both, and nothing is linked.
+  const plain = await publishReview(f, { key: "3", writeup: { ...empty, overview: "Closes #12." } });
+  const bare = (await (await get(`/${plain.reviewId}/revisions/1`)).json()) as { links?: unknown[]; repoUrl?: unknown };
+  expect(bare.links ?? []).toEqual([]);
+  expect(bare.repoUrl ?? null).toBeNull();
+});
+
+test.each([
+  { links: [{ url: "javascript:alert(1)", label: "x" }] },
+  { links: [{ url: "data:text/html,x", label: "x" }] },
+  { links: [{ url: "http://example.test/x", label: "x" }] },
+  { links: [{ url: "https://user:pw@example.test/x", label: "x" }] },
+  { links: [{ url: `https://example.test/${"a".repeat(2048)}`, label: "x" }] },
+  { links: Array.from({ length: 9 }, () => ({ url: "https://example.test/x", label: "x" })) },
+  { repoUrl: "http://github.com/o/r" },
+  { repoUrl: "https://user@github.com/o/r" },
+  { repoUrl: "javascript:alert(1)" },
+])("a publish with hostile links is refused: %j", async (extra) => {
+  const response = await f.request(
+    "/publish",
+    "POST",
+    {
+      reviewKey: "4".repeat(64),
+      repo: null,
+      branch: null,
+      title: "Hostile",
+      base: null,
+      head: null,
+      topics: [],
+      writeup: { overview: "x", tldr: "", decisions: null, topics: {} },
+      files: [],
+      ...extra,
+    },
+    "agent",
+  );
+  await error(response, 400, "invalid_request");
+});
+
 test("a code review with an empty writeup stays a review", async () => {
   const empty = { overview: "", tldr: "", decisions: null, topics: {} };
   const { reviewId } = await publishReview(f, { key: "f", diff: true, writeup: empty });

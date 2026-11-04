@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { AgentNotes, validateAgentNotes } from "./agent-note.ts";
 import { LIMITS } from "./limits.ts";
+import { PublishLinks, RepoUrl } from "./links.ts";
 import { PublishManifest, WriteupInput } from "./manifest.ts";
 import { FileFlag, FilePath, FileRole, FileStatus, OTHER_TOPIC, TopicMeta, TopicSlug } from "./review.ts";
 
@@ -43,6 +44,8 @@ export const PublishRequest = z
     main: PublishManifest.shape.main,
     topics: z.array(TopicMeta).max(LIMITS.topicsPerReview + 1),
     writeup: WriteupInput,
+    links: PublishLinks.optional(),
+    repoUrl: RepoUrl.optional(),
     files: z.array(PublishFile).max(LIMITS.filesPerRevision),
   })
   .superRefine((request, ctx) => {

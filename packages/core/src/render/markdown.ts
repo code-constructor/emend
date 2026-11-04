@@ -13,6 +13,7 @@ import { unified } from "unified";
 import { type Block, blocksFromTree, type HtmlRoot, renderData, visitElements } from "./blocks.ts";
 import { blockHash } from "./hash.ts";
 import { HIGHLIGHT_LINE_CHARS, type HighlightBudget, limitHighlighting } from "./highlight.ts";
+import { linkIssueRefs } from "./issue-refs.ts";
 import {
   FOOTNOTE_NODE,
   hardenLinks,
@@ -75,6 +76,7 @@ async function createProcessor() {
     .use(restoreFootnotes)
     .use(namespaceClasses)
     .use(rehypeSanitize, sanitizeSchema)
+    .use(linkIssueRefs)
     .use(hardenLinks)
     .use(isolateDiagrams)
     .use(limitHighlighting, highlighter.getLoadedLanguages())
@@ -96,6 +98,7 @@ export async function renderMarkdownWithBudget(
   markdown: string,
   section: string,
   highlightBudget: HighlightBudget,
+  repoUrl?: string,
 ): Promise<Block[]> {
   // Check even an empty document: every emitted id must satisfy the contract.
   BlockId.parse(`${section}-00000000`);
@@ -107,17 +110,17 @@ export async function renderMarkdownWithBudget(
   const { source, tables } = prepareTables(markdown);
   const tree = await processor.run(processor.parse(source), {
     value: source,
-    data: { highlightBudget, largeTables: tables },
+    data: { highlightBudget, largeTables: tables, repoUrl },
   });
   return blocksFromTree(tree, section, (node) =>
     processor.stringify(node.type === "root" ? node : { type: "root", children: [node] }),
   );
 }
 
-export function renderMarkdown(markdown: string, section: string): Promise<Block[]> {
-  return renderMarkdownWithBudget(markdown, section, { highlightedBytes: 0 });
+export function renderMarkdown(markdown: string, section: string, repoUrl?: string): Promise<Block[]> {
+  return renderMarkdownWithBudget(markdown, section, { highlightedBytes: 0 }, repoUrl);
 }
 
-export async function renderDoc(markdown: string, path: string): Promise<Block[]> {
-  return renderMarkdown(markdown, `doc-${await blockHash(path)}`);
+export async function renderDoc(markdown: string, path: string, repoUrl?: string): Promise<Block[]> {
+  return renderMarkdown(markdown, `doc-${await blockHash(path)}`, repoUrl);
 }

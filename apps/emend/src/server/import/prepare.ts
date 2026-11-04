@@ -6,7 +6,6 @@ import {
   indexImportBundle,
   LIMITS,
   PublishRequest,
-  type WriteupInput,
 } from "@emend/contract";
 import { and, eq } from "drizzle-orm";
 import { blobs, changedBlocks as changedTable, placements as placementTable } from "../../db/schema.ts";
@@ -18,7 +17,7 @@ import { abortable } from "../publish/lifecycle.ts";
 import { mediaType } from "../publish/media.ts";
 import { validateNoteRanges } from "../publish/notes.ts";
 import { renderRevision } from "../publish/render.ts";
-import type { Executor, Work } from "../publish/work.ts";
+import type { Executor, Work, WorkResult } from "../publish/work.ts";
 import { derivedRowBytes } from "./bytes.ts";
 import { checkImportSignal } from "./lifecycle.ts";
 import { type ImportPlacement, importPlacements } from "./placements.ts";
@@ -119,7 +118,7 @@ export async function prepareImport(ownerId: string, bundle: ImportBundle, deps:
       }
     }
     let previous: { renderedBlob: string; docBlobs: Map<string, string> } | undefined;
-    const writeupSources = new Map<string, WriteupInput>();
+    const writeupSources = new Map<string, Extract<WorkResult, { kind: "writeup-source" }>>();
     let previousSourceHash: string | undefined;
     for (const revision of bundle.revisions) {
       checkImportSignal(signal);
@@ -137,7 +136,7 @@ export async function prepareImport(ownerId: string, bundle: ImportBundle, deps:
         try {
           const result = await execute({ kind: "writeup-source", bytes: await read(writeup.sourceBlob) });
           if (result.kind !== "writeup-source") throw new ApiError("invalid_request");
-          source = result.source;
+          source = result;
           writeupSources.set(writeup.sourceBlob, source);
         } catch (error) {
           checkImportSignal(signal);
@@ -145,7 +144,7 @@ export async function prepareImport(ownerId: string, bundle: ImportBundle, deps:
           throw new ApiError("invalid_request");
         }
       }
-      const parsed = PublishRequest.safeParse(importPublishInput(bundle, revision.id, source));
+      const parsed = PublishRequest.safeParse(importPublishInput(bundle, revision.id, source.source, source));
       if (!parsed.success) throw new ApiError("invalid_request");
       const input = parsed.data;
       const sources = new Set(

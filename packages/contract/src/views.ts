@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { AgentNoteView } from "./agent-note.ts";
 import { LIMITS } from "./limits.ts";
+import { PublishLinks, RepoUrl } from "./links.ts";
 import { Placement } from "./placement.ts";
 import { PublishRequest, Sha256 } from "./publish.ts";
 import { FileFlag, FilePath, FileRole, FileStatus, TopicMeta, TopicSlug } from "./review.ts";
@@ -161,6 +162,9 @@ export const RevisionView = z
     topics: z.array(TopicMeta).max(LIMITS.topicsPerReview + 1),
     files: z.array(FileView).max(LIMITS.filesPerRevision),
     writeup: RenderedWriteup,
+    // Absent on revisions published before these fields existed.
+    links: PublishLinks.optional(),
+    repoUrl: RepoUrl.nullable().optional(),
     docs: z
       .array(
         z.discriminatedUnion("kind", [

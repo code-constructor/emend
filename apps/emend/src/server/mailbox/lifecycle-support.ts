@@ -17,6 +17,8 @@ export async function publishReview(
     writeup?: WriteupInput;
     /** Add one changed source file with a synthetic base and head commit. */
     diff?: boolean;
+    links?: unknown;
+    repoUrl?: string;
   } = {},
 ) {
   const files = [];
@@ -41,6 +43,8 @@ export async function publishReview(
       head: options.diff ? "b".repeat(40) : null,
       topics: [],
       writeup: options.writeup ?? blank,
+      links: options.links,
+      repoUrl: options.repoUrl,
       files,
     },
     "agent",

@@ -1,4 +1,12 @@
-import { type Placement, type PlacementLocation, type Target, type TopicMeta, WriteupInput } from "@emend/contract";
+import {
+  type Placement,
+  type PlacementLocation,
+  type PublishLinks,
+  PublishMeta,
+  type Target,
+  type TopicMeta,
+  WriteupInput,
+} from "@emend/contract";
 import {
   type Block,
   blockHash,
@@ -22,8 +30,8 @@ export type Work =
   | { kind: "line-count"; bytes: ArrayBuffer }
   | { kind: "writeup-source"; bytes: ArrayBuffer }
   | { kind: "placement-doc"; format: "html" | "markdown" | "writeup"; bytes: ArrayBuffer }
-  | { kind: "writeup"; source: WriteupInput; topics: TopicMeta[] }
-  | { kind: "doc"; path: string; source: ArrayBuffer }
+  | { kind: "writeup"; source: WriteupInput; topics: TopicMeta[]; links?: PublishLinks; repoUrl?: string }
+  | { kind: "doc"; path: string; source: ArrayBuffer; repoUrl?: string }
   | { kind: "resection"; path: string; bytes: ArrayBuffer }
   | { kind: "changed"; previous: { format: "writeup" | "doc"; bytes: ArrayBuffer }[]; next: ArrayBuffer[] }
   | {
@@ -45,7 +53,7 @@ export type Work =
     };
 export type WorkResult =
   | { kind: "line-count"; count: number }
-  | { kind: "writeup-source"; source: WriteupInput }
+  | { kind: "writeup-source"; source: WriteupInput; links?: PublishLinks; repoUrl?: string }
   | ({ kind: "placement-doc" } & EncodedPlacementDoc)
   | ({ kind: "writeup" | "doc" } & RenderedBytes)
   | { kind: "changed"; bytes: ArrayBuffer }
@@ -73,8 +81,17 @@ export const executeWork: Executor = async (work) => {
     for (const byte of bytes) if (byte === 10) count++;
     return { kind: "line-count", count };
   }
-  if (work.kind === "writeup-source")
-    return { kind: "writeup-source", source: WriteupInput.parse(JSON.parse(decode(work.bytes))) };
+  if (work.kind === "writeup-source") {
+    // The source blob is the writeup plus the publish-level links; WriteupInput ignores the extras.
+    const json: unknown = JSON.parse(decode(work.bytes));
+    const meta = PublishMeta.parse(json);
+    return {
+      kind: "writeup-source",
+      source: WriteupInput.parse(json),
+      ...(meta.links ? { links: meta.links } : {}),
+      ...(meta.repoUrl ? { repoUrl: meta.repoUrl } : {}),
+    };
+  }
   if (work.kind === "placement-doc") {
     const doc: PlacementDoc =
       work.format === "html"
@@ -89,9 +106,12 @@ export const executeWork: Executor = async (work) => {
     return { kind: "placement-doc", bytes, textBytes, encodedBytes: bytes.byteLength };
   }
   if (work.kind === "writeup")
-    return { kind: "writeup", ...serializeRendered(await renderWriteup(work.source, work.topics)) };
+    return {
+      kind: "writeup",
+      ...serializeRendered(await renderWriteup(work.source, work.topics, { links: work.links, repoUrl: work.repoUrl })),
+    };
   if (work.kind === "doc")
-    return { kind: "doc", ...serializeRendered(await renderDoc(decode(work.source), work.path)) };
+    return { kind: "doc", ...serializeRendered(await renderDoc(decode(work.source), work.path, work.repoUrl)) };
   if (work.kind === "resection")
     return {
       kind: "doc",

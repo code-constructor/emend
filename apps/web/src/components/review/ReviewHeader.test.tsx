@@ -62,6 +62,83 @@ function mount({ metadata = review, loaded = revision, phone = false, seq = 2 } 
   return { ...result, onRevisionChange, titleRef };
 }
 
+test("links show as chips that open in a new tab, and nothing shows without links", () => {
+  const { unmount } = mount();
+  expect(screen.queryByRole("list", { name: "Links" })).toBeNull();
+  unmount();
+  mount({
+    loaded: {
+      ...revision,
+      links: [
+        { url: "https://github.com/o/r/pull/9", label: "PR 9", kind: "pr" },
+        { url: "https://github.com/o/r/issues/3", label: "Issue 3", kind: "issue" },
+        { url: "https://example.test/doc", label: "Design doc" },
+      ],
+    },
+  });
+  const list = screen.getByRole("list", { name: "Links" });
+  const anchors = within(list).getAllByRole("link");
+  expect(anchors.map((anchor) => anchor.querySelector("span")?.textContent)).toEqual(["PR 9", "Issue 3", "Design doc"]);
+  for (const anchor of anchors) {
+    expect(anchor.getAttribute("target")).toBe("_blank");
+    expect(anchor.getAttribute("rel")).toBe("noopener noreferrer nofollow");
+  }
+});
+
+test("a chip shows the link's real host beside the agent's label, punycode for a lookalike", () => {
+  mount({
+    loaded: {
+      ...revision,
+      links: [
+        { url: "https://github.com/o/r/pull/7", label: "PR #7", kind: "pr" },
+        { url: "https://gіthub.com/o/r/pull/7", label: "PR #7", kind: "pr" },
+      ],
+    },
+  });
+  const [real, fake] = within(screen.getByRole("list", { name: "Links" })).getAllByRole("link");
+  expect(real?.textContent).toContain("github.com");
+  expect(real?.getAttribute("title")).toBe("https://github.com/o/r/pull/7");
+  expect(fake?.textContent).toContain("xn--");
+  expect(fake?.textContent).not.toContain("github.com");
+  expect(fake?.getAttribute("title")).toContain("xn--");
+});
+
+test("two links that share a URL both show", () => {
+  const url = "https://github.com/o/r/pull/9";
+  mount({
+    loaded: {
+      ...revision,
+      links: [
+        { url, label: "PR 9", kind: "pr" },
+        { url, label: "Same PR", kind: "other" },
+      ],
+    },
+  });
+  expect(
+    within(screen.getByRole("list", { name: "Links" }))
+      .getAllByRole("link")
+      .map((anchor) => anchor.querySelector("span")?.textContent),
+  ).toEqual(["PR 9", "Same PR"]);
+});
+
+test("the header drops any link that is not plain https", () => {
+  mount({
+    loaded: {
+      ...revision,
+      links: [
+        { url: "javascript:alert(1)", label: "Script" },
+        { url: "http://example.test/x", label: "Plain" },
+        { url: "https://user:pw@example.test/x", label: "Credentials" },
+        { url: "not a url", label: "Broken" },
+        { url: "https://example.test/ok", label: "Fine" },
+      ],
+    },
+  });
+  expect(within(screen.getByRole("list", { name: "Links" })).getAllByRole("link")).toHaveLength(1);
+  expect(screen.queryByText("Script")).toBeNull();
+  expect(screen.getByText("Fine")).toBeTruthy();
+});
+
 test("header title, origin, branch, commits, doc count and focus ref use loaded metadata", () => {
   const { titleRef } = mount();
   const heading = screen.getByRole("heading", { level: 1, name: "Synthetic review" });

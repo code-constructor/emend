@@ -19,6 +19,7 @@ import {
   readRegular,
   sourcePath,
 } from "./read.ts";
+import { remoteToRepoUrl } from "./repo-url.ts";
 import { gitFolders, worktreeRoot } from "./root.ts";
 import { ShortcutAssets } from "./shortcut-assets.ts";
 import { readSide } from "./sides.ts";
@@ -72,6 +73,7 @@ export async function resolvePublish(
   const branch = branchName === "HEAD" ? null : branchName;
   if ((!code || !branch) && !options.review && !options.key) throw new CliError("pass --review or --key");
   let repo: PublishRequest["repo"] = null;
+  let repoUrl: string | undefined;
   if (code) {
     let remote: string;
     try {
@@ -82,6 +84,7 @@ export async function resolvePublish(
     }
     const identity = remote ? normalizeRemote(remote) : (gitDirs.at(-1) ?? root);
     repo = { key: sha256(identity), name: basename(identity) };
+    repoUrl = remote ? (remoteToRepoUrl(remote) ?? undefined) : undefined;
   }
   const changes = code ? await collectChanges(root, manifest.base ?? "", manifest.head ?? "", git, warn, gitDirs) : [];
   let grouped: ReturnType<typeof withOtherChanges>;
@@ -314,6 +317,10 @@ export async function resolvePublish(
     main: manifest.main,
     topics,
     writeup: manifest.writeup,
+    links: manifest.links,
+    // The manifest's own repoUrl wins only when it is valid, and null opts out of the derived one.
+    // The schema drops an invalid string, which falls back to the derived value.
+    repoUrl: manifest.repoUrl === null ? undefined : (manifest.repoUrl ?? repoUrl),
     files,
   });
   if (!request.success) throw new CliError("invalid resolved publish request");

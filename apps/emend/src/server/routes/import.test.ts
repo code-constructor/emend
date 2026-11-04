@@ -415,6 +415,34 @@ test("regenerates hostile rendered content from source and preserves doc asset a
   expect(await response.text()).toBe("body { color: blue; }");
 });
 
+test("a round trip keeps links and repoUrl from the source blob and links issue numbers again", async () => {
+  const input = await bundle();
+  const link = { url: "https://example.test/o/r/pull/7", label: "PR 7", kind: "pr" };
+  const writeup = { overview: "Fixes #5", tldr: "", decisions: null, topics: {} };
+  const put = (value: unknown) => f.deps.blobs.put(f.ownerId, Buffer.from(JSON.stringify(value)), "application/json");
+  const source = await put({ ...writeup, links: [link], repoUrl: "https://github.com/owner/name" });
+  for (const w of input.writeups) w.sourceBlob = source;
+  expect((await request("/import", input)).status).toBe(201);
+  const revision = RevisionView.parse(await (await f.request(`/reviews/${input.review.id}/revisions/1`, "GET")).json());
+  expect(revision.links).toEqual([link]);
+  expect(revision.repoUrl).toBe("https://github.com/owner/name");
+  const html = revision.writeup.sections.flatMap((s) => s.blocks.map((b) => b.html)).join("");
+  expect(html).toContain('href="https://github.com/owner/name/issues/5"');
+});
+
+test("a source blob with a hostile link or repoUrl is refused", async () => {
+  for (const extra of [{ links: [{ url: "javascript:alert(1)", label: "x" }] }, { repoUrl: "http://github.com/o/r" }]) {
+    const input = await bundle();
+    const source = await f.deps.blobs.put(
+      f.ownerId,
+      Buffer.from(JSON.stringify({ overview: "x", tldr: "", decisions: null, topics: {}, ...extra })),
+      "application/json",
+    );
+    for (const w of input.writeups) w.sourceBlob = source;
+    expect((await request("/import", input)).status).toBe(400);
+  }
+});
+
 test("preserves approval records and permits retry after a busy response", async () => {
   const input = await bundle();
   const approvalId = randomUUID();

@@ -1,4 +1,4 @@
-import { InboxList, LIMITS, ReviewView, RevisionView, type ThreadView } from "@emend/contract";
+import { InboxList, LIMITS, PublishMeta, ReviewView, RevisionView, type ThreadView } from "@emend/contract";
 import {
   and,
   asc,
@@ -43,6 +43,12 @@ import type { AppDeps } from "../app.ts";
 import type { AppEnv } from "../auth/principal.ts";
 import { ApiError } from "../http/errors.ts";
 import { noteView } from "../publish/notes.ts";
+
+function publishMeta(rendered: unknown) {
+  const meta = PublishMeta.safeParse(rendered);
+  // Invalid stored values are dropped, never shown.
+  return meta.success ? { links: meta.data.links ?? [], repoUrl: meta.data.repoUrl ?? null } : {};
+}
 
 /** Counts use one grouped query per kind, independent of the number of inbox rows. */
 async function inbox(ownerId: string, q: Queries, deps: AppDeps, reviewId?: string) {
@@ -427,6 +433,8 @@ async function revisionView(ownerId: string, q: Queries, deps: AppDeps, reviewId
       };
     }),
     writeup: rendered,
+    // The rendered blob carries the publish-level fields beside its sections; RenderedWriteup strips them.
+    ...publishMeta(rendered),
     docs,
     threads: threadRows.map(({ thread, createdOn, placement }) => ({
       id: thread.id,

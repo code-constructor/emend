@@ -210,7 +210,12 @@ export const ImportBundle = BundleRows.superRefine((bundle, ctx) => {
 });
 
 /** Reuse publish's file, topic, path and writeup validators for each copied revision. */
-export function importPublishInput(bundle: ImportBundle, revisionId: string, writeup: unknown): unknown {
+export function importPublishInput(
+  bundle: ImportBundle,
+  revisionId: string,
+  writeup: unknown,
+  meta: { links?: unknown; repoUrl?: unknown } = {},
+): unknown {
   const index = indexImportBundle(bundle);
   const rows = index.revisions.get(revisionId);
   const revision = rows?.row;
@@ -225,6 +230,8 @@ export function importPublishInput(bundle: ImportBundle, revisionId: string, wri
     main: revision?.main ?? undefined,
     topics: rows?.topics ?? [],
     writeup,
+    links: meta.links,
+    repoUrl: meta.repoUrl,
     files: files.map((f) => ({
       ...f,
       status: f.status ?? undefined,

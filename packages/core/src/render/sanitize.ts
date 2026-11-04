@@ -168,9 +168,13 @@ export function hardenLinks() {
       const { href, src } = element.properties;
       if (isAbsoluteUrl(href, true) && !(element.tagName === "a" && hasBlockChildren(element))) {
         element.properties.rel = ["noopener", "noreferrer", "nofollow"];
+        // Only the server decides: an absolute web link opens in a new tab and never replaces the app.
+        if (element.tagName === "a" && /^https?:/i.test(href)) element.properties.target = "_blank";
+        else delete element.properties.target;
       } else {
         delete element.properties.href;
         delete element.properties.rel;
+        delete element.properties.target;
       }
       if (!isAbsoluteUrl(src, false)) delete element.properties.src;
     });

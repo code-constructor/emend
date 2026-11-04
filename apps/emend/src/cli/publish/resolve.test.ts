@@ -4,7 +4,7 @@ import * as fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { LIMITS, type PublishManifest } from "@emend/contract";
+import { LIMITS, PublishManifest } from "@emend/contract";
 import { expect, test, vi } from "vitest";
 import { resolvePublish } from "./resolve.ts";
 
@@ -291,6 +291,40 @@ test("HTML asset reads and upload rereads refuse a leaf alias into the Git folde
     await symlink(".git/config", join(root, "asset.png"));
     await expect(result.blobs.get(hash ?? "")?.read()).rejects.toThrow("refusing to read inside the git folder:");
     await expect(collect()).rejects.toThrow("refusing to read inside the git folder:");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("links and a valid manifest repoUrl reach the request; no remote derives none", async () => {
+  const dir = await fs.realpath(await mkdtemp(join(tmpdir(), "emend-links-")));
+  try {
+    const root = join(dir, "repo");
+    const state = join(dir, "state");
+    for (const folder of [root, state]) await mkdir(folder);
+    await mkdir(join(root, ".git"));
+    await writeFile(join(root, "plan.md"), "local doc");
+    const link = { url: "https://example.test/o/r/pull/7", label: "PR 7", kind: "pr" as const };
+    const resolve = (extra: Partial<PublishManifest>) =>
+      resolvePublish(
+        { ...manifest(), ...extra },
+        { manifest: "synthetic", key: "plan" },
+        state,
+        "instance",
+        root,
+        () => {},
+      );
+    const plain = await resolve({});
+    expect(plain.request.links).toBeUndefined();
+    expect(plain.request.repoUrl).toBeUndefined();
+    const given = await resolve({ links: [link], repoUrl: "https://github.com/o/r" });
+    expect(given.request.links).toEqual([link]);
+    expect(given.request.repoUrl).toBe("https://github.com/o/r");
+    expect(given.forInstance("other").repoUrl).toBe("https://github.com/o/r");
+    // null opts out, and an invalid string is dropped; neither sends a repoUrl here (no remote to derive).
+    expect((await resolve({ repoUrl: null })).request.repoUrl).toBeUndefined();
+    const parsed = PublishManifest.parse({ ...manifest(), repoUrl: "http://github.com/o/r" });
+    expect((await resolve(parsed)).request.repoUrl).toBeUndefined();
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

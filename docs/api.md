@@ -216,8 +216,11 @@ stable tie breaker in each. At most `inboxItems` (200) rows per list, so at most
 with revisions ascending by sequence. Both are reviewer-only, as is the revision endpoint below.
 
 `GET /api/v1/reviews/:id/revisions/:seq` returns `RevisionView = { seq, base, head, main, writeupEmpty,
-topics: TopicMeta[], files: FileView[], writeup: RenderedWriteup, docs, threads: ThreadView[],
+topics: TopicMeta[], files: FileView[], writeup: RenderedWriteup, links: PublishLink[],
+repoUrl: string | null, docs, threads: ThreadView[],
 changedBlocks: { blockId: BlockId, revision: number }[] }`.
+`links` and `repoUrl` are the revision's publish-level links (see "Links and repoUrl" below);
+both fields are optional in the view, and revisions published before they existed omit them.
 Base/head are nullable full commit hashes; head also permits `worktree`.
 `main` is `"writeup" | FilePath | null`: the manifest's main page, or null when omitted.
 `writeupEmpty` is a boolean computed at publish from the source Markdown, before rendering:
@@ -554,7 +557,8 @@ and sign-out; loopback HTTP on the same server receives cookies without `Secure`
 ### Manifest and topics
 
 `PublishRequest = { reviewId?, reviewKey, repo: { key, name } | null, branch: string | null,
-title, base: commit | null, head: commit | "worktree" | null, main?, topics, writeup, files }`.
+title, base: commit | null, head: commit | "worktree" | null, main?, topics, writeup, links?, repoUrl?,
+files }`.
 `main` follows the manifest's type and doc-membership validation below; the CLI carries it unchanged.
 The keys are lowercase 64-character SHA-256 hex; `reviewId` is a UUID. Repo names obey
 `titleChars`, branches `pathChars`, and title, commits and writeup obey the manifest limits.
@@ -597,7 +601,33 @@ Placement exceeding 30 seconds returns 413 `too_large` with "The placement timed
 Other placement failures return 400 `invalid_request` with "The comments could not be placed."
 These failures never leave a partial revision.
 
-`PublishManifest = { version: 1, title, base?, head?, main?, topics: TopicMeta[], files, writeup }`.
+`PublishManifest = { version: 1, title, base?, head?, main?, topics: TopicMeta[], files, writeup,
+links?, repoUrl? }`.
+
+#### Links and repoUrl
+
+`links?: PublishLink[]` holds at most 8 entries `{ url, label, kind?: "pr" | "issue" | "other" }`.
+`url` is an absolute `https:` URL of at most 2048 characters, without credentials, whitespace or
+control characters. `label` is 1 through 60 characters of visible text, without control or format
+characters. An invalid link refuses the request (`400 invalid_request`). Links are not Markdown, they
+are never counted in `writeupEmpty`, and so a docs-only publish with links stays `kind: "publish"`.
+
+`repoUrl?` is exactly `https://host/owner/name`: a lowercase ASCII host with an optional port, and two
+path segments of `A-Za-z0-9._-` (not `.` or `..`), with no userinfo, query or fragment. The CLI derives
+it from the repository's `remote.origin.url` (SSH, scp-style and `git://` remotes become https, a trailing
+`.git` goes away; a path, a `file:` URL, `http:`, a remote with credentials, or a remote host without a
+dot, such as an ssh alias, gives none). A manifest's own `repoUrl` wins when it is valid; an invalid string
+in a manifest is dropped and the derived one is used, but one in a `PublishRequest` is refused. A manifest
+may set `"repoUrl": null` to opt out: the CLI then sends no `repoUrl` and no `#123` links render. With a
+`repoUrl`, the server turns `#123` in rendered writeup and Markdown doc text into a link
+to `<repoUrl>/issues/123`, never inside code, a fence, a diagram or an existing link. A number is 1
+through 7 digits and must follow a non-word character.
+
+Both ride in the writeup's source and rendered blobs, so an import or export keeps them; no table
+changes. Every absolute `http:` or `https:` link in rendered Markdown carries `target="_blank"` and
+`rel="noopener noreferrer nofollow"`, including an absolute link back to the same emend review. Clients
+open `links` the same way, after checking again that each URL is https, and show each link's host
+(punycode for a non-ASCII host) beside its label, with the full URL as the title.
 `main?: "writeup" | FilePath` declares the opening page. A path must name a file of this
 manifest with `role: "doc"`; otherwise validation issues `["main"]` with the message
 `main is not a doc of this revision`. `"writeup"` opens Writeup even if its Markdown is empty.

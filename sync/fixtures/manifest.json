@@ -3,6 +3,10 @@
   "title": "Bound the retry budget",
   "base": "1111111111111111111111111111111111111111",
   "head": "worktree",
+  "links": [
+    { "url": "https://github.com/example/app/pull/42", "label": "PR #42", "kind": "pr" },
+    { "url": "https://github.com/example/app/issues/17", "label": "Issue #17", "kind": "issue" }
+  ],
   "topics": [
     {
       "slug": "retry-budget",

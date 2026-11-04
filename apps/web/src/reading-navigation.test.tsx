@@ -2465,6 +2465,32 @@ test("Focus repeats an explicit Show in place intent with the same URL after Hid
   await waitFor(() => expect(scroll.mock.instances).toContain(card));
 });
 
+test("an external _blank link is left to the browser while a same-review link still follows in place", async () => {
+  layoutStore.update({ reading: "focus" });
+  currentRevision.threads = [placedWriteupThread()];
+  const block = currentRevision.writeup.sections[0]?.blocks[0];
+  if (!block) throw new Error("Missing synthetic block");
+  block.html = `<p><a href="https://example.test/x" target="_blank" rel="noopener noreferrer nofollow">Out</a> <a href="/r/${id}?tab=writeup&amp;rev=1#thread-${id}">In</a></p>`;
+  block.text = "Out In";
+  vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => {});
+  const { history } = mount();
+  const out = await screen.findByRole("link", { name: "Out" });
+  const before = history.location.href;
+  let prevented = true;
+  document.addEventListener(
+    "click",
+    (event) => {
+      prevented = event.defaultPrevented;
+    },
+    { once: true },
+  );
+  fireEvent.click(out);
+  expect(prevented).toBe(false);
+  expect(history.location.href).toBe(before);
+  fireEvent.click(screen.getByRole("link", { name: "In" }));
+  await screen.findByRole("button", { name: "Hide" });
+});
+
 test.each(["tab", "doc", "revision", "no thread", "other thread"])(
   "Focus keeps a hidden pill closed after an unrelated %s navigation",
   async (navigation) => {

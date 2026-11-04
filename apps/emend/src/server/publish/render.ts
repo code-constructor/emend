@@ -16,7 +16,13 @@ export async function renderRevision(
 ) {
   let rendered: RenderedBytes;
   try {
-    const result = await execute({ kind: "writeup", source: input.writeup, topics: input.topics });
+    const result = await execute({
+      kind: "writeup",
+      source: input.writeup,
+      topics: input.topics,
+      links: input.links,
+      repoUrl: input.repoUrl,
+    });
     if (result.kind !== "writeup") throw new Error("wrong result");
     rendered = result;
   } catch (error) {
@@ -38,7 +44,16 @@ export async function renderRevision(
   const renderedBlob = await put(renderedBytes);
   await setImmediate();
   checkPublishSignal(signal);
-  const sourceBlob = await put(Buffer.from(JSON.stringify(input.writeup)));
+  // The source blob keeps the publish-level fields beside the writeup so an export and import carry them.
+  const sourceBlob = await put(
+    Buffer.from(
+      JSON.stringify({
+        ...input.writeup,
+        ...(input.links?.length ? { links: input.links } : {}),
+        ...(input.repoUrl ? { repoUrl: input.repoUrl } : {}),
+      }),
+    ),
+  );
   const cache = new Map<string, string | null>();
   const docBlobs = new Map<string, string>();
   const unrendered: string[] = [];
@@ -59,7 +74,7 @@ export async function renderRevision(
     try {
       const rendered = await execute(
         shared === undefined
-          ? { kind: "doc", path: file.path, source: await read(file.newBlob) }
+          ? { kind: "doc", path: file.path, source: await read(file.newBlob), repoUrl: input.repoUrl }
           : { kind: "resection", path: file.path, bytes: await read(shared) },
       );
       if (rendered.kind !== "doc") throw new Error("wrong result");

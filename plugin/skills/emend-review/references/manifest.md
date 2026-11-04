@@ -169,6 +169,15 @@ Use these constraints when writing the manifest:
 - Attention never changes order. `importance` alone sorts.
 - `door` is `one-way` or `two-way`.
 - `title` is at most 200 characters; `summary` is at most 2000.
+- `links` is optional: at most 8 entries of `url`, `label` and `kind`. `url` is an `https:` URL
+  without a user name or password, at most 2048 characters. `label` has 1 to 60 characters.
+  `kind` is `pr`, `issue` or `other`. Leave `links` out when there are none. An invalid link
+  fails the publish; fix it and publish again.
+- For a code review, emend takes the repository's web address from its `origin` remote, which
+  links `#123`. Set `repoUrl` only when that remote is not where the issues live. It must be
+  exactly `https://host/owner/name`, with no trailing slash, path, query or fragment; an invalid
+  `repoUrl` is ignored. Set `"repoUrl": null` when the user does not want the repository's
+  address stored with the review.
 - `base` and `head` are full commit hashes. `head` may be `worktree`.
 - `importance` is 0 to 99. The reserved Other changes topic uses 100.
 
@@ -198,6 +207,10 @@ Fix those fields and publish again.
   "title": "Bound the retry budget",
   "base": "1111111111111111111111111111111111111111",
   "head": "worktree",
+  "links": [
+    { "url": "https://github.com/example/app/pull/42", "label": "PR #42", "kind": "pr" },
+    { "url": "https://github.com/example/app/issues/17", "label": "Issue #17", "kind": "issue" }
+  ],
   "topics": [
     {
       "slug": "retry-budget",
