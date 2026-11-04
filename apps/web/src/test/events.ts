@@ -54,6 +54,7 @@ export class Channel extends EventTarget {
 type Job = { start: () => void; reject: (reason: unknown) => void; signal?: AbortSignal; abort: () => void };
 export class Locks {
   private held = new Set<string>();
+  private holders = new Map<string, Job>();
   private queued = new Map<string, Job[]>();
   request(name: string, options: LockOptions, callback: (lock: Lock) => Promise<void> | void) {
     return new Promise<void>((resolve, reject) => {
@@ -68,10 +69,13 @@ export class Locks {
           reject(new DOMException("Cancelled", "AbortError"));
         },
         start: () => {
+          this.holders.set(name, job);
           void Promise.resolve()
             .then(() => callback({ name, mode: "exclusive" }))
             .then(resolve, reject)
             .finally(() => {
+              if (this.holders.get(name) !== job) return;
+              this.holders.delete(name);
               this.held.delete(name);
               this.drain(name);
             });
@@ -79,6 +83,15 @@ export class Locks {
       };
       if (options.signal?.aborted) {
         job.abort();
+        return;
+      }
+      if (options.steal) {
+        // A steal rejects the holder's request with AbortError and runs first.
+        this.holders.get(name)?.reject(new DOMException("Stolen", "AbortError"));
+        this.holders.delete(name);
+        this.held.delete(name);
+        queue.unshift(job);
+        this.drain(name);
         return;
       }
       options.signal?.addEventListener("abort", job.abort, { once: true });

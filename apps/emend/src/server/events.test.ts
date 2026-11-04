@@ -175,7 +175,8 @@ test.each(["review", "owner"])(
     const reader = stream.getReader();
     expect(new TextDecoder().decode((await reader.read()).value)).toMatch(/^:/);
     await vi.advanceTimersByTimeAsync(25000);
-    expect(new TextDecoder().decode((await reader.read()).value)).toMatch(/^:/);
+    const ping = await reader.read();
+    expect(new TextDecoder().decode(ping.value)).toBe("event: ping\ndata: {}\n\n");
     for (let i = 0; i < 101; i++) events.emit("owner", { type: "publish", reviewId: id, revision: i + 1 });
     await expect(reader.read()).rejects.toThrow();
     // The dropped stream has released its owner slot and event subscription.

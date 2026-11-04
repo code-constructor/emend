@@ -3,6 +3,7 @@ import { act, cleanup, render, within } from "@testing-library/react";
 import { StrictMode } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Channel, Events } from "../test/events.ts";
+import { reconnectReviewEvents } from "./event-stream.ts";
 import { ReviewEventsProvider, usePublishedRevision } from "./events.tsx";
 import { refreshQueries } from "./query-refresh.ts";
 
@@ -438,4 +439,242 @@ test("a burst of settled writes and viewed events share one refetch batch", asyn
   expect(invalidate).toHaveBeenCalledExactlyOnceWith({ queryKey: ["revision", id] });
   expect(revision.fetcher).toHaveBeenCalledOnce();
   revision.stop();
+});
+
+const live = () => Events.opened.filter((event) => event.readyState !== Events.CLOSED);
+
+test("40 seconds without a frame closes and reopens the stream, and the new open refreshes queries", async () => {
+  const { invalidate } = await mount();
+  const first = source();
+  act(() => first.open());
+  await tick(39_000);
+  expect(Events.opened).toHaveLength(1);
+  await tick(1_000);
+  expect(first.close).toHaveBeenCalled();
+  expect(Events.opened).toHaveLength(2);
+  invalidate.mockClear();
+  act(() => source().open());
+  await tick();
+  expect(invalidate).toHaveBeenCalledExactlyOnceWith({ predicate: expect.any(Function) }, { cancelRefetch: false });
+});
+
+test("a ping or an event resets the silence timer", async () => {
+  await mount();
+  act(() => source().open());
+  await tick(30_000);
+  act(() => source().emit("ping", {}));
+  await tick(30_000);
+  act(() => source().emit("viewed", { reviewId: id }));
+  await tick(30_000);
+  expect(Events.opened).toHaveLength(1);
+  await tick(10_000);
+  expect(Events.opened).toHaveLength(2);
+});
+
+test("returning after more than 5 seconds hidden reconnects; a shorter absence does not", async () => {
+  await mount();
+  act(() => source().open());
+  await tick(2_000);
+  const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+  act(() => document.dispatchEvent(new Event("visibilitychange")));
+  await tick(4_000);
+  visibility.mockReturnValue("visible");
+  act(() => document.dispatchEvent(new Event("visibilitychange")));
+  await tick(0);
+  expect(Events.opened).toHaveLength(1);
+  visibility.mockReturnValue("hidden");
+  act(() => document.dispatchEvent(new Event("visibilitychange")));
+  await tick(5_001);
+  visibility.mockReturnValue("visible");
+  act(() => document.dispatchEvent(new Event("visibilitychange")));
+  await tick(0);
+  expect(Events.opened).toHaveLength(2);
+  expect(live()).toHaveLength(1);
+});
+
+test.each([
+  ["pageshow, persisted", () => new PageTransitionEvent("pageshow", { persisted: true })],
+  ["pageshow", () => new PageTransitionEvent("pageshow")],
+  ["online", () => new Event("online")],
+])("%s reconnects an open stream once, even when signals arrive together", async (_name, make) => {
+  await mount();
+  act(() => source().open());
+  await tick(2_000);
+  act(() => {
+    window.dispatchEvent(make());
+    window.dispatchEvent(make());
+    window.dispatchEvent(new Event("online"));
+  });
+  await tick(0);
+  expect(Events.opened).toHaveLength(2);
+  expect(live()).toHaveLength(1);
+});
+
+test("a visible follower with no relayed frame for 40 seconds takes over and the old leader closes its stream", async () => {
+  vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+  const leader = await mount();
+  const follower = await mount();
+  const asleep = source();
+  expect(Events.opened).toHaveLength(1);
+  await tick(30_000);
+  expect(Events.opened).toHaveLength(1);
+  await tick(20_000);
+  expect(asleep.close).toHaveBeenCalled();
+  expect(Events.opened).toHaveLength(2);
+  expect(live()).toHaveLength(1);
+  leader.invalidate.mockClear();
+  follower.invalidate.mockClear();
+  act(() => source().open());
+  await tick();
+  for (const tab of [leader, follower]) expect(tab.invalidate).toHaveBeenCalledTimes(1);
+  act(() => source().emit("publish", { reviewId: id, revision: 5 }));
+  await tick();
+  for (const tab of [leader, follower]) expect(tab.view.getByLabelText(id).textContent).toBe("5");
+  await tick(30_000);
+  expect(Events.opened).toHaveLength(2);
+});
+
+test("two quick steals in one tab leave one live stream and the lock held", async () => {
+  vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+  await mount();
+  await mount();
+  const asleep = source();
+  await tick(31_000);
+  void reconnectReviewEvents();
+  void reconnectReviewEvents();
+  await tick(0);
+  expect(Events.opened).toHaveLength(2);
+  expect(live()).toHaveLength(1);
+  expect(asleep.close).toHaveBeenCalled();
+  // The lock is still held: a third tab queues behind it and opens nothing.
+  await mount();
+  expect(Events.opened).toHaveLength(2);
+});
+
+test("a stolen leader does not steal back at once", async () => {
+  vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+  await mount();
+  await mount();
+  await tick(50_000);
+  expect(Events.opened).toHaveLength(2);
+  await tick(10_000);
+  expect(Events.opened).toHaveLength(2);
+});
+
+test("a follower that becomes visible waits before judging the leader", async () => {
+  const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+  await mount();
+  await mount();
+  await tick(120_000);
+  visibility.mockReturnValue("visible");
+  act(() => document.dispatchEvent(new Event("visibilitychange")));
+  await tick(30_000);
+  expect(Events.opened).toHaveLength(1);
+  await tick(30_000);
+  expect(Events.opened).toHaveLength(2);
+});
+
+test("Refresh in a follower steals only when the last relayed frame is older than 30 seconds", async () => {
+  vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+  await mount();
+  await mount();
+  act(() => source().open());
+  await tick(5_000);
+  await expect(reconnectReviewEvents()).resolves.toBe(false);
+  expect(Events.opened).toHaveLength(1);
+  await tick(31_000);
+  void reconnectReviewEvents();
+  await tick(0);
+  expect(Events.opened).toHaveLength(2);
+});
+
+test("an immediate reconnect replaces a pending HEAD probe and the probe schedules nothing", async () => {
+  const late = Promise.withResolvers<Response>();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() => late.promise),
+  );
+  await mount();
+  act(() => source().fail());
+  await tick(0);
+  const count = Events.opened.length;
+  void reconnectReviewEvents();
+  await tick(0);
+  expect(Events.opened).toHaveLength(count + 1);
+  late.resolve(new Response(null, { status: 200 }));
+  await tick(60_000);
+  expect(Events.opened).toHaveLength(count + 1);
+});
+
+test("Refresh resets the backoff delay; a failed stream afterwards retries after the base delay", async () => {
+  await mount();
+  for (const delay of [1000, 2000, 4000]) {
+    act(() => source().fail());
+    await tick(delay);
+  }
+  const count = Events.opened.length;
+  void reconnectReviewEvents();
+  await tick(0);
+  expect(Events.opened).toHaveLength(count + 1);
+  act(() => source().fail());
+  await tick(999);
+  expect(Events.opened).toHaveLength(count + 1);
+  await tick(1);
+  expect(Events.opened).toHaveLength(count + 2);
+});
+
+test("a reconnect refreshes revision data but not immutable file queries", async () => {
+  const { client } = await mount();
+  const old = Date.now() - 1;
+  const revisionData = observe(client, ["revision", id, "1"], old);
+  const file = observe(client, ["file", "f", "new"], old);
+  const diff = observe(client, ["file-diff", "f"], old);
+  const counts = observe(client, ["file-counts", "f"], old);
+  act(() => source().open());
+  await tick();
+  expect(revisionData.fetcher).toHaveBeenCalledOnce();
+  for (const query of [file, diff, counts]) {
+    expect(query.fetcher).not.toHaveBeenCalled();
+    query.stop();
+  }
+  revisionData.stop();
+});
+
+test("a reconnect retries an immutable file query that failed, and leaves a loaded one alone", async () => {
+  const { client } = await mount();
+  const failing = vi.fn(async () => {
+    throw new Error("offline");
+  });
+  const failed = new QueryObserver(client, { queryKey: ["file-diff", "bad"], queryFn: failing, retry: false });
+  const stop = failed.subscribe(() => {});
+  await tick(0);
+  expect(failed.getCurrentResult().status).toBe("error");
+  const loaded = observe(client, ["file-diff", "good"], Date.now() - 1);
+  failing.mockClear();
+  act(() => source().open());
+  await tick();
+  expect(failing).toHaveBeenCalledOnce();
+  expect(loaded.fetcher).not.toHaveBeenCalled();
+  stop();
+  loaded.stop();
+});
+
+test("a hidden follower does not take over", async () => {
+  vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+  await mount();
+  await mount();
+  await tick(120_000);
+  expect(Events.opened).toHaveLength(1);
+});
+
+test("relayed pings keep a visible follower from taking over", async () => {
+  vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+  await mount();
+  await mount();
+  act(() => source().open());
+  for (let i = 0; i < 6; i++) {
+    act(() => source().emit("ping", {}));
+    await tick(25_000);
+  }
+  expect(Events.opened).toHaveLength(1);
 });

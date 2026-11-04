@@ -1,6 +1,6 @@
 // @vitest-environment-options {"settings":{"disableIframePageLoading":true}}
 import type { FileView, InboxItem, RenderedBlock, RevisionView, Target, ThreadView } from "@emend/contract";
-import { focusManager, QueryClient } from "@tanstack/react-query";
+import { focusManager, QueryClient, QueryObserver } from "@tanstack/react-query";
 import { createMemoryHistory } from "@tanstack/react-router";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { Window } from "happy-dom";
@@ -537,6 +537,85 @@ test("phone menu copies the complete link and links to devices; header selects r
   await chooseRevision(2);
   await waitFor(() => expect(history.location.search).toContain("rev=2"));
   expect(history.location.search).toContain("tab=comments");
+});
+
+test("the phone menu starts with Refresh, which refetches and reconnects without touching drafts", async () => {
+  width = 390;
+  const draft = draftKey(id, draftTarget);
+  localStorage.setItem(draft, "Keep me");
+  const { history } = mount(`/r/${id}`);
+  await screen.findByRole("button", { name: /^Revision 1(?: of|,)/ });
+  await waitFor(() => expect(Events.opened).toHaveLength(1));
+  const streams = Events.opened.length;
+  const reviewCalls = () => fetchMock.mock.calls.filter(([path]) => path === `/api/v1/reviews/${id}`).length;
+  const before = reviewCalls();
+  fireEvent.keyDown(screen.getByRole("button", { name: "More" }), { key: "ArrowDown" });
+  const menu = within(await screen.findByRole("menu", { name: "More" }));
+  expect(menu.getAllByRole("menuitem")[0]?.textContent).toBe("Refresh");
+  fireEvent.click(menu.getByRole("menuitem", { name: "Refresh" }));
+  await waitFor(() => expect(Events.opened.length).toBe(streams + 1));
+  act(() => Events.opened.at(-1)?.open());
+  // The open refresh does the fetching; Refresh adds no second fetch of its own.
+  await waitFor(() => expect(reviewCalls()).toBe(before + 1));
+  await new Promise((resolve) => setTimeout(resolve, 700));
+  expect(reviewCalls()).toBe(before + 1);
+  expect(localStorage.getItem(draft)).toBe("Keep me");
+  expect(history.location.pathname).toBe(`/r/${id}`);
+});
+
+test("Refresh retries a failed immutable file query and skips a loaded one", async () => {
+  width = 390;
+  mount(`/r/${id}`);
+  await screen.findByRole("button", { name: /^Revision 1(?: of|,)/ });
+  const failing = vi.fn(async () => {
+    throw new Error("offline");
+  });
+  const failed = new QueryObserver(client, { queryKey: ["file-diff", "bad"], queryFn: failing, retry: false });
+  const stopFailed = failed.subscribe(() => {});
+  client.setQueryData(["file-diff", "good"], "loaded");
+  const loadedFetch = vi.fn(async () => "again");
+  const loaded = new QueryObserver(client, {
+    queryKey: ["file-diff", "good"],
+    queryFn: loadedFetch,
+    staleTime: Infinity,
+  });
+  const stopLoaded = loaded.subscribe(() => {});
+  await waitFor(() => expect(failing).toHaveBeenCalledOnce());
+  fireEvent.keyDown(screen.getByRole("button", { name: "More" }), { key: "ArrowDown" });
+  fireEvent.click(within(await screen.findByRole("menu", { name: "More" })).getByRole("menuitem", { name: "Refresh" }));
+  await waitFor(() => expect(failing).toHaveBeenCalledTimes(2), { timeout: 5000 });
+  expect(loadedFetch).not.toHaveBeenCalled();
+  stopFailed();
+  stopLoaded();
+});
+
+test("Refresh refetches by itself when the new stream does not open", async () => {
+  width = 390;
+  mount(`/r/${id}`);
+  await screen.findByRole("button", { name: /^Revision 1(?: of|,)/ });
+  await waitFor(() => expect(Events.opened).toHaveLength(1));
+  const reviewCalls = () => fetchMock.mock.calls.filter(([path]) => path === `/api/v1/reviews/${id}`).length;
+  const before = reviewCalls();
+  fireEvent.keyDown(screen.getByRole("button", { name: "More" }), { key: "ArrowDown" });
+  fireEvent.click(within(await screen.findByRole("menu", { name: "More" })).getByRole("menuitem", { name: "Refresh" }));
+  await waitFor(() => expect(reviewCalls()).toBe(before + 1), { timeout: 5000 });
+});
+
+test("the desktop header has a Refresh button on every page that has the frame", async () => {
+  for (const path of ["/", `/r/${id}`, "/devices"]) {
+    const prior = Events.opened.length;
+    const view = mount(path);
+    await screen.findByRole("button", { name: "Refresh" });
+    await waitFor(() => expect(Events.opened.length).toBe(prior + 1));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(Events.opened.length).toBe(prior + 2));
+    act(() => Events.opened.at(-1)?.open());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Refresh" }).getAttribute("aria-busy")).not.toBe("true"),
+    );
+    view.unmount();
+    cleanup();
+  }
 });
 
 test("phone inbox menu offers Devices and Pair a device", async () => {

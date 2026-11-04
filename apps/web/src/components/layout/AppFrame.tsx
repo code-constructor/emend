@@ -1,9 +1,19 @@
 import { Link, useRouter } from "@tanstack/react-router";
-import { ChevronLeft, Ellipsis, Inbox, Link as LinkIcon, MessageSquarePlus, QrCode, Smartphone } from "lucide-react";
+import {
+  ChevronLeft,
+  Ellipsis,
+  Inbox,
+  Link as LinkIcon,
+  MessageSquarePlus,
+  QrCode,
+  RefreshCw,
+  Smartphone,
+} from "lucide-react";
 import type { CSSProperties, ReactNode } from "react";
 import { useLayout } from "../../lib/layout.ts";
 import { useLayoutPreferences } from "../../lib/layout-store.ts";
 import { requestPairingFromLink } from "../../lib/pairing-intent.ts";
+import { useRefresh } from "../../lib/refresh.ts";
 import { textSizeItems } from "../review/LayoutControls.tsx";
 import { Icon } from "../ui/Icon.tsx";
 import { IconButton } from "../ui/IconButton.tsx";
@@ -24,6 +34,8 @@ export function AppFrame({
   const preferences = useLayoutPreferences();
   const router = useRouter();
   const toast = useToast();
+  const { refresh, busy } = useRefresh();
+  const refreshItem: MenuItem = { label: "Refresh", icon: RefreshCw, disabled: busy, onSelect: () => void refresh() };
   async function copyLink() {
     try {
       await navigator.clipboard.writeText(location.origin + location.pathname + location.search);
@@ -40,6 +52,7 @@ export function AppFrame({
   };
   const menuItems: MenuItem[] = isReview
     ? [
+        refreshItem,
         { label: "Copy link", icon: LinkIcon, onSelect: () => void copyLink() },
         ...(onCommentReview
           ? [{ label: "Comment on review", icon: MessageSquarePlus, onSelect: onCommentReview }]
@@ -51,6 +64,7 @@ export function AppFrame({
         devices,
       ]
     : [
+        refreshItem,
         devices,
         {
           label: "Pair a device",
@@ -105,9 +119,18 @@ export function AppFrame({
             items={menuItems}
           />
         ) : (
-          <IconButton label="Devices" icon={Smartphone} asChild>
-            <Link to="/devices" />
-          </IconButton>
+          <div className="flex items-center">
+            <IconButton
+              label="Refresh"
+              icon={RefreshCw}
+              aria-busy={busy}
+              className={busy ? "[&>svg]:animate-spin" : undefined}
+              onClick={() => void refresh()}
+            />
+            <IconButton label="Devices" icon={Smartphone} asChild>
+              <Link to="/devices" />
+            </IconButton>
+          </div>
         )}
       </header>
       {children}

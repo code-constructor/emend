@@ -772,8 +772,11 @@ be confirmed: a late or repeated confirm returns `404 not_found`.
 reviewer's owner, with no review lookup. `GET /api/v1/reviews/:id/events` stays for
 compatibility and delivers only that owned review's events. Both require the same reviewer
 principal and scope; `HEAD` returns headers only and allocates no stream. Both SSE
-endpoints use `text/event-stream`, `Cache-Control: no-store` and a comment keepalive every
-25 seconds. `ReviewEventName` is
+endpoints use `text/event-stream`, `Cache-Control: no-store` and a keepalive every
+25 seconds. The keepalive is an SSE event named `ping` with the data `{}`: it carries no review
+data and is not a `ReviewEvent`. (A comment line would fire no browser event, and an event with
+an empty data buffer is never dispatched.) A client may treat about 40 seconds without any frame
+(`ping` or review event) as a dead stream and reconnect. `ReviewEventName` is
 `publish | send | thread | waiting | claimed | confirmed | viewed | snooze | unsnooze | retire | reopen | delete`. `ReviewEvent` has a `type`
 discriminator and the same fields as its SSE payload. The SSE `event` line supplies
 `type`; the JSON `data` is:
@@ -801,7 +804,7 @@ across both endpoints combined; additional streams return `429 rate_limited`. A 
 buffering over 100 events is closed. Device revocation and session logout close that
 device's session streams immediately after the revocation commits, across both endpoints.
 Other sessions remain open. The session is also rechecked when a stream starts and at each
-25-second keepalive; expiry or revocation outside these routes closes the stream at that
+25-second `ping`; expiry or revocation outside these routes closes the stream at that
 check.
 
 `ThreadState` is `open`, `sent`, `answered` or `resolved`. `Outcome` is `fixed`, `explained`,

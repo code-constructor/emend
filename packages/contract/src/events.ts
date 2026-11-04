@@ -15,6 +15,10 @@ export const ReviewEventName = z.enum([
   "delete",
 ]);
 export type ReviewEventName = z.infer<typeof ReviewEventName>;
+/** The SSE keepalive: sent as `event: ping` with `data: {}` every 25 s. It is not a ReviewEvent. */
+export const STREAM_PING_EVENT = "ping";
+/** Clients treat this long without any frame as a dead stream. */
+export const STREAM_SILENCE_MS = 40_000;
 const review = { reviewId: z.uuid(), revision: z.int().positive() };
 export const ReviewEvent = z.discriminatedUnion("type", [
   z.object({ type: z.literal("publish"), ...review }),

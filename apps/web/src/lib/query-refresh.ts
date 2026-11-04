@@ -3,6 +3,20 @@ import type { QueryClient } from "@tanstack/react-query";
 type Batch = { keys: Set<string>; openedAt?: number; settled: boolean; timer?: ReturnType<typeof setTimeout> };
 const batches = new WeakMap<QueryClient, Batch>();
 
+const immutableQueries = new Set(["file", "file-diff", "file-counts"]);
+/**
+ * File text, file diffs and file counts never change for a file id, so no refresh refetches them
+ * once loaded. One that failed (for example during an offline blip) is still retried.
+ */
+export function isSettledImmutableQuery(query: {
+  queryKey: readonly unknown[];
+  state: { status: "pending" | "error" | "success" };
+}) {
+  return (
+    typeof query.queryKey[0] === "string" && immutableQueries.has(query.queryKey[0]) && query.state.status === "success"
+  );
+}
+
 /** Events and settled writes share one batch, even when the initiating page unmounts. */
 export function refreshQueries(
   client: QueryClient,
@@ -30,7 +44,9 @@ export function refreshQueries(
     if (before !== undefined) {
       void client.invalidateQueries(
         {
-          predicate: (query) => query.state.dataUpdatedAt < before || keys.has(query.queryKey.slice(0, 2).join(":")),
+          predicate: (query) =>
+            !isSettledImmutableQuery(query) &&
+            (query.state.dataUpdatedAt < before || keys.has(query.queryKey.slice(0, 2).join(":"))),
         },
         { cancelRefetch: settled },
       );

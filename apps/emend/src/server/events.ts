@@ -1,4 +1,4 @@
-import { LIMITS, ReviewEvent } from "@emend/contract";
+import { LIMITS, ReviewEvent, STREAM_PING_EVENT } from "@emend/contract";
 import { ApiError } from "./http/errors.ts";
 
 const ownedKey = (ownerId: string, id: string) => `${ownerId}\0${id}`;
@@ -143,7 +143,7 @@ export class ReviewEvents {
             if (checking || closed || !ready) return;
             checking = true;
             try {
-              if (await isLive()) enqueue(": keepalive\n\n");
+              if (await isLive()) enqueue(`event: ${STREAM_PING_EVENT}\ndata: {}\n\n`);
               else stop();
             } catch {
               stop();
