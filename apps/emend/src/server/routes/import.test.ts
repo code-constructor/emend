@@ -41,12 +41,14 @@ afterEach(async () => {
   await f.cleanup();
 });
 function request(path: string, body: unknown, signal?: AbortSignal) {
-  return f.app.request(`http://127.0.0.1:3636/api/v1${path}`, {
+  const url = `http://127.0.0.1:3636/api/v1${path}`;
+  const init = {
     method: "POST",
-    signal,
     headers: { Host: "127.0.0.1:3636", "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify(body),
-  });
+  };
+  // A Request follows its signal only weakly; keep it alive so an abort is not lost to garbage collection.
+  return signal ? f.app.request(f.keep(new Request(url, { ...init, signal }))) : f.app.request(url, init);
 }
 async function bundle() {
   const now = new Date(f.deps.now() - 1000).toISOString();

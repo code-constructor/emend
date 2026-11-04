@@ -43,10 +43,14 @@ test.each(["device", "logout"])(
         await reader.read();
       }
       for (const token of [sibling, separate]) {
-        const response = await f.app.request("http://127.0.0.1:3636/api/v1/events", {
-          signal: controller.signal,
-          headers: { Host: "127.0.0.1:3636", Cookie: `emend_session=${token.secret}` },
-        });
+        const response = await f.app.request(
+          f.keep(
+            new Request("http://127.0.0.1:3636/api/v1/events", {
+              signal: controller.signal,
+              headers: { Host: "127.0.0.1:3636", Cookie: `emend_session=${token.secret}` },
+            }),
+          ),
+        );
         const reader = response.body?.getReader();
         if (!reader) throw new Error("missing stream");
         readers.push(reader);

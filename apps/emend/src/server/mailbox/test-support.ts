@@ -66,6 +66,14 @@ export async function mailboxFixture() {
   }
   const revisionId = await revision(1);
   const credentials = { reviewer: session, foreign, agent, stranger, otherAgent };
+  // undici's Request follows the caller's signal only through a weak reference, so an abort is lost once the
+  // Request is collected. Keep every Request that carries a signal alive until cleanup.
+  // Tests that call f.app.request directly with a signal wrap their Request in f.keep.
+  const liveRequests: Request[] = [];
+  const keep = (req: Request) => {
+    liveRequests.push(req);
+    return req;
+  };
   function request(
     path: string,
     method = "POST",
@@ -74,9 +82,9 @@ export async function mailboxFixture() {
     signal?: AbortSignal,
   ) {
     const credential = credentials[who];
-    return app.request(`${origin}/api/v1${path}`, {
+    const url = `${origin}/api/v1${path}`;
+    const init = {
       method,
-      signal,
       headers: {
         Host: "127.0.0.1:3636",
         Origin: origin,
@@ -86,7 +94,8 @@ export async function mailboxFixture() {
           : { Authorization: `Bearer ${credential}` }),
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    });
+    };
+    return signal ? app.request(keep(new Request(url, { ...init, signal }))) : app.request(url, init);
   }
   async function thread(body = "Please explain.", target: Target = { kind: "review" }, seq = 1) {
     const response = await request(`/reviews/${reviewId}/threads`, "POST", { revision: seq, target, body });
@@ -118,8 +127,13 @@ export async function mailboxFixture() {
     );
   return {
     ...f,
+    async cleanup() {
+      liveRequests.length = 0;
+      await f.cleanup();
+    },
     deps,
     app,
+    keep,
     /** Wait for the background blob cleanup of every review delete so far. */
     blobCleanup: async () => {
       await Promise.all(cleanups.splice(0));
