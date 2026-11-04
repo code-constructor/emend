@@ -24,7 +24,7 @@ E.5 to E.7 come from your phone feedback of 2026-11-04 and land first, then E.2 
 - [x] E.5: text fields on touch screens use 16 px, so iOS no longer zooms in when one gets focus.
 - [x] E.6: bottom sheets, such as the phone comment composer, stay above the iOS keyboard.
 - [x] E.7: the phone diff scrolls sideways by default; Wrap moves to the phone ⋯ menu.
-- [ ] E.2: the Writeup, Docs and Comments keep their reading position across tabs, docs and
+- [x] E.2: the Writeup, Docs and Comments keep their reading position across tabs, docs and
       revisions.
 - [ ] E.3: compact topic headers with a Details toggle; file headers stick until the next file.
 - [ ] E.4: check for and install app updates, from the phone menu and the Devices page.

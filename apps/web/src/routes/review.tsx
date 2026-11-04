@@ -30,7 +30,9 @@ import { draftKey, hasDraft, type SavedDraft, saveDraft, subscribeDrafts } from 
 import { usePublishedRevision } from "../lib/events.tsx";
 import { useInboxCollapsed, useLayout, usePaneMode } from "../lib/layout.ts";
 import { openingView } from "../lib/opening-view.ts";
+import { readingPositionKey } from "../lib/reading-position.ts";
 import { revealReadingTarget } from "../lib/reading-reveal.ts";
+import { type IntentState, useReadingPosition } from "../lib/use-reading-position.ts";
 import { type ReviewSearch, validateReviewSearch } from "../router.tsx";
 
 function Reading({
@@ -51,6 +53,7 @@ function Reading({
   onCurrentTopic,
   onNote,
   visible,
+  intentState,
 }: {
   reviewId: string;
   revision: RevisionView;
@@ -69,7 +72,14 @@ function Reading({
   onCurrentTopic?: (slug: string | undefined) => void;
   onNote: (id: string) => void;
   visible: boolean;
+  intentState: () => IntentState;
 }) {
+  useReadingPosition({
+    storageKey: readingPositionKey(reviewId, tab, tab === "docs" ? (openDoc?.path ?? "") : ""),
+    selector: tab === "comments" ? '[id^="thread-"]' : '[id^="block-"], [id^="html-doc-"]',
+    active: visible,
+    intentState,
+  });
   const props = {
     reviewId,
     revision: revision.seq,
@@ -252,6 +262,20 @@ function LoadedReview({
     threadId?: string;
     requested: typeof requested;
   } | null>(null);
+  // The reading position yields to a navigation that scrolls (a new hash or thread, a link, a Resume), never to
+  // a hash that stayed in the URL or to an older intent that was never fulfilled: those have another navigation.
+  // `navigationCount` counts navigations (a revisit of the same URL is another one); a redirect that continues
+  // an intent is not. `scrollIntentAt` is the count at the latest scrolling intent.
+  const navigationCount = useRef(0);
+  const scrollIntentAt = useRef(-1);
+  const scrollIntentEpoch = useRef(0);
+  const intentState = useCallback(
+    (): IntentState => ({
+      current: scrollIntentAt.current === navigationCount.current,
+      epoch: scrollIntentEpoch.current,
+    }),
+    [],
+  );
   const navigateReading = useCallback(
     (next: ReviewSearch, nextHash = "") => {
       // A repeated Resume or link click is a new intent even when the URL is unchanged.
@@ -363,8 +387,14 @@ function LoadedReview({
   // Data/DOM changes may fulfill an existing intent, but only navigation creates one.
   useEffect(() => {
     const current = currentIntent;
-    if (requested && requested !== previous.current?.requested) pending.current = { ...requested };
-    else if (current.navigation !== previous.current?.navigation && pending.current?.navigation !== current.navigation)
+    let created = false;
+    if (requested && requested !== previous.current?.requested) {
+      pending.current = { ...requested };
+      created = true;
+    } else if (
+      current.navigation !== previous.current?.navigation &&
+      pending.current?.navigation !== current.navigation
+    ) {
       pending.current = {
         ...current,
         token: {},
@@ -372,6 +402,15 @@ function LoadedReview({
         jumpThread:
           current.elementId !== previous.current?.elementId || current.threadId !== previous.current?.threadId,
       };
+      created = true;
+    }
+    if (created) {
+      navigationCount.current += 1;
+      if (pending.current?.jumpThread && (pending.current.elementId || pending.current.threadId)) {
+        scrollIntentAt.current = navigationCount.current;
+        scrollIntentEpoch.current += 1;
+      }
+    }
     previous.current = {
       navigation: current.navigation,
       elementId: current.elementId,
@@ -381,6 +420,13 @@ function LoadedReview({
     const intent = pending.current;
     if (!intent || intent.navigation !== current.navigation) return;
     const complete = () => {
+      // A fulfilled jump no longer holds back the reading position; the epoch still stops retries in flight.
+      // Completing it also bumps the epoch, so a restore that started before the jump finished stops. Only a
+      // scrolling intent counts: completing an empty one at mount must not stop the restore.
+      if (scrollIntentAt.current === navigationCount.current) {
+        scrollIntentAt.current = -1;
+        scrollIntentEpoch.current += 1;
+      }
       pending.current = null;
       setThreadJump(undefined);
     };
@@ -561,6 +607,7 @@ function LoadedReview({
                         revision={revision}
                         tab={readingTab}
                         visible={paneMode === "split" || tab !== "diff" || !hasDiff}
+                        intentState={intentState}
                         search={search}
                         openDoc={openDoc}
                         targeted={!!hash || !!search.thread}
