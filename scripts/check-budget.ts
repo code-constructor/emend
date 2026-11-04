@@ -1,6 +1,6 @@
 // Keeps the agent instructions small and wired (AGENTS.md, "Who does what").
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { isIP } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -314,10 +314,25 @@ function checkSettings(root: string): string[] {
     }
   }
   const localFile = path.join(root, ".claude", "settings.local.json");
-  if (existsSync(localFile)) {
-    const label = ".claude/settings.local.json";
+  const label = ".claude/settings.local.json";
+  // In the sandbox an absent file shows up as an empty regular file; /dev/null over it means a real file is
+  // read-denied and cannot be checked. Never follow a link or open a FIFO.
+  const localKind = classifyLocalSettings(lstatSync(localFile, { throwIfNoEntry: false }), statSync("/dev/null").rdev);
+  if (localKind === "symlink") errors.push(`${label} must not be a symlink`);
+  else if (localKind === "hidden") errors.push(`${label} is hidden by the sandbox (read-denied), so it cannot be checked`);
+  else if (localKind === "invalid") errors.push(`${label} must be a regular file`);
+  else if (localKind === "read") {
     try {
-      const local = JSON.parse(readFileSync(localFile, "utf8"));
+      let text: string;
+      try {
+        text = readFileSync(localFile, "utf8");
+      } catch (readError) {
+        const code = (readError as NodeJS.ErrnoException).code;
+        if (code === "ENOENT") return errors;
+        errors.push(`${label} could not be read (${code ?? "unknown"})`);
+        return errors;
+      }
+      const local = JSON.parse(text);
       if (!isPlainObject(local)) throw new TypeError("must be a JSON object");
       errors.push(...refusedSettings(local, label));
       if (local.sandbox?.enabled !== undefined && local.sandbox.enabled !== true) {
@@ -333,6 +348,26 @@ function checkSettings(root: string): string[] {
     }
   }
   return errors;
+}
+
+interface LocalStat {
+  isFile(): boolean;
+  isSymbolicLink(): boolean;
+  isCharacterDevice(): boolean;
+  size: number;
+  rdev: number | bigint;
+}
+
+/** How to treat `.claude/settings.local.json`, from an lstat (no link followed). */
+export function classifyLocalSettings(
+  stat: LocalStat | undefined,
+  nullRdev: number | bigint,
+): "absent" | "read" | "symlink" | "hidden" | "invalid" {
+  if (stat === undefined) return "absent";
+  if (stat.isSymbolicLink()) return "symlink";
+  if (stat.isFile()) return stat.size === 0 ? "absent" : "read";
+  if (stat.isCharacterDevice() && stat.rdev === nullRdev) return "hidden";
+  return "invalid";
 }
 
 export function checkBudget(root: string): BudgetResult {

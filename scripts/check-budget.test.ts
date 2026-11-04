@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { checkBudget } from "./check-budget.ts";
+import { checkBudget, classifyLocalSettings } from "./check-budget.ts";
 
 const temps: string[] = [];
 
@@ -499,6 +499,56 @@ test("a harmless or missing settings.local.json passes", () => {
   assert.deepEqual(withLocal("{}"), []);
   assert.deepEqual(withLocal(JSON.stringify({ permissions: { allow: ["Bash(git status)"] } })), []);
   assert.deepEqual(checkBudget(makeTree({ settings: VALID_SETTINGS })).errors, []);
+});
+
+test("an empty settings.local.json counts as absent, anything else blank or broken still fails", () => {
+  const withLocal = (value: string, settings: string = VALID_SETTINGS) =>
+    checkBudget(makeTree({ settings, localSettings: value })).errors;
+  assert.deepEqual(withLocal(""), []);
+  assert.match(withLocal(" ")[0], /^\.claude\/settings\.local\.json is not valid JSON \(/);
+  assert.match(withLocal("\n")[0], /^\.claude\/settings\.local\.json is not valid JSON \(/);
+  assert.match(withLocal("﻿")[0], /^\.claude\/settings\.local\.json is not valid JSON \(/);
+  assert.match(withLocal("{")[0], /^\.claude\/settings\.local\.json is not valid JSON \(/);
+  // an empty local file never skips the checks on settings.json itself
+  assert.ok(withLocal("", "{}").some((e) => e.startsWith(".claude/settings.json")));
+});
+
+test("settings.local.json that is not a plain file fails", () => {
+  const SYMLINK = [".claude/settings.local.json must not be a symlink"];
+  const REGULAR = [".claude/settings.local.json must be a regular file"];
+  const tree = () => makeTree({ settings: VALID_SETTINGS });
+  const local = (root: string) => path.join(root, ".claude", "settings.local.json");
+
+  let root = tree();
+  writeFileSync(path.join(root, "empty.json"), "");
+  symlinkSync(path.join(root, "empty.json"), local(root));
+  assert.deepEqual(checkBudget(root).errors, SYMLINK);
+
+  root = tree();
+  symlinkSync("/dev/null", local(root));
+  assert.deepEqual(checkBudget(root).errors, SYMLINK);
+
+  root = tree();
+  mkdirSync(local(root));
+  assert.deepEqual(checkBudget(root).errors, REGULAR);
+});
+
+test("classifyLocalSettings decides what counts as absent", () => {
+  const stat = (kind: string, size = 0, rdev = 0) => ({
+    isFile: () => kind === "file",
+    isSymbolicLink: () => kind === "symlink",
+    isCharacterDevice: () => kind === "char",
+    size,
+    rdev,
+  });
+  const NULL_RDEV = 259;
+  assert.equal(classifyLocalSettings(undefined, NULL_RDEV), "absent");
+  assert.equal(classifyLocalSettings(stat("file", 0), NULL_RDEV), "absent");
+  assert.equal(classifyLocalSettings(stat("file", 2), NULL_RDEV), "read");
+  assert.equal(classifyLocalSettings(stat("char", 0, NULL_RDEV), NULL_RDEV), "hidden");
+  assert.equal(classifyLocalSettings(stat("char", 0, 5), NULL_RDEV), "invalid");
+  assert.equal(classifyLocalSettings(stat("symlink", 0, NULL_RDEV), NULL_RDEV), "symlink");
+  assert.equal(classifyLocalSettings(stat("dir"), NULL_RDEV), "invalid");
 });
 
 test("the real settings files pass the settings checks", () => {
