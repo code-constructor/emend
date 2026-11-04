@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cleanPackageDocs } from "./package-docs.ts";
 
@@ -21,11 +21,21 @@ try {
     check = label;
     return execFileSync(program, args, { cwd, env, encoding: "utf8", stdio: "pipe" });
   };
-  command("pnpm pack", "pnpm", ["pack", "--pack-destination", pack], pkg);
-  check = "packed tarball";
-  const tarballs = readdirSync(pack).filter((name) => name.endsWith(".tgz"));
-  assert.equal(tarballs.length, 1);
-  const tarball = join(pack, tarballs[0]);
+  // `--tarball <path>` checks that exact file instead of packing a new one.
+  const flag = process.argv.indexOf("--tarball");
+  let tarball: string;
+  if (flag === -1) {
+    command("pnpm pack", "pnpm", ["pack", "--pack-destination", pack], pkg);
+    check = "packed tarball";
+    const tarballs = readdirSync(pack).filter((name) => name.endsWith(".tgz"));
+    assert.equal(tarballs.length, 1);
+    tarball = join(pack, tarballs[0]);
+  } else {
+    check = "--tarball path";
+    const given = process.argv[flag + 1];
+    assert(given && !given.startsWith("-") && process.argv.length === flag + 2);
+    tarball = resolve(given);
+  }
   const entries = new Set(command("tarball contents", "tar", ["-tzf", tarball]).trim().split(/\r?\n/));
   const allowed = new Set([
     "package/package.json",
@@ -99,6 +109,9 @@ try {
 
   check = "read version";
   const version = JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")).version;
+  const pluginVersion = JSON.parse(readFileSync(join(root, "plugin/.claude-plugin/plugin.json"), "utf8")).version;
+  check = `plugin/.claude-plugin/plugin.json version ${JSON.stringify(pluginVersion)} matches apps/emend/package.json version ${JSON.stringify(version)}`;
+  assert.equal(pluginVersion, version);
   const userconfig = join(work, "userconfig");
   const globalconfig = join(work, "globalconfig");
   writeFileSync(userconfig, "");
