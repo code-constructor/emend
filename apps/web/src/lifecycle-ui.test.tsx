@@ -29,6 +29,7 @@ const item: InboxItem = {
   snoozedUntil: null,
   releasedAt: null,
   pickedUpAt: null,
+  kind: "review",
 };
 const revision = {
   seq: 1,

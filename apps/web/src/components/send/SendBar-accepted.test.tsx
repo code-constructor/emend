@@ -34,6 +34,7 @@ const base: ReviewView = {
   snoozedUntil: null,
   releasedAt: null,
   pickedUpAt: null,
+  kind: "review",
   importedAt: null,
   revisions: [{ seq: 3, createdAt: "2026-01-01T00:00:00.000Z" }],
 };

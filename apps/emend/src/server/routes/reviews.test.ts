@@ -16,6 +16,7 @@ import {
   writeups,
 } from "../../db/schema.ts";
 import { APP_CSP } from "../http/headers.ts";
+import { publishReview } from "../mailbox/lifecycle-support.ts";
 import { error, mailboxFixture } from "../mailbox/test-support.ts";
 
 let f: Awaited<ReturnType<typeof mailboxFixture>>;
@@ -479,6 +480,43 @@ test("pickedUpAt is the latest confirmation of a delivery with Sends, and a late
   f.advance(1000);
   await f.revision(2);
   expect(await pickedUp()).toBeNull();
+});
+
+test("kind follows the newest revision's writeup: publish when empty, review otherwise", async () => {
+  const empty = { overview: "", tldr: "", decisions: null, topics: {} };
+  const docOnly = await publishReview(f, { key: "d", docs: { "notes.md": "# Notes" }, writeup: empty });
+  const withWriteup = await publishReview(f, { key: "e", writeup: { ...empty, overview: "Synthetic overview" } });
+  const kinds = async () => {
+    const listed = (await (await get("")).json()) as { items: { id: string; kind: string }[] };
+    const views = await Promise.all(
+      [docOnly.reviewId, withWriteup.reviewId].map(
+        async (id) => ((await (await get(`/${id}`)).json()) as { kind: string }).kind,
+      ),
+    );
+    expect(views).toEqual([
+      listed.items.find((i) => i.id === docOnly.reviewId)?.kind,
+      listed.items.find((i) => i.id === withWriteup.reviewId)?.kind,
+    ]);
+    return views;
+  };
+  expect(await kinds()).toEqual(["publish", "review"]);
+  // The seeded fixture review has no writeup flag set, so it reads as a review.
+  const seeded = (await (await get(`/${f.reviewId}`)).json()) as { kind: string };
+  expect(seeded.kind).toBe("review");
+  // A newer revision flips each kind, and the older revision no longer counts.
+  await publishReview(f, { key: "d", writeup: { ...empty, tldr: "Now a review" } });
+  await publishReview(f, { key: "e", writeup: empty });
+  expect(await kinds()).toEqual(["review", "publish"]);
+  expect(await (await get("", "foreign")).json()).toEqual({ items: [] });
+});
+
+test("a code review with an empty writeup stays a review", async () => {
+  const empty = { overview: "", tldr: "", decisions: null, topics: {} };
+  const { reviewId } = await publishReview(f, { key: "f", diff: true, writeup: empty });
+  const view = (await (await get(`/${reviewId}`)).json()) as { kind: string };
+  expect(view.kind).toBe("review");
+  const listed = (await (await get("")).json()) as { items: { id: string; kind: string }[] };
+  expect(listed.items.find((item) => item.id === reviewId)?.kind).toBe("review");
 });
 
 test("an approval-only delivery counts", async () => {

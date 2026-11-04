@@ -24,6 +24,7 @@ test("review views validate their states, limits, rendered blocks and doc varian
     snoozedUntil: null,
     releasedAt: null,
     pickedUpAt: null,
+    kind: "review",
   };
   expect(contract.InboxItem.safeParse({ ...item, pickedUpAt: "2026-01-01T00:00:00.000Z" }).success).toBe(true);
   expect(contract.InboxItem.safeParse({ ...item, pickedUpAt: "yesterday" }).success).toBe(false);

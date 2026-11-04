@@ -177,7 +177,8 @@ retired review; clients label it "Retired".
 `InboxItem = { id, title, origin: { id, name }, repo: string | null, branch: string | null,
 state: ReviewState, newestRevision, unsentCount, openThreads, agentWaiting, pendingSend,
 updatedAt, movedTo: string | null, list: "active" | "snoozed" | "done", snoozed: boolean,
-snoozedUntil: string | null, releasedAt: string | null, pickedUpAt: string | null }`. `repo` is the repository key, and
+snoozedUntil: string | null, releasedAt: string | null, pickedUpAt: string | null,
+kind: "review" | "publish" }`. `repo` is the repository key, and
 `movedTo` is the review's destination URL. `list` places the review: `done` for `approved` and
 `settled`, `snoozed` for an open review whose snooze is in effect, `active` otherwise.
 `snoozed` is true while a snooze is in effect; `snoozedUntil` is its wake time, null for a snooze
@@ -196,6 +197,11 @@ none. Publishing a newer revision therefore clears it, even when the confirmatio
 publish; no clock comparison between a revision and a confirmation is involved. `ReviewView` carries
 the same field, since it extends `InboxItem`. Clients show one state, by priority: approved;
 Agent waiting (`agentWaiting`); Not picked up yet (`pendingSend`); Picked up (`pickedUpAt`); none.
+
+`kind` is `"publish"` when the newest revision has an empty writeup and no diff (no `base`), as
+`emend publish <path>` produces; otherwise `"review"`. It follows the newest revision, so a later
+revision can change it. Both views carry it.
+
 `agentWaiting` is true for a server-held wait (including its 35-second grace
 period) or an unexpired direct-wait row for the same owner and review. Direct waits renew a
 30-second expiry every 10 seconds and delete their row when they end. They emit no live event;

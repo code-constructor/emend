@@ -42,6 +42,7 @@ export const InboxItem = z.object({
   snoozedUntil: z.iso.datetime().nullable(),
   releasedAt: z.iso.datetime().nullable(),
   pickedUpAt: z.iso.datetime().nullable(),
+  kind: z.enum(["review", "publish"]),
 });
 export type InboxItem = z.infer<typeof InboxItem>;
 export const InboxList = z.object({ items: z.array(InboxItem).max(LIMITS.inboxItems * ReviewList.options.length) });

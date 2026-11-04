@@ -24,6 +24,7 @@ const review: ReviewView = {
   snoozedUntil: null,
   releasedAt: null,
   pickedUpAt: null,
+  kind: "review",
   importedAt: null,
   revisions: [
     { seq: 1, createdAt: new Date(Date.now() - 3600_000).toISOString() },

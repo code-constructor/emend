@@ -35,6 +35,7 @@ const item: InboxItem = {
   snoozedUntil: null,
   releasedAt: null,
   pickedUpAt: null,
+  kind: "review",
 };
 const diffFile: FileView = {
   id: "33333333-3333-4333-8333-333333333333",
@@ -326,6 +327,11 @@ test("revision picker keeps the visible opening tab even when no tab was in the 
 });
 afterEach(async () => {
   cleanup();
+  try {
+    localStorage.removeItem("emend:inbox-kind");
+  } catch {
+    // A test that stubs storage as unavailable has nothing to clear.
+  }
   takePairingSecret();
   client.clear();
   // Stop browser tasks before restoring mocks or closing Vitest's logging channel.
@@ -2048,6 +2054,97 @@ test("machine Select appears for multiple origins, sorts names and combines with
   fireEvent.click(screen.getByRole("button", { name: "Clear filter" }));
   expect(screen.getByRole("link", { name: /Synthetic review/ })).toBeTruthy();
   expect(screen.getByRole("link", { name: /Another proposal/ })).toBeTruthy();
+});
+
+test("kind Select filters every list, works with the text filter and clears with the rest", async () => {
+  const published = { ...secondItem, kind: "publish" as const, agentWaiting: false, title: "Published notes" };
+  const doneReview = {
+    ...item,
+    id: "55555555-5555-4555-8555-555555555555",
+    title: "Finished work",
+    state: "approved" as const,
+    list: "done" as const,
+  };
+  const donePublish = {
+    ...published,
+    id: "66666666-6666-4666-8666-666666666666",
+    title: "Finished notes",
+    state: "approved" as const,
+    list: "done" as const,
+  };
+  withInbox([item, published, doneReview, donePublish]);
+  mount();
+  const kind = await screen.findByRole("combobox", { name: "Kind" });
+  expect(
+    within(kind)
+      .getAllByRole("option")
+      .map((option) => option.textContent),
+  ).toEqual(["All", "Reviews", "Published"]);
+  fireEvent.change(kind, { target: { value: "publish" } });
+  expect(screen.queryByRole("link", { name: /Synthetic review/ })).toBeNull();
+  expect(screen.getByRole("link", { name: /Published notes/ })).toBeTruthy();
+  // Searching makes the Done list visible, still within the kind.
+  fireEvent.change(screen.getByRole("textbox", { name: "Filter reviews" }), { target: { value: "finished" } });
+  expect(screen.getByRole("link", { name: /Finished notes/ })).toBeTruthy();
+  expect(screen.queryByRole("link", { name: /Finished work/ })).toBeNull();
+  fireEvent.change(kind, { target: { value: "review" } });
+  expect(screen.getByRole("link", { name: /Finished work/ })).toBeTruthy();
+  fireEvent.change(screen.getByRole("textbox", { name: "Filter reviews" }), { target: { value: "notes" } });
+  expect(screen.getByText("No reviews match this filter.")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Clear filter" }));
+  expect((screen.getByRole("combobox", { name: "Kind" }) as HTMLSelectElement).value).toBe("");
+  expect(screen.getByRole("link", { name: /Published notes/ })).toBeTruthy();
+});
+
+test("the chosen kind survives an unmount and remount, and Clear filter forgets it", async () => {
+  const published = { ...secondItem, kind: "publish" as const, agentWaiting: false, title: "Published notes" };
+  withInbox([item, published]);
+  const first = mount();
+  fireEvent.change(await screen.findByRole("combobox", { name: "Kind" }), { target: { value: "publish" } });
+  expect(localStorage.getItem("emend:inbox-kind")).toBe("publish");
+  first.unmount();
+  mount();
+  const kind = (await screen.findByRole("combobox", { name: "Kind" })) as HTMLSelectElement;
+  expect(kind.value).toBe("publish");
+  expect(screen.queryByRole("link", { name: /Synthetic review/ })).toBeNull();
+  fireEvent.change(screen.getByRole("textbox", { name: "Filter reviews" }), { target: { value: "zzz" } });
+  fireEvent.click(screen.getByRole("button", { name: "Clear filter" }));
+  expect(localStorage.getItem("emend:inbox-kind")).toBeNull();
+});
+
+test("a published item with a waiting agent still shows under Reviews", async () => {
+  const waiting = { ...secondItem, kind: "publish" as const, title: "Waiting notes", agentWaiting: true };
+  const quiet = {
+    ...secondItem,
+    id: "77777777-7777-4777-8777-777777777777",
+    kind: "publish" as const,
+    agentWaiting: false,
+    title: "Quiet notes",
+  };
+  withInbox([item, waiting, quiet]);
+  mount();
+  fireEvent.change(await screen.findByRole("combobox", { name: "Kind" }), { target: { value: "review" } });
+  expect(screen.getByRole("link", { name: /Waiting notes/ })).toBeTruthy();
+  expect(screen.queryByRole("link", { name: /Quiet notes/ })).toBeNull();
+  fireEvent.change(screen.getByRole("combobox", { name: "Kind" }), { target: { value: "publish" } });
+  expect(screen.getByRole("link", { name: /Quiet notes/ })).toBeTruthy();
+  expect(screen.queryByRole("link", { name: /Synthetic review/ })).toBeNull();
+});
+
+test("a stored garbage kind shows All", async () => {
+  localStorage.setItem("emend:inbox-kind", "nonsense");
+  withInbox([item, secondItem]);
+  mount();
+  const kind = (await screen.findByRole("combobox", { name: "Kind" })) as HTMLSelectElement;
+  expect(kind.value).toBe("");
+  expect(screen.getByRole("link", { name: /Synthetic review/ })).toBeTruthy();
+});
+
+test("kind Select is absent from an empty inbox", async () => {
+  withInbox([]);
+  mount();
+  await screen.findByText("No reviews yet.");
+  expect(screen.queryByRole("combobox", { name: "Kind" })).toBeNull();
 });
 
 test("single origin omits the machine filter; subtitle excludes moved and completed reviews", async () => {

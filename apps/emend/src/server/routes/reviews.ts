@@ -155,6 +155,15 @@ async function inbox(ownerId: string, q: Queries, deps: AppDeps, reviewId?: stri
     .groupBy(sends.reviewId, revisions.seq)
     .all();
   const newestSeq = new Map(rows.map(({ review, newestRevision }) => [review.id, newestRevision]));
+  // A published document has an empty writeup and no diff base on its newest revision.
+  const shapes = await q
+    .select({ id: revisions.reviewId, seq: revisions.seq, empty: revisions.writeupEmpty, base: revisions.base })
+    .from(revisions)
+    .where(and(eq(revisions.ownerId, ownerId), inArray(revisions.reviewId, ids)))
+    .all();
+  const publishIds = new Set(
+    shapes.filter((row) => row.seq === newestSeq.get(row.id) && row.empty && row.base === null).map((row) => row.id),
+  );
   const pickedUp = new Map<string, number>();
   for (const row of confirmed) if (row.at !== null && row.seq === newestSeq.get(row.id)) pickedUp.set(row.id, row.at);
   const draftCounts = new Map(drafts.map((row) => [row.id, row.count]));
@@ -193,6 +202,7 @@ async function inbox(ownerId: string, q: Queries, deps: AppDeps, reviewId?: stri
       snoozed,
       snoozedUntil: snoozed && review.snoozedUntil !== null ? new Date(review.snoozedUntil).toISOString() : null,
       releasedAt: review.releasedAt === null ? null : new Date(review.releasedAt).toISOString(),
+      kind: publishIds.has(review.id) ? ("publish" as const) : ("review" as const),
       pickedUpAt: pickedUp.has(review.id) ? new Date(pickedUp.get(review.id) as number).toISOString() : null,
     };
   });

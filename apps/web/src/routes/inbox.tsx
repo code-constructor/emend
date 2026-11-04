@@ -19,6 +19,18 @@ const lists = [
   { list: "done", title: "Done" },
 ] as const;
 
+type Kind = "" | "review" | "publish";
+// A per-browser convenience: the inbox unmounts whenever a review opens.
+const kindKey = "emend:inbox-kind";
+function readKind(): Kind {
+  try {
+    const stored = localStorage.getItem(kindKey);
+    return stored === "review" || stored === "publish" ? stored : "";
+  } catch {
+    return "";
+  }
+}
+
 export function Inbox({
   compact = false,
   hideHead = false,
@@ -33,6 +45,14 @@ export function Inbox({
   const query = useQuery(inboxQuery());
   const [filter, setFilter] = useState("");
   const [machine, setMachine] = useState("");
+  const [kind, setKindState] = useState<Kind>(readKind);
+  const setKind = (next: Kind) => {
+    setKindState(next);
+    try {
+      if (next) localStorage.setItem(kindKey, next);
+      else localStorage.removeItem(kindKey);
+    } catch {}
+  };
   const [now, setNow] = useState(Date.now);
   const [doneOpen, setDoneOpen] = useState(false);
   useEffect(() => {
@@ -58,10 +78,14 @@ export function Inbox({
   );
   const machineFilter =
     !compact && origins.length > 1 && origins.some((origin) => origin.id === machine) ? machine : "";
+  // The collapsed rail stays unfiltered by kind, like it does by machine.
+  const kindFilter = compact ? "" : kind;
   const needle = filter.toLocaleLowerCase();
   const filtered = items.filter(
     (review) =>
       (!machineFilter || review.origin.id === machineFilter) &&
+      // A review an agent waits on is never hidden by the Reviews filter.
+      (!kindFilter || review.kind === kindFilter || (kindFilter === "review" && review.agentWaiting)) &&
       [review.title, review.branch, review.origin.name].some((value) => value?.toLocaleLowerCase().includes(needle)),
   );
   const highlighted = useInboxArrivals(items);
@@ -96,6 +120,20 @@ export function Inbox({
           onChange={(event) => setFilter(event.target.value)}
           className="min-w-0 flex-1"
         />
+        {!compact && items.length > 0 && (
+          <Select
+            aria-label="Kind"
+            size="sm"
+            className="min-w-0 max-w-full"
+            value={kindFilter}
+            onChange={(event) => setKind(event.target.value as Kind)}
+            options={[
+              { value: "", label: "All" },
+              { value: "review", label: "Reviews" },
+              { value: "publish", label: "Published" },
+            ]}
+          />
+        )}
         {!compact && origins.length > 1 && (
           <Select
             aria-label="Machine"
@@ -131,6 +169,7 @@ export function Inbox({
               onClick={() => {
                 setFilter("");
                 setMachine("");
+                setKind("");
               }}
             >
               Clear filter

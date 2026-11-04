@@ -10,9 +10,21 @@ const blank: WriteupInput = { overview: "Synthetic", tldr: "", decisions: null, 
 /** Publish a real review (or a new revision of it) through the agent route. */
 export async function publishReview(
   f: Fixture,
-  options: { key?: string; title?: string; docs?: Record<string, string> } = {},
+  options: {
+    key?: string;
+    title?: string;
+    docs?: Record<string, string>;
+    writeup?: WriteupInput;
+    /** Add one changed source file with a synthetic base and head commit. */
+    diff?: boolean;
+  } = {},
 ) {
   const files = [];
+  if (options.diff) {
+    const oldBlob = await f.deps.blobs.put(f.ownerId, Buffer.from("const a = 1;\n"), "text/plain");
+    const newBlob = await f.deps.blobs.put(f.ownerId, Buffer.from("const a = 2;\n"), "text/plain");
+    files.push({ path: "src/a.ts", role: "diff", oldPath: null, oldBlob, newBlob, flag: null });
+  }
   for (const [path, text] of Object.entries(options.docs ?? {})) {
     const hash = await f.deps.blobs.put(f.ownerId, Buffer.from(text), "text/markdown");
     files.push({ path, role: "doc", oldPath: null, oldBlob: null, newBlob: hash, flag: null });
@@ -25,10 +37,10 @@ export async function publishReview(
       repo: null,
       branch: null,
       title: options.title ?? "Synthetic lifecycle review",
-      base: null,
-      head: null,
+      base: options.diff ? "a".repeat(40) : null,
+      head: options.diff ? "b".repeat(40) : null,
       topics: [],
-      writeup: blank,
+      writeup: options.writeup ?? blank,
       files,
     },
     "agent",
