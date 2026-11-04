@@ -70,6 +70,43 @@ test.each(corpus)("bridge text equals server docText for corpus $name", async (e
   }
 });
 
+test("bridge posts a touch selection from a debounced selectionchange and keeps the 2000 character limit", async () => {
+  vi.useFakeTimers();
+  const b = bridge(`<body><p>Alpha beta gamma</p><p>${"x".repeat(2001)}</p></body>`);
+  // The happy-dom window keeps its own timers; give the bridge the faked ones.
+  Object.assign(b.window, { setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout });
+  try {
+    const [first, second] = [...b.window.document.querySelectorAll("p")];
+    const text = first?.firstChild;
+    if (!text || !second) throw new Error("Missing text");
+    const range = b.window.document.createRange();
+    range.setStart(text, 6);
+    range.setEnd(text, 10);
+    const selection = b.window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    b.window.document.dispatchEvent(new b.window.Event("selectionchange"));
+    b.window.document.dispatchEvent(new b.window.Event("selectionchange"));
+    expect(b.post.mock.calls.some(([data]) => data.type === "emend:anchor")).toBe(false);
+    vi.advanceTimersByTime(199);
+    expect(b.post.mock.calls.some(([data]) => data.type === "emend:anchor")).toBe(false);
+    vi.advanceTimersByTime(1);
+    const anchors = b.post.mock.calls.filter(([data]) => data.type === "emend:anchor");
+    expect(anchors).toHaveLength(1);
+    expect(anchors[0]?.[0]).toMatchObject({ quote: "beta", prefix: "Alpha ", suffix: ` gamma${"x".repeat(26)}` });
+    const tooLong = b.window.document.createRange();
+    tooLong.selectNodeContents(second);
+    selection?.removeAllRanges();
+    selection?.addRange(tooLong);
+    b.window.document.dispatchEvent(new b.window.Event("selectionchange"));
+    vi.advanceTimersByTime(300);
+    expect(b.post.mock.calls.filter(([data]) => data.type === "emend:anchor")).toHaveLength(1);
+  } finally {
+    vi.useRealTimers();
+    await b.window.happyDOM.close();
+  }
+});
+
 test.each([
   ["other.html#heading", "docs/other.html", "heading"],
   ["a%20%23%C3%A9.html#part%20%C3%A9%25%23", "docs/a #é.html", "part é%#"],

@@ -70,6 +70,11 @@ export function BlockReader({
   const selectionPrompt = useRef<HTMLDivElement>(null);
   const highlights = useRef<ReturnType<typeof registerCommentRanges>>(undefined);
   const opener = useRef<HTMLElement | null>(null);
+  // A press on the prompt: the target latched at pointerdown, and until when selection changes are ignored
+  // (Infinity while the pointer is down, then 600 ms past its release).
+  const latched = useRef<Target | null>(null);
+  const guardUntil = useRef(0);
+  const mouseHeld = useRef(false);
   const [target, setTarget] = useState<Target | null>(null);
   const [composing, setComposing] = useState(false);
   const [error, setError] = useState("");
@@ -84,9 +89,13 @@ export function BlockReader({
     setError("");
   };
   const close = () => {
+    latched.current = null;
     setComposing(false);
     setTarget(null);
   };
+  useEffect(() => {
+    if (!target) latched.current = null;
+  }, [target]);
   const changes = new Map(changedBlocks.map((block) => [block.blockId, block.revision]));
   const targets = useMemo(
     () => new Map(groups.flatMap((group) => groupBlocks(group).map((block) => [block.id, group.path] as const))),
@@ -142,10 +151,24 @@ export function BlockReader({
   // Apply the current intent to new registrations too, without remapping text.
   useLayoutEffect(() => highlights.current?.setActiveThread(activeThreadId));
   useEffect(() => {
-    const capture = (event: Event) => {
+    const capture = (event?: Event) => {
       if (!root.current || composing) return;
-      if (event.target instanceof Node && selectionPrompt.current?.contains(event.target)) return;
+      if (event?.target instanceof Node && selectionPrompt.current?.contains(event.target)) return;
       const selection = window.getSelection();
+      if (!event) {
+        // A settled selectionchange (touch selection, handle drag, shift-arrows). A press on the prompt may
+        // collapse the selection first; the guard ignores that. A selection outside the reader retires the prompt.
+        if (mouseHeld.current || Date.now() < guardUntil.current) return;
+        if (
+          selection &&
+          !selection.isCollapsed &&
+          !(root.current.contains(selection.anchorNode) && root.current.contains(selection.focusNode))
+        ) {
+          setTarget(null);
+          setError("");
+          return;
+        }
+      }
       if (!selection || selection.isCollapsed) {
         setTarget(null);
         setError("");
@@ -170,7 +193,30 @@ export function BlockReader({
     const element = root.current;
     element?.addEventListener("mouseup", capture);
     element?.addEventListener("keyup", capture);
+    let timer = 0;
+    const onSelectionChange = () => {
+      // The mouseup path handles mouse selections once the button is released.
+      if (mouseHeld.current || Date.now() < guardUntil.current) return;
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => capture(), 200);
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.pointerType === "mouse") mouseHeld.current = true;
+    };
+    const onPointerEnd = () => {
+      mouseHeld.current = false;
+      if (guardUntil.current === Number.POSITIVE_INFINITY) guardUntil.current = Date.now() + 600;
+    };
+    document.addEventListener("selectionchange", onSelectionChange);
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("pointerup", onPointerEnd, true);
+    document.addEventListener("pointercancel", onPointerEnd, true);
     return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener("selectionchange", onSelectionChange);
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("pointerup", onPointerEnd, true);
+      document.removeEventListener("pointercancel", onPointerEnd, true);
       element?.removeEventListener("mouseup", capture);
       element?.removeEventListener("keyup", capture);
     };
@@ -267,10 +313,32 @@ export function BlockReader({
         <div
           ref={selectionPrompt}
           className="sticky bottom-0 space-y-3 rounded-lg border border-line-2 bg-raised p-3 shadow-2"
+          // A non-selectable bar keeps a tap here from collapsing the text selection on iOS.
+          style={{
+            userSelect: "none",
+            WebkitUserSelect: "none",
+            WebkitTouchCallout: "none",
+            touchAction: "manipulation",
+          }}
         >
           {error && <p role="status">{error}</p>}
           {target && (
-            <Button variant="primary" size="sm" icon={TextSelect} onClick={() => openComposer(target)}>
+            <Button
+              variant="primary"
+              size="sm"
+              icon={TextSelect}
+              // Keep the selection and its native handles: a press here must not move focus or collapse it.
+              onPointerDown={(event) => {
+                event.preventDefault();
+                latched.current = target;
+                guardUntil.current = Number.POSITIVE_INFINITY;
+              }}
+              onClick={() => {
+                const latch = Date.now() < guardUntil.current ? latched.current : null;
+                latched.current = null;
+                openComposer(latch ?? target);
+              }}
+            >
               Comment on selection
             </Button>
           )}

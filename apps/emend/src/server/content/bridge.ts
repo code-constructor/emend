@@ -150,6 +150,12 @@ export const BRIDGE_SOURCE = String.raw`(() => {
   });
   document.addEventListener("mouseup", capture);
   document.addEventListener("keyup", capture);
+  // Touch selections fire no mouseup or keyup; selectionchange covers them and handle drags.
+  let settle = 0;
+  document.addEventListener("selectionchange", () => {
+    window.clearTimeout(settle);
+    settle = window.setTimeout(capture, 200);
+  });
   document.addEventListener("click", event => {
     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     const element = event.target && (event.target.nodeType === 1 ? event.target : event.target.parentElement);

@@ -195,6 +195,16 @@ export function HtmlDocFrame({
           className={
             composing ? "pt-3" : "sticky bottom-0 space-y-3 rounded-lg border border-line-2 bg-raised p-3 shadow-2"
           }
+          style={
+            composing
+              ? undefined
+              : {
+                  userSelect: "none",
+                  WebkitUserSelect: "none",
+                  WebkitTouchCallout: "none",
+                  touchAction: "manipulation",
+                }
+          }
         >
           {composing ? (
             <Composer
