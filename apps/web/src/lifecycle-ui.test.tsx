@@ -149,6 +149,23 @@ test("the inbox shows Active, Snoozed and Done in order with counts, wake times 
   expect(screen.queryByRole("link", { name: /Done approved/ })).toBeNull();
 });
 
+test("done rows are dimmed until hover or focus; active and snoozed rows keep full opacity", async () => {
+  inbox = inboxItems();
+  mount();
+  await screen.findByRole("link", { name: /Active one/ });
+  fireEvent.click(screen.getByRole("button", { name: /Done/ }));
+  for (const title of ["Done approved", "Done retired"]) {
+    const classes = row(title).classList;
+    expect(classes.contains("opacity-60")).toBe(true);
+    expect(classes.contains("hover:opacity-100")).toBe(true);
+    expect(classes.contains("focus-within:opacity-100")).toBe(true);
+    // The open review (aria-current="page") is not dimmed.
+    expect(classes.contains("aria-[current=page]:opacity-100")).toBe(true);
+  }
+  for (const title of ["Active one", "Snoozed timed", "Snoozed revision"])
+    expect(row(title).className).not.toContain("opacity-");
+});
+
 test("a non-empty filter shows Done expanded under a plain heading; clearing it restores the reader's choice", async () => {
   inbox = inboxItems();
   mount();

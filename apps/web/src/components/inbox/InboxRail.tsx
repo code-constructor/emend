@@ -5,7 +5,8 @@ import { inboxQuery } from "../../api/queries.ts";
 import { OriginBadge } from "../status/OriginBadge.tsx";
 import { IconButton } from "../ui/IconButton.tsx";
 import { Tooltip } from "../ui/Tooltip.tsx";
-import { needsAttention } from "./ReviewRow.tsx";
+import { cn } from "../ui/utils.ts";
+import { doneDimmed, needsAttention } from "./ReviewRow.tsx";
 
 export function InboxRail({ onShow }: { onShow: () => void }) {
   const query = useQuery(inboxQuery());
@@ -29,7 +30,10 @@ export function InboxRail({ onShow }: { onShow: () => void }) {
                     aria-label={`${needsAttention(review) ? "Needs you: " : ""}${review.title}`}
                     activeOptions={{ includeSearch: false }}
                     activeProps={{ "aria-current": "page" }}
-                    className="relative grid h-8 w-9 place-items-center rounded-[6px] no-underline hover:bg-hover aria-[current=page]:bg-selected [&>span[role=img]]:size-2.5"
+                    className={cn(
+                      "relative grid h-8 w-9 place-items-center rounded-[6px] no-underline hover:bg-hover aria-[current=page]:bg-selected [&>span[role=img]]:size-2.5",
+                      review.list === "done" && doneDimmed,
+                    )}
                   >
                     <OriginBadge origin={review.origin} dot />
                     {needsAttention(review) && (
