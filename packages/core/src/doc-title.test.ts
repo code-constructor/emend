@@ -65,6 +65,26 @@ test("clipping a title does not leave trailing whitespace or invisible character
   expect(cleanDocTitle(`Foo${invisible}Bar`)).toBe("FooBar");
 });
 
+const chars = (...codes: number[]) => codes.map((code) => String.fromCodePoint(code)).join("");
+
+test("titles lose variation selectors but keep the emoji", () => {
+  // U+2764 U+FE0F is the emoji presentation of the heart; only the selector goes.
+  expect(cleanDocTitle(`${chars(0x2764, 0xfe0f)} Plan`)).toBe(`${chars(0x2764)} Plan`);
+  expect(cleanDocTitle(`A${chars(0xe0100, 0xe01ef)}B`)).toBe("AB");
+});
+
+test("titles lose tag characters, the grapheme joiner and Hangul fillers", () => {
+  expect(cleanDocTitle(`A${chars(0xe0041, 0xe0042, 0xe007f)}B`)).toBe("AB");
+  expect(cleanDocTitle(`A${chars(0x34f)}B${chars(0x3164, 0x115f, 0x1160, 0xffa0)}C`)).toBe("ABC");
+  expect(cleanDocTitle(`A${chars(0xfff9, 0xfffa, 0xfffb)}B`)).toBe("AB");
+});
+
+test("a title made only of removed characters is empty and falls back", () => {
+  const removed = chars(0x34f, 0x3164, 0xfe0f, 0xe0041);
+  expect(cleanDocTitle(removed)).toBe("");
+  expect(inferDocTitle("html", encode(`<title>${removed}</title>`))).toBeUndefined();
+});
+
 test("all titles lose controls and bidi formatting and remain well-formed when clipped", () => {
   const controls = "\u0000\u001f\u007f\u0080\u009f\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069";
   expect(cleanDocTitle(`${controls} A   B ${controls}`)).toBe("A B");

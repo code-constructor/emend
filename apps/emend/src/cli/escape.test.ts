@@ -148,3 +148,18 @@ test("terminal JSON leaves literal escape spellings, quotes and ordinary Unicode
     path: "\\\n\\\t\\\b\\\r\\\f",
   });
 });
+
+test.each([
+  0x34f, 0x115f, 0x1160, 0x2061, 0x2065, 0x3164, 0xfe00, 0xfe0f, 0xffa0, 0xfff9, 0xfffb, 0xe0000, 0xe0041, 0xe007f,
+  0xe0100, 0xe01ef,
+])("stderr escapes the invisible character U+%s", (code) => {
+  expect(escapeReference(`a${String.fromCodePoint(code)}b`)).toBe(`a\\u{${code.toString(16)}}b`);
+});
+
+test("terminal JSON escapes astral invisible characters as surrogate pairs that parse back", () => {
+  const value = { title: "a\u{e0041}b\u{e0100}c͏d" };
+  const rendered = escapeJson(JSON.stringify(value));
+  expect(rendered).toContain("\\udb40\\udc41");
+  expect(rendered).not.toMatch(/\u{e0041}|\u{e0100}|͏/u);
+  expect(JSON.parse(rendered)).toEqual(value);
+});

@@ -5,14 +5,34 @@ import { toString as hastText } from "hast-util-to-string";
 export const TITLE_PREFIX_BYTES = 64 * 1024;
 const TITLE_CANDIDATE_CHARS = LIMITS.titleChars * 4;
 
+// Terminal and bidi controls, and characters that render as nothing or reorder text.
+// It matches the CLI's terminal escape set (apps/emend/src/cli/escape.ts), except U+2028 and U+2029,
+// which the whitespace step turns into spaces first.
+const discardedRanges: readonly (readonly [number, number])[] = [
+  [0, 0x1f],
+  [0x7f, 0x9f],
+  [0x34f, 0x34f],
+  [0x61c, 0x61c],
+  [0x115f, 0x1160],
+  [0x200b, 0x200f],
+  [0x202a, 0x202e],
+  [0x2060, 0x206f],
+  [0x3164, 0x3164],
+  [0xfe00, 0xfe0f],
+  [0xfeff, 0xfeff],
+  [0xffa0, 0xffa0],
+  [0xfff9, 0xfffb],
+  [0xe0000, 0xe007f],
+  [0xe0100, 0xe01ef],
+];
+
 export function cleanDocTitle(value: string): string {
-  return value
-    .replace(/[\s\u0085]/gu, " ")
-    .replace(
-      // biome-ignore lint/suspicious/noControlCharactersInRegex: Titles intentionally discard terminal and bidi controls.
-      /[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff\u{e0000}-\u{e007f}]/gu,
-      "",
-    )
+  return Array.from(value.replace(/[\s\x85]/gu, " "))
+    .filter((char) => {
+      const code = char.codePointAt(0) ?? 0;
+      return !discardedRanges.some(([from, to]) => code >= from && code <= to);
+    })
+    .join("")
     .replace(/ +/g, " ")
     .trim()
     .toWellFormed()
