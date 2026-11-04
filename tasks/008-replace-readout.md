@@ -18,7 +18,7 @@ task 007.
 ## Steps
 
 - [x] 4.1: `emend publish <path>`, a shortcut for docs.
-- [ ] 4.2: the `emend-publish` skill, readout's skill on emend.
+- [x] 4.2: the `emend-publish` skill, readout's skill on emend.
 - [ ] 4.3: snooze, retire and delete, next to Approve. You confirmed the snooze proposal.
 - [ ] 4.4: the Send bar says whether an agent waits; one resume command for any agent.
 - [ ] 4.5: agent commands `emend ls` and `emend status`.
@@ -36,3 +36,5 @@ You have switched from readout (plan task 4.11), or dropped the switch.
 ## Notes
 
 - 2026-11-03: Slice started. 4.1 landed as e246d9e and 4409261.
+- 2026-11-04: 4.2 landed as fd892f5. 4.3's first commit (contract, database, API and agent side)
+  landed as 6f657cf; the web UI follows.

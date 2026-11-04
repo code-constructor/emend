@@ -40,3 +40,4 @@ When the owner asks what to do next:
 | 006 | [Brainstorm the layout and the phone menu](006-layout-brainstorm.md) | you, with the agent | — | done |
 | 007 | [Run the success test](007-success-test.md) | you | 005 | open |
 | 008 | [Replace readout](008-replace-readout.md) | agent + your approval | 005 | open |
+| 009 | [Phone fixes after the hub setup](009-phone-fixes.md) | agent + your approval | 005 | open |
