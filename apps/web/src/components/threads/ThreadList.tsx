@@ -28,7 +28,7 @@ export function ThreadList({
   const hasDrafts = useSyncExternalStore(subscribeDrafts, () => listDrafts(reviewId).length > 0);
   const props = { reviewId, revision, changedBlocks, topics, surface: "comments" as const };
   return (
-    <div className="space-y-6 px-4 pt-4 pb-8 md:pt-7 md:pr-8 md:pb-[72px] md:pl-14">
+    <div className="space-y-6 px-4 pt-4 pb-8 md:mx-auto md:max-w-[calc(1000px+88px)] md:pt-7 md:pr-8 md:pb-[72px] md:pl-14">
       <DraftList reviewId={reviewId} topics={topics} onResume={onResume} />
       {!hasDrafts && threads.length === 0 && (
         <div className="space-y-1">

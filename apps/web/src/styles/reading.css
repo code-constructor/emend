@@ -2,10 +2,11 @@
   .em-reading-column {
     --reading-inset: 0px;
     --reading-comment-offset: 40px;
+    --reading-max: 68ch;
     --topic: var(--topic-line);
     font: var(--type-prose);
     width: 100%;
-    max-width: calc(68ch + 2 * var(--space-4));
+    max-width: calc(var(--reading-max) + 2 * var(--space-4));
     margin-inline: auto;
     padding-inline: var(--space-4);
   }
@@ -30,10 +31,14 @@
   }
   @media (min-width: 768px) {
     .em-reading-column {
-      max-width: calc(68ch + 112px);
+      max-width: calc(var(--reading-max) + 112px);
       padding-left: 56px;
       /* Preserve the narrow pane's padding; match the gutter when the measure fits. */
-      padding-right: clamp(var(--space-8), calc(100% - 68ch - 56px), 56px);
+      padding-right: clamp(var(--space-8), calc(100% - var(--reading-max) - 56px), 56px);
+    }
+    /* The measure grows with the pane and stops at 1000px; focus mode keeps its own. */
+    .em-reading-column:not(.em-focus-prose) {
+      --reading-max: 1000px;
     }
     /* Reading tabs: 40px controls and their bottom border. */
     .em-doc-bar {
