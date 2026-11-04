@@ -4,7 +4,17 @@ import { join } from "node:path";
 import * as contract from "@emend/contract";
 import { and, eq } from "drizzle-orm";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { changedBlocks, files, placements, repos, reviews, revisions, sends, writeups } from "../../db/schema.ts";
+import {
+  changedBlocks,
+  deliveries,
+  files,
+  placements,
+  repos,
+  reviews,
+  revisions,
+  sends,
+  writeups,
+} from "../../db/schema.ts";
 import { APP_CSP } from "../http/headers.ts";
 import { error, mailboxFixture } from "../mailbox/test-support.ts";
 
@@ -429,4 +439,163 @@ test("revision reads preserve renamed sides and the placement stored for each re
     { status: "placed", location: { kind: "file", path: "b.ts" } },
     { status: "unplaced", reason: "file-gone" },
   ]);
+});
+
+const pickedUp = async () => {
+  const view = (await (await get(`/${f.reviewId}`)).json()) as { pickedUpAt: string | null };
+  const listed = (await (await get("")).json()) as { items: { pickedUpAt: string | null }[] };
+  expect(listed.items[0]?.pickedUpAt).toBe(view.pickedUpAt);
+  return view.pickedUpAt;
+};
+const confirmDelivery = async (deliveryId: string) =>
+  expect((await f.request(`/deliveries/${deliveryId}/confirm`, "POST", undefined, "agent")).status).toBe(204);
+const iso = (ms: number) => new Date(ms).toISOString();
+
+test("pickedUpAt is null without a confirmed delivery and ignores a claimed but unconfirmed one", async () => {
+  await f.thread();
+  await f.send();
+  const view = (await (await get(`/${f.reviewId}`)).json()) as { pickedUpAt: string | null };
+  expect(view.pickedUpAt).toBeNull();
+  expect((await f.take()).kind).toBe("go");
+  expect(await pickedUp()).toBeNull();
+});
+
+test("pickedUpAt is the latest confirmation of a delivery with Sends, and a later revision clears it", async () => {
+  const thread = await f.thread();
+  await f.send();
+  const first = await f.take();
+  if (first.kind !== "go") throw new Error("Expected a Go delivery");
+  f.advance(1000);
+  await confirmDelivery(first.deliveryId);
+  expect(await pickedUp()).toBe(iso(f.deps.now()));
+  f.advance(5000);
+  await f.comment(thread.threadId, "A second draft");
+  await f.send();
+  const second = await f.take();
+  if (second.kind !== "go") throw new Error("Expected a Go delivery");
+  f.advance(1000);
+  await confirmDelivery(second.deliveryId);
+  expect(await pickedUp()).toBe(iso(f.deps.now()));
+  f.advance(1000);
+  await f.revision(2);
+  expect(await pickedUp()).toBeNull();
+});
+
+test("an approval-only delivery counts", async () => {
+  await f.send({ revision: 1, kind: "approve" });
+  const delivery = await f.take();
+  expect(delivery.kind).toBe("approve");
+  if (delivery.kind !== "approve") throw new Error("Expected an approval delivery");
+  f.advance(1000);
+  await confirmDelivery(delivery.deliveryId);
+  expect(await pickedUp()).toBe(iso(f.deps.now()));
+});
+
+test("a delivery leased, then outdated by a newer revision, then confirmed gives null", async () => {
+  await f.thread();
+  await f.send();
+  const delivery = await f.take();
+  if (delivery.kind !== "go") throw new Error("Expected a Go delivery");
+  f.advance(1000);
+  await f.revision(2);
+  f.advance(1000);
+  await confirmDelivery(delivery.deliveryId);
+  expect(await pickedUp()).toBeNull();
+});
+
+test("a newer confirmed delivery whose only Send is set aside leaves the earlier delivery's time", async () => {
+  const thread = await f.thread();
+  await f.send();
+  const first = await f.take();
+  if (first.kind !== "go") throw new Error("Expected a Go delivery");
+  f.advance(1000);
+  await confirmDelivery(first.deliveryId);
+  const firstAt = f.deps.now();
+  f.advance(5000);
+  await f.comment(thread.threadId, "A second draft");
+  const second = await f.send();
+  const next = await f.take();
+  if (next.kind !== "go") throw new Error("Expected a Go delivery");
+  f.advance(1000);
+  await confirmDelivery(next.deliveryId);
+  expect(await pickedUp()).toBe(iso(f.deps.now()));
+  // No real flow sets aside the only Send of a confirmed delivery, so this uses a direct update.
+  await f.db.query((q) => q.update(sends).set({ setAsideAt: f.deps.now() }).where(eq(sends.id, second.sendId)));
+  expect(await pickedUp()).toBe(iso(firstAt));
+});
+
+test("another owner's confirmed delivery never counts for this owner", async () => {
+  const foreignReview = randomUUID();
+  const foreignRevision = randomUUID();
+  const foreignDelivery = randomUUID();
+  const at = f.deps.now() + 1000;
+  await f.db.query(async (q) => {
+    await q.insert(reviews).values({
+      id: foreignReview,
+      ownerId: f.otherOwnerId,
+      originInstanceId: f.instanceId,
+      reviewKey: "b".repeat(64),
+      title: "Synthetic foreign review",
+      createdAt: at,
+    });
+    await q.insert(revisions).values({
+      id: foreignRevision,
+      ownerId: f.otherOwnerId,
+      reviewId: foreignReview,
+      seq: 1,
+      contentKey: randomUUID(),
+      createdAt: at,
+    });
+    await q.insert(deliveries).values({
+      id: foreignDelivery,
+      ownerId: f.otherOwnerId,
+      reviewId: foreignReview,
+      leaseUntil: at,
+      confirmedAt: at,
+    });
+    await q.insert(sends).values({
+      ownerId: f.otherOwnerId,
+      reviewId: foreignReview,
+      revisionId: foreignRevision,
+      kind: "go",
+      mode: "fix-clear",
+      deliveryId: foreignDelivery,
+      createdAt: at,
+    });
+  });
+  // The foreign owner sees its own pick-up; this owner sees none, and never the foreign review.
+  const theirs = (await (await get("", "foreign")).json()) as { items: { id: string; pickedUpAt: string | null }[] };
+  expect(theirs.items).toMatchObject([{ id: foreignReview, pickedUpAt: iso(at) }]);
+  expect(await pickedUp()).toBeNull();
+  const ours = (await (await get("")).json()) as { items: { id: string }[] };
+  expect(ours.items.map((item) => item.id)).toEqual([f.reviewId]);
+  await error(await get(`/${f.reviewId}`, "foreign"), 404, "unknown_review");
+  await error(await get(`/${foreignReview}`), 404, "unknown_review");
+});
+
+test("a send-less closed delivery never counts", async () => {
+  expect((await f.request(`/reviews/${f.reviewId}/retire`, "POST", {})).status).toBe(204);
+  const response = await f.request(
+    `/reviews/${f.reviewId}/take`,
+    "POST",
+    { waitSeconds: 0, accepts: ["closed"] },
+    "agent",
+  );
+  const closed = contract.WaitResult.parse(await response.json());
+  expect(closed.kind).toBe("closed");
+  f.advance(1000);
+  await confirmDelivery((closed as { deliveryId: string }).deliveryId);
+  expect(await pickedUp()).toBeNull();
+});
+
+test("a set-aside Send does not count even on a confirmed delivery", async () => {
+  await f.thread();
+  const sent = await f.send();
+  const delivery = await f.take();
+  if (delivery.kind !== "go") throw new Error("Expected a Go delivery");
+  f.advance(1000);
+  await confirmDelivery(delivery.deliveryId);
+  expect(await pickedUp()).toBe(iso(f.deps.now()));
+  await f.db.query((q) => q.update(sends).set({ setAsideAt: f.deps.now() }).where(eq(sends.id, sent.sendId)));
+  expect(await pickedUp()).toBeNull();
 });

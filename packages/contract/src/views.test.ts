@@ -23,7 +23,12 @@ test("review views validate their states, limits, rendered blocks and doc varian
     snoozed: false,
     snoozedUntil: null,
     releasedAt: null,
+    pickedUpAt: null,
   };
+  expect(contract.InboxItem.safeParse({ ...item, pickedUpAt: "2026-01-01T00:00:00.000Z" }).success).toBe(true);
+  expect(contract.InboxItem.safeParse({ ...item, pickedUpAt: "yesterday" }).success).toBe(false);
+  const { pickedUpAt: _omitted, ...withoutPickedUp } = item;
+  expect(contract.InboxItem.safeParse(withoutPickedUp).success).toBe(false);
   // The cap of 200 applies to each of the three lists.
   expect(contract.InboxList.safeParse({ items: Array.from({ length: 600 }, () => item) }).success).toBe(true);
   expect(contract.InboxList.safeParse({ items: Array.from({ length: 601 }, () => item) }).success).toBe(false);

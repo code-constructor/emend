@@ -177,7 +177,7 @@ retired review; clients label it "Retired".
 `InboxItem = { id, title, origin: { id, name }, repo: string | null, branch: string | null,
 state: ReviewState, newestRevision, unsentCount, openThreads, agentWaiting, pendingSend,
 updatedAt, movedTo: string | null, list: "active" | "snoozed" | "done", snoozed: boolean,
-snoozedUntil: string | null, releasedAt: string | null }`. `repo` is the repository key, and
+snoozedUntil: string | null, releasedAt: string | null, pickedUpAt: string | null }`. `repo` is the repository key, and
 `movedTo` is the review's destination URL. `list` places the review: `done` for `approved` and
 `settled`, `snoozed` for an open review whose snooze is in effect, `active` otherwise.
 `snoozed` is true while a snooze is in effect; `snoozedUntil` is its wake time, null for a snooze
@@ -185,7 +185,18 @@ that lasts until the next revision (and null when not snoozed). `releasedAt` is 
 agent confirmed a `closed` answer, so emend ended a wait; it is null when that never happened. Timestamps are ISO 8601 UTC strings; sequences are positive integers.
 `unsentCount` counts user comments without a Send; `openThreads` counts all unresolved threads.
 `pendingSend` means a Send is neither confirmed delivered nor set aside (an unconfirmed lease
-is still pending). `agentWaiting` is true for a server-held wait (including its 35-second grace
+is still pending). `pickedUpAt` is the time an agent's CLI last confirmed a delivery that carried a
+live Send (a `go` or an approval) made on the review's newest revision, so emend saw the feedback
+reach the agent's stdout; it never says the agent works on it. A Send is live while it is not set
+aside. Only a delivery with `confirmed_at` set counts, so a claimed but unconfirmed lease does not,
+and a delivery without a Send (the `closed` answer) never counts. A Send names the revision on
+screen and a stale revision is refused, so a Send belongs to one revision: among the deliveries that
+carry a live Send of the newest revision, the latest `confirmed_at` wins. It is null when there is
+none. Publishing a newer revision therefore clears it, even when the confirmation arrives after the
+publish; no clock comparison between a revision and a confirmation is involved. `ReviewView` carries
+the same field, since it extends `InboxItem`. Clients show one state, by priority: approved;
+Agent waiting (`agentWaiting`); Not picked up yet (`pendingSend`); Picked up (`pickedUpAt`); none.
+`agentWaiting` is true for a server-held wait (including its 35-second grace
 period) or an unexpired direct-wait row for the same owner and review. Direct waits renew a
 30-second expiry every 10 seconds and delete their row when they end. They emit no live event;
 views reflect direct writes on their next load.

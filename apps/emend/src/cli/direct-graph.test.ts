@@ -122,6 +122,7 @@ const multilineTemplates = new Map([
   ["cli/publish/collect.ts", "Nested-repository diagnostics end with a newline."],
   ["cli/publish/sides.ts", "Synthetic submodule content ends with a newline."],
   ["cli/commands/publish.ts", "Publish diagnostics end with a newline."],
+  ["cli/commands/feedback.ts", "The reply hint on stderr ends with a newline."],
   ["cli/commands/mcp.ts", "MCP JSON output ends with a newline."],
 ]);
 const workerSpawners = new Set(["db/client.ts", "server/publish/executor.ts"]);

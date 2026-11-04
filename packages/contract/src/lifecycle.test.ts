@@ -33,6 +33,7 @@ const item = {
   snoozed: false,
   snoozedUntil: null,
   releasedAt: null,
+  pickedUpAt: null,
 };
 
 test("snooze takes exactly one strict end condition", () => {

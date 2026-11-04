@@ -34,6 +34,7 @@ const item: InboxItem = {
   snoozed: false,
   snoozedUntil: null,
   releasedAt: null,
+  pickedUpAt: null,
 };
 const diffFile: FileView = {
   id: "33333333-3333-4333-8333-333333333333",

@@ -76,12 +76,20 @@ export async function takeFeedback(
   }
 }
 
-export async function confirmFeedback(stateDir: string, target: Target, deliveryId: string, stderr: Io["stderr"]) {
+/** Resolves true only when the server recorded the confirmation. */
+export async function confirmFeedback(
+  stateDir: string,
+  target: Target,
+  deliveryId: string,
+  stderr: Io["stderr"],
+): Promise<boolean> {
   try {
-    if (target.via === "direct") return await confirmDirect(stateDir, deliveryId);
-    await apiRequest(stateDir, target, `/deliveries/${deliveryId}/confirm`, { method: "POST" });
+    if (target.via === "direct") await confirmDirect(stateDir, deliveryId);
+    else await apiRequest(stateDir, target, `/deliveries/${deliveryId}/confirm`, { method: "POST" });
+    return true;
   } catch {
     stderr(confirmWarning);
+    return false;
   }
 }
 
@@ -119,7 +127,7 @@ export async function deliverFeedback(
   io: Io,
   signal?: AbortSignal,
   saveFolder?: CheckedFolder,
-) {
+): Promise<boolean> {
   signal?.throwIfAborted();
   const canConfirm = await withSignals(async (saveSignal) => {
     const saved = saveFolder ? await saveFeedback(saveFolder, jsonLine(result), saveSignal) : undefined;
@@ -147,7 +155,8 @@ export async function deliverFeedback(
     return true;
   });
   signal?.throwIfAborted();
-  if (canConfirm && result.kind !== "pending") await confirmFeedback(stateDir, target, result.deliveryId, io.stderr);
+  if (canConfirm && result.kind !== "pending") return confirmFeedback(stateDir, target, result.deliveryId, io.stderr);
+  return false;
 }
 
 export function parseFeedbackArgs(command: "wait" | "feedback", args: string[]) {

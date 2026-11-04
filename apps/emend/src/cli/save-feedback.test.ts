@@ -78,7 +78,8 @@ test.each(["wait", "feedback"])("%s saves go, approve and pending before stdout,
     };
     const options = command === "wait" ? ["--timeout", "1"] : [];
     expect(await run([command, reviewId, ...options, "--save", f.folder], f.io)).toBe(0);
-    expect(f.stderr).toEqual([]);
+    const hint = `emend: answer each comment with emend reply <comment> --status <outcome> --body <text>, then publish changes with emend publish <path>... --review ${reviewId}\n`;
+    expect(f.stderr).toEqual(command === "feedback" && result.kind === "go" ? [hint] : []);
     expect(f.stdout).toHaveLength(1);
     expect(JSON.parse(f.stdout[0] ?? "").kind).toBe(result.kind);
     expect(confirmed).toBe(result.kind !== "pending");

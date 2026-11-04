@@ -131,6 +131,32 @@ async function inbox(ownerId: string, q: Queries, deps: AppDeps, reviewId?: stri
     )
     .groupBy(sends.reviewId)
     .all();
+  // Latest confirmed delivery that carried a live Send made on the review's newest revision.
+  const confirmed = await q
+    .select({ id: sends.reviewId, seq: revisions.seq, at: max(deliveries.confirmedAt) })
+    .from(sends)
+    .innerJoin(
+      deliveries,
+      and(
+        eq(deliveries.ownerId, ownerId),
+        eq(deliveries.reviewId, sends.reviewId),
+        eq(deliveries.id, sends.deliveryId),
+      ),
+    )
+    .innerJoin(revisions, and(eq(revisions.ownerId, ownerId), eq(revisions.id, sends.revisionId)))
+    .where(
+      and(
+        eq(sends.ownerId, ownerId),
+        inArray(sends.reviewId, ids),
+        isNull(sends.setAsideAt),
+        isNotNull(deliveries.confirmedAt),
+      ),
+    )
+    .groupBy(sends.reviewId, revisions.seq)
+    .all();
+  const newestSeq = new Map(rows.map(({ review, newestRevision }) => [review.id, newestRevision]));
+  const pickedUp = new Map<string, number>();
+  for (const row of confirmed) if (row.at !== null && row.seq === newestSeq.get(row.id)) pickedUp.set(row.id, row.at);
   const draftCounts = new Map(drafts.map((row) => [row.id, row.count]));
   const openCounts = new Map(open.map((row) => [row.id, row.count]));
   const pendingIds = new Set(pending.map((row) => row.id));
@@ -167,6 +193,7 @@ async function inbox(ownerId: string, q: Queries, deps: AppDeps, reviewId?: stri
       snoozed,
       snoozedUntil: snoozed && review.snoozedUntil !== null ? new Date(review.snoozedUntil).toISOString() : null,
       releasedAt: review.releasedAt === null ? null : new Date(review.releasedAt).toISOString(),
+      pickedUpAt: pickedUp.has(review.id) ? new Date(pickedUp.get(review.id) as number).toISOString() : null,
     };
   });
   // Inside Active, a review with a waiting agent comes first; the rows already run newest first.
