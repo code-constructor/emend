@@ -74,6 +74,13 @@ describe("comment Markdown", () => {
     expect(blocks.length).toBeGreaterThan(0);
   });
 
+  test("an image in a comment keeps no src, even for a path the writeup declares", async () => {
+    const html = await renderCommentHtml("![x](shot.png)", repo);
+    expect(html).toContain("<img");
+    expect(html).not.toContain("src=");
+    expect(html).not.toContain("/api/v1/media/");
+  });
+
   test("docs fold a single newline as before", async () => {
     const blocks = await renderMarkdown("line one\nline two", "overview");
     expect(blocks.map((block) => block.html).join("")).not.toContain("<br");

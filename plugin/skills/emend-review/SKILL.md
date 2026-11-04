@@ -164,6 +164,19 @@ and short sentences of 20 words or fewer.
   concrete before/after case; `body` gives the decisions, trade-offs and checks. Keep examples
   grounded in the actual change. A request to explain something in the writeup belongs here.
 
+## Show screenshots in the writeup
+
+A writeup can show images, such as before and after screenshots of a UI change.
+
+- Save each screenshot in the worktree, in a folder git ignores, or in a `docRoots` folder.
+- List it under `media` in the manifest with a `path` and a `source`.
+- Reference it from any writeup section with `![Alt](path)`. The alt text becomes the caption.
+- Put a before and an after image in one paragraph, with alt text "Before" and "After", to show them side by side.
+- Use PNG, JPEG, GIF, WebP or AVIF only. Each file is at most 8 MiB. A review holds at most 50.
+- Only listed paths render. Any other image reference in the writeup is dropped.
+- Remote image URLs do not show. List the file under `media` instead.
+- Images do not render in Markdown docs.
+
 ## Pin a few agent notes
 
 Write a note only on a hunk carrying a decision, trade-off, risk, or something easy to get wrong.

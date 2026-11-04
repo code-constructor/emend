@@ -16,12 +16,16 @@ export async function renderRevision(
 ) {
   let rendered: RenderedBytes;
   try {
+    const media: [string, string][] = [];
+    for (const file of input.files)
+      if (file.role === "asset" && file.parent === undefined && file.newBlob) media.push([file.path, file.newBlob]);
     const result = await execute({
       kind: "writeup",
       source: input.writeup,
       topics: input.topics,
       links: input.links,
       repoUrl: input.repoUrl,
+      media,
     });
     if (result.kind !== "writeup") throw new Error("wrong result");
     rendered = result;

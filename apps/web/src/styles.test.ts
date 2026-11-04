@@ -127,6 +127,20 @@ test("the five variable fonts and their OFL licences ship with matching font-fac
   expect(sources.sort()).toEqual(fontFiles.map((file) => join(webFonts, file)).sort());
 });
 
+test("writeup images sit in a wrapping row that stacks on narrow screens, using theme tokens only", () => {
+  const css = readFileSync(join(webSource, "styles/prose.css"), "utf8");
+  const rule = (selector: string) =>
+    new RegExp(`${selector.replace(/[.>]/g, "\\$&")}\\s*\\{([^}]+)\\}`).exec(css)?.[1] ?? "";
+  expect(rule(".em-prose .emend-media")).toMatch(/display:\s*inline-flex/);
+  expect(rule(".em-prose .emend-media")).toMatch(/max-width:\s*100%/);
+  expect(rule(".em-prose .emend-media img")).toMatch(/border:\s*1px solid var\(--border-1\)/);
+  expect(rule(".em-prose .emend-media img")).toMatch(/border-radius:\s*var\(--radius-md\)/);
+  expect(rule(".em-prose p.emend-media-row")).toMatch(/flex-wrap:\s*wrap/);
+  expect(rule(".em-prose p.emend-media-row > .emend-media")).toMatch(/flex:\s*1 1 18rem/);
+  const media = css.slice(css.indexOf(".em-prose .emend-media {"), css.indexOf(".em-prose > :first-child"));
+  expect(media).not.toMatch(/#[0-9a-f]{3,8}\b|rgb\(|oklch\(/i);
+});
+
 test("reading components use semantic colours, with white reserved for the isolated HTML document page", () => {
   const reading = join(webSource, "components/reading");
   for (const file of readdirSync(reading).filter((file) => file.endsWith(".tsx") && !file.endsWith(".test.tsx"))) {

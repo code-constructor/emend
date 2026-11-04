@@ -150,14 +150,13 @@ describe("hostile author content", () => {
     );
   });
 
-  test("hardens external links and accepts only HTTP(S) image sources", async () => {
+  test("hardens external links and drops every image source without declared media", async () => {
     const blocks = await render(
       "[ext](https://example.com) [http](http://example.com) [mail](mailto:reader@example.com) ![safe](https://example.com/x.png) ![bad](mailto:reader@example.com) ![relative](./image.png) ![data](data:image/png;base64,AAAA)",
     );
     const html = blocks.map((block) => block.html).join("");
     expect(html.match(/rel="noopener noreferrer nofollow"/g)).toHaveLength(3);
-    expect(html.match(/src=/g)).toHaveLength(1);
-    expect(html).toContain('src="https://example.com/x.png"');
+    expect(html).not.toContain("src=");
   });
 
   test("drops alternate URL attributes and ignores forged renderer metadata", async () => {

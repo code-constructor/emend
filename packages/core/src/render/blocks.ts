@@ -31,6 +31,8 @@ type RenderData = NonNullable<HtmlElement["data"]> & {
   emendDiagram?: string;
   emendClasses?: string[];
   emendFootnoteMarker?: boolean;
+  emendMedia?: string;
+  emendMediaPath?: string;
 };
 
 export function renderData(element: HtmlElement): RenderData {
@@ -213,6 +215,9 @@ function identityText(node: HtmlNode): string {
   // GFM reference numbers and back-reference counts change when other footnotes are inserted.
   // Exclude those generated markers only from identity; block.text keeps the full textContent.
   if (node.type === "element" && renderData(node).emendFootnoteMarker) return "";
+  // A re-shot image at the same path must show as changed.
+  if (node.type === "element" && renderData(node).emendMedia !== undefined)
+    return `\u0000media${renderData(node).emendMedia}`;
   if (node.type === "text") return node.value;
   return "children" in node ? node.children.map(identityText).join("") : "";
 }

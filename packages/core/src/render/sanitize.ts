@@ -150,9 +150,83 @@ function isAbsoluteUrl(value: unknown, allowMail: boolean): value is string {
   }
 }
 
+export const MEDIA_URL_PREFIX = "/api/v1/media/";
+
+/** Resolve a writeup image reference to a declared media path, or null. */
+export function mediaKey(src: unknown, media: ReadonlyMap<string, string>): string | null {
+  if (typeof src !== "string" || /^https?:\/\//i.test(src)) return null;
+  let path = src.split(/[?#]/)[0] ?? "";
+  while (path.startsWith("./")) path = path.slice(2);
+  // An encoded slash would let one segment hide a path separator.
+  if (/%2f/i.test(path)) return null;
+  try {
+    path = decodeURIComponent(path);
+  } catch {
+    return null;
+  }
+  if (
+    path === "" ||
+    path.startsWith("/") ||
+    path.includes(":") ||
+    path.includes("\\") ||
+    Array.from(path).some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127) ||
+    path.split("/").includes("..")
+  )
+    return null;
+  return media.has(path) ? path : null;
+}
+
+function mediaSpan(image: HtmlElement, path: string, sha: string): HtmlElement {
+  const alt = typeof image.properties.alt === "string" ? image.properties.alt : "";
+  const caption = alt === "" ? (path.split("/").at(-1) ?? path) : alt;
+  const span: HtmlElement = {
+    type: "element",
+    tagName: "span",
+    properties: { className: ["emend-media"] },
+    children: [
+      image,
+      {
+        type: "element",
+        tagName: "span",
+        properties: { className: ["emend-media-caption"] },
+        children: [{ type: "text", value: caption }],
+      },
+    ],
+  };
+  renderData(span).emendMedia = JSON.stringify([alt, path, sha]);
+  return span;
+}
+
+const isMediaSpan = (node: HtmlNode) => node.type === "element" && renderData(node).emendMedia !== undefined;
+
+/** Wrap the images marked by the resolver and flag paragraphs that hold nothing else. */
+function wrapMedia(node: HtmlNode, media: ReadonlyMap<string, string>) {
+  if (!("children" in node)) return;
+  for (const [index, child] of node.children.entries()) {
+    if (child.type !== "element") continue;
+    const marked = renderData(child).emendMediaPath;
+    if (child.tagName === "img" && typeof marked === "string") {
+      const sha = media.get(marked) ?? "";
+      child.properties.src = `${MEDIA_URL_PREFIX}${sha}`;
+      child.properties.loading = "lazy";
+      child.properties.decoding = "async";
+      node.children[index] = mediaSpan(child, marked, sha);
+    } else wrapMedia(child, media);
+  }
+  if (node.type === "element" && node.tagName === "p") {
+    const spans = node.children.filter(isMediaSpan);
+    const rest = node.children.filter((child) => !isMediaSpan(child));
+    if (spans.length > 0 && rest.every((child) => child.type === "text" && child.value.trim() === "")) {
+      const classes = Array.isArray(node.properties.className) ? node.properties.className : [];
+      node.properties.className = [...classes, "emend-media-row"];
+    }
+  }
+}
+
 /** Runs only after sanitize. AST metadata cannot be supplied through raw HTML attributes. */
 export function hardenLinks() {
-  return (tree: HtmlRoot) => {
+  return (tree: HtmlRoot, file: { data: Record<string, unknown> }) => {
+    const media = file.data.media as ReadonlyMap<string, string> | undefined;
     visitElements(tree, (element) => {
       const classes = renderData(element).emendClasses;
       if (
@@ -176,7 +250,15 @@ export function hardenLinks() {
         delete element.properties.rel;
         delete element.properties.target;
       }
-      if (!isAbsoluteUrl(src, false)) delete element.properties.src;
+      if (element.tagName === "img") {
+        // The app CSP allows only same-origin images, and an absolute same-origin URL could show
+        // another review's media. An image keeps a source only when it names a declared media path.
+        const path = media ? mediaKey(src, media) : null;
+        if (path !== null) renderData(element).emendMediaPath = path;
+        else delete element.properties.src;
+      } else if (!isAbsoluteUrl(src, false)) delete element.properties.src;
     });
+    // Generated classes are set after the namespaced author classes, on nodes made here.
+    if (media && media.size > 0) wrapMedia(tree, media);
   };
 }

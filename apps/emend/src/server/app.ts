@@ -27,6 +27,7 @@ import { fileRoutes } from "./routes/files.ts";
 import { importRoutes } from "./routes/import.ts";
 import { lifecycleRoutes } from "./routes/lifecycle.ts";
 import { machineRoutes } from "./routes/machines.ts";
+import { mediaRoutes } from "./routes/media.ts";
 import { pairingRoutes } from "./routes/pairings.ts";
 import { publishRoutes } from "./routes/publish.ts";
 import { reviewRoutes } from "./routes/reviews.ts";
@@ -75,6 +76,7 @@ export const ENDPOINTS = [
   { method: "PUT", path: "/api/v1/reviews/:id/viewed", scope: "comment" },
   { method: "GET", path: "/api/v1/files/:fileId/old", scope: "read" },
   { method: "GET", path: "/api/v1/files/:fileId/new", scope: "read" },
+  { method: "GET", path: "/api/v1/media/:sha256", scope: "read" },
   { method: "GET", path: "/api/v1/events", scope: "read" },
   { method: "GET", path: "/api/v1/reviews/:id/events", scope: "read" },
   { method: "POST", path: "/api/v1/reviews/:id/threads", scope: "comment" },
@@ -164,6 +166,7 @@ export function createApp(deps: AppDeps) {
   lifecycleRoutes(app, deps);
   viewedRoutes(app, deps);
   fileRoutes(app, deps);
+  mediaRoutes(app, deps);
   threadRoutes(app, deps);
   commentRoutes(app, deps);
   sendRoutes(app, deps);

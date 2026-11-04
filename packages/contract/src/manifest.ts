@@ -43,6 +43,9 @@ const source = z
     "source must not contain control characters",
   );
 
+/** Image types a writeup may embed. No SVG: opened directly it is a scriptable document. */
+export const MEDIA_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "avif"]);
+
 export const PublishManifest = z
   .object({
     version: z.literal(1),
@@ -71,6 +74,10 @@ export const PublishManifest = z
           }),
       )
       .max(LIMITS.filesPerRevision),
+    media: z
+      .array(z.object({ path: FilePath, source: source.optional() }))
+      .max(LIMITS.mediaPerRevision)
+      .optional(),
     writeup: WriteupInput,
     links: PublishLinks.optional(),
     // null opts out of the address the CLI derives from the remote. A string that is not
@@ -113,6 +120,17 @@ export const PublishManifest = z
       if (file.topic !== undefined && !topics.has(file.topic)) {
         ctx.addIssue({ code: "custom", path: ["files", index, "topic"], message: "file topic is not declared" });
       }
+    }
+    const docPaths = new Set(manifest.files.filter((file) => file.role === "doc").map((file) => file.path));
+    const mediaPaths = new Set<string>();
+    for (const [index, item] of (manifest.media ?? []).entries()) {
+      const issue = (message: string) => ctx.addIssue({ code: "custom", path: ["media", index, "path"], message });
+      if (!MEDIA_EXTENSIONS.has(item.path.split(".").at(-1)?.toLowerCase() ?? "")) issue("media must be an image file");
+      if (item.path.split("/").some((part) => part.startsWith("."))) issue("media path must not be hidden");
+      if (item.path.includes(":")) issue("media path must not contain a colon");
+      if (mediaPaths.has(item.path)) issue("duplicate media path");
+      mediaPaths.add(item.path);
+      if (docPaths.has(item.path)) issue("media path is already a doc");
     }
     for (const slug of Object.keys(manifest.writeup.topics)) {
       if (!topics.has(slug)) {

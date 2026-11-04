@@ -179,6 +179,35 @@
   .em-prose a:hover {
     color: var(--fg-link-hover);
   }
+  /* Writeup images: the server wraps each one with a caption; a paragraph of only images is a row. */
+  .em-prose .emend-media {
+    display: inline-flex;
+    flex-direction: column;
+    gap: 6px;
+    max-width: 100%;
+    vertical-align: top;
+  }
+  .em-prose .emend-media img {
+    max-width: 100%;
+    height: auto;
+    border: 1px solid var(--border-1);
+    border-radius: var(--radius-md);
+    background: var(--bg-surface);
+  }
+  .em-prose .emend-media-caption {
+    font: 400 12px / 1.4 var(--font-sans);
+    color: var(--fg-3);
+  }
+  .em-prose p.emend-media-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 0.75rem;
+  }
+  .em-prose p.emend-media-row > .emend-media {
+    flex: 1 1 18rem;
+    min-width: 0;
+  }
   .em-prose > :first-child {
     margin-top: 0;
   }

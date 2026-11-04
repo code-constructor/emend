@@ -89,3 +89,56 @@ test("an over-cap writeup fails before any rendered blob is stored", async () =>
   ).rejects.toMatchObject({ code: "too_large", message: "The writeup has too many blocks." });
   expect(put).not.toHaveBeenCalled();
 });
+test("the writeup renders images that parentless assets declare, and only those", async () => {
+  const body = input([]);
+  body.writeup.overview = "![Shot](media/a.png) ![Other](media/b.png) ![Doc asset](docs/c.png)";
+  const asset = (path: string, newBlob: string, parent?: string) => ({
+    path,
+    role: "asset" as const,
+    oldPath: null,
+    oldBlob: null,
+    newBlob,
+    flag: null,
+    ...(parent ? { parent } : {}),
+  });
+  body.files = [asset("media/a.png", "c".repeat(64)), asset("docs/c.png", "d".repeat(64), "docs/plan.html")];
+  const stored: Buffer[] = [];
+  await renderRevision(
+    body,
+    executeWork,
+    async () => new ArrayBuffer(0),
+    async (bytes) => {
+      stored.push(bytes);
+      return String(stored.length - 1);
+    },
+  );
+  const rendered = JSON.parse(stored[0]?.toString() ?? "null") as { sections: { blocks: { html: string }[] }[] };
+  const html = rendered.sections.flatMap((s) => s.blocks.map((b) => b.html)).join("");
+  expect(html).toContain(`src="/api/v1/media/${"c".repeat(64)}"`);
+  expect(html).not.toContain("media/b.png");
+  expect(html).not.toContain("d".repeat(64));
+});
+test("a Markdown doc keeps no image source even when the writeup declares that media path", async () => {
+  const body = input(["notes.md"]);
+  body.writeup.overview = "![Shot](media/a.png)";
+  body.files = [
+    ...body.files,
+    { path: "media/a.png", role: "asset", oldPath: null, oldBlob: null, newBlob: "c".repeat(64), flag: null },
+  ];
+  const stored: Buffer[] = [];
+  const docSource = Buffer.from("See ![x](media/a.png) here");
+  const result = await renderRevision(
+    body,
+    executeWork,
+    async () => Uint8Array.from(docSource).buffer,
+    async (bytes) => {
+      stored.push(bytes);
+      return String(stored.length - 1);
+    },
+  );
+  const doc = stored[Number(result.docBlobs.get("notes.md"))]?.toString() ?? "";
+  expect(doc).toContain("<img");
+  expect(doc).not.toContain("src=");
+  expect(doc).not.toContain("/api/v1/media/");
+  expect(stored.map((blob) => blob.toString()).join("")).toContain(`src=\\"/api/v1/media/${"c".repeat(64)}\\"`);
+});

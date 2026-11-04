@@ -34,7 +34,14 @@ export type Work =
   | { kind: "line-count"; bytes: ArrayBuffer }
   | { kind: "writeup-source"; bytes: ArrayBuffer }
   | { kind: "placement-doc"; format: "html" | "markdown" | "writeup"; bytes: ArrayBuffer }
-  | { kind: "writeup"; source: WriteupInput; topics: TopicMeta[]; links?: PublishLinks; repoUrl?: string }
+  | {
+      kind: "writeup";
+      source: WriteupInput;
+      topics: TopicMeta[];
+      links?: PublishLinks;
+      repoUrl?: string;
+      media: [string, string][];
+    }
   | { kind: "doc"; path: string; source: ArrayBuffer; repoUrl?: string }
   | { kind: "resection"; path: string; bytes: ArrayBuffer }
   | { kind: "comment-md"; bodies: string[]; repoUrl?: string }
@@ -114,7 +121,13 @@ export const executeWork: Executor = async (work) => {
   if (work.kind === "writeup")
     return {
       kind: "writeup",
-      ...serializeRendered(await renderWriteup(work.source, work.topics, { links: work.links, repoUrl: work.repoUrl })),
+      ...serializeRendered(
+        await renderWriteup(work.source, work.topics, {
+          links: work.links,
+          repoUrl: work.repoUrl,
+          media: new Map(work.media),
+        }),
+      ),
     };
   if (work.kind === "doc")
     return { kind: "doc", ...serializeRendered(await renderDoc(decode(work.source), work.path, work.repoUrl)) };

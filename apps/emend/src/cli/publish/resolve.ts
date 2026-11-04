@@ -2,7 +2,14 @@ import { createHash } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, posix, resolve, sep } from "node:path";
-import { LIMITS, OTHER_TOPIC, type PublishFile, type PublishManifest, PublishRequest } from "@emend/contract";
+import {
+  LIMITS,
+  MEDIA_EXTENSIONS,
+  OTHER_TOPIC,
+  type PublishFile,
+  type PublishManifest,
+  PublishRequest,
+} from "@emend/contract";
 import { UnchangedFilesError, withOtherChanges } from "@emend/core";
 import { DocRootError, readDocRoots, rootRules, validateDocRoot } from "../config.ts";
 import { escapeReference } from "../escape.ts";
@@ -14,6 +21,7 @@ import { docsKey, normalizeRemote, reviewKey } from "./key.ts";
 import {
   checkPublishedFolders,
   NotRegularFile,
+  OversizedFile,
   outsideGitSegments,
   type PublishedFolder,
   readRegular,
@@ -301,6 +309,50 @@ export async function resolvePublish(
     // HTML docs already passed their checked reads; this phase checks their shared assets.
     const assets = await shortcutAssets.resolve(files.length, addRequired);
     files = files.flatMap((file) => [file, ...(assets.get(file.path) ?? [])]);
+  }
+  for (const item of manifest.media ?? []) {
+    const label = escapeReference(item.source ?? item.path);
+    const mediaError = (error: unknown): never => {
+      if (error instanceof OversizedFile) throw new CliError("media exceeds its size limit");
+      if (
+        error instanceof NotRegularFile ||
+        ["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")
+      )
+        throw new CliError(`media not found: ${label}`);
+      throw error;
+    };
+    if (assetPaths.has(item.path))
+      throw new CliError(`media path is already a doc asset: ${escapeReference(item.path)}`);
+    if (grouped.files.length + assetCount + 1 > LIMITS.filesPerRevision)
+      throw new CliError("too many files in the review");
+    assetCount++;
+    const extensionOf = (path: string) => path.split(".").at(-1)?.toLowerCase() ?? "";
+    const original = resolve(root, item.source ?? item.path);
+    // Check the written alias here; sourcePath also checks its resolved target.
+    outsideGitSegments(original, root);
+    const source = await sourcePath(original, roots, gitDirs, []).catch(mediaError);
+    const wanted = extensionOf(item.path);
+    if (
+      !MEDIA_EXTENSIONS.has(wanted) ||
+      extensionOf(item.source ?? item.path) !== wanted ||
+      extensionOf(source) !== wanted
+    )
+      throw new CliError("media source must end in .png, .jpg, .jpeg, .gif, .webp or .avif, like its path.");
+    const readMedia = async () => {
+      const actual = await sourcePath(original, roots, gitDirs, []).catch(mediaError);
+      if (extensionOf(actual) !== wanted)
+        throw new CliError("media source must end in .png, .jpg, .jpeg, .gif, .webp or .avif, like its path.");
+      return readRegular(actual, LIMITS.assetBytes, roots, undefined, gitDirs).catch(mediaError);
+    };
+    const bytes = await readRegular(source, LIMITS.assetBytes, roots, undefined, gitDirs).catch(mediaError);
+    files.push({
+      path: item.path,
+      oldPath: null,
+      role: "asset",
+      oldBlob: null,
+      newBlob: addRequired(bytes, readMedia),
+      flag: null,
+    });
   }
   const keyFor = (id: string) => {
     const name = typeof options.key === "function" ? options.key(id) : options.key;

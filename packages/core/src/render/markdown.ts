@@ -110,6 +110,7 @@ export async function renderMarkdownWithBudget(
   section: string,
   highlightBudget: HighlightBudget,
   repoUrl?: string,
+  media?: ReadonlyMap<string, string>,
 ): Promise<Block[]> {
   // Check even an empty document: every emitted id must satisfy the contract.
   BlockId.parse(`${section}-00000000`);
@@ -121,7 +122,7 @@ export async function renderMarkdownWithBudget(
   const { source, tables } = prepareTables(markdown);
   const tree = await processor.run(processor.parse(source), {
     value: source,
-    data: { highlightBudget, largeTables: tables, repoUrl },
+    data: { highlightBudget, largeTables: tables, repoUrl, media },
   });
   return blocksFromTree(tree, section, (node) =>
     processor.stringify(node.type === "root" ? node : { type: "root", children: [node] }),

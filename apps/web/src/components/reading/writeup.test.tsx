@@ -502,3 +502,43 @@ test("loose-list and blockquote Drift blocks are tinted without changing their t
   await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
   expect(JSON.parse(fetchMock.mock.calls[0]?.[1].body).target).toEqual({ kind: "writeup-span", ...blockAnchor(first) });
 });
+
+test("a writeup image renders inline with its caption and takes a block comment", async () => {
+  const hash = "a".repeat(64);
+  const writeup = RenderedWriteup.parse(
+    await renderWriteup(
+      {
+        overview: "![Before](media/before.png) ![After](media/after.png)",
+        tldr: "",
+        decisions: null,
+        topics: {},
+      },
+      [],
+      {
+        media: new Map([
+          ["media/before.png", hash],
+          ["media/after.png", "b".repeat(64)],
+        ]),
+      },
+    ),
+  );
+  const { container } = mount(<Writeup {...props} writeup={writeup} />);
+  const images = container.querySelectorAll<HTMLImageElement>(".em-prose .emend-media img");
+  expect(images).toHaveLength(2);
+  expect(images[0]?.getAttribute("src")).toBe(`/api/v1/media/${hash}`);
+  expect(images[0]?.getAttribute("alt")).toBe("Before");
+  expect(container.querySelector("p.emend-media-row")).toBeTruthy();
+  expect([...container.querySelectorAll(".emend-media-caption")].map((caption) => caption.textContent)).toEqual([
+    "Before",
+    "After",
+  ]);
+  const wrapper = container.querySelector<HTMLElement>(".emend-media")?.closest<HTMLElement>(".em-reading-block");
+  if (!wrapper) throw new Error("Missing commentable image block");
+  fireEvent.click(within(wrapper).getByRole("button", { name: "Comment on block" }));
+  fireEvent.change(screen.getByLabelText("Comment"), { target: { value: "Which one is new?" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save comment" }));
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+  const target = JSON.parse(fetchMock.mock.calls[0]?.[1].body).target;
+  expect(target.kind).toBe("writeup-span");
+  expect(target.quote ?? target.text ?? JSON.stringify(target)).toContain("Before");
+});

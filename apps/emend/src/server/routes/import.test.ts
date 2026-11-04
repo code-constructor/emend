@@ -443,6 +443,35 @@ test("a source blob with a hostile link or repoUrl is refused", async () => {
   }
 });
 
+test("imports writeup media as parentless assets and the writeup renders the image", async () => {
+  const input = await bundle();
+  const source = await f.deps.blobs.put(
+    f.ownerId,
+    Buffer.from(JSON.stringify({ overview: "![Before](media/a.png)", tldr: "", decisions: null, topics: {} })),
+    "application/json",
+  );
+  for (const w of input.writeups) w.sourceBlob = source;
+  const doc = required(input.files[0]);
+  // A synthetic PNG header; the import does not decode image bytes.
+  const png = Buffer.from("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489", "hex");
+  const hash = await f.deps.blobs.put(f.ownerId, png, "image/png");
+  const withMedia = {
+    ...input,
+    files: [
+      ...input.files,
+      { ...doc, id: randomUUID(), path: "media/a.png", role: "asset", mediaType: "image/png", newBlob: hash, ord: 1 },
+    ],
+  };
+  expect((await request("/import", withMedia)).status).toBe(201);
+  const revision = RevisionView.parse(await (await f.request(`/reviews/${input.review.id}/revisions/1`, "GET")).json());
+  const html = revision.writeup.sections.flatMap((s) => s.blocks.map((b) => b.html)).join("");
+  expect(html).toContain(`src="/api/v1/media/${hash}"`);
+  expect(html).toContain('<span class="emend-media-caption">Before</span>');
+  const image = await f.request(`/media/${hash}`, "GET");
+  expect(image.status).toBe(200);
+  expect(image.headers.get("Content-Type")).toBe("image/png");
+});
+
 test("preserves approval records and permits retry after a busy response", async () => {
   const input = await bundle();
   const approvalId = randomUUID();
@@ -2335,7 +2364,7 @@ test.runIf(process.env.EMEND_IMPORT_TIMING === "1")(
     const failures: { kind: string; format?: string; message: string }[] = [];
     try {
       // Calibration uses the same worker renderer outside the measured request.
-      const writeup = await worker({ kind: "writeup", source, topics: [] });
+      const writeup = await worker({ kind: "writeup", source, topics: [], media: [] });
       const doc = await worker({ kind: "doc", path: "0.md", source: new TextEncoder().encode(markdown).buffer });
       if (writeup.kind !== "writeup" || doc.kind !== "doc") throw new Error("Missing calibration");
       const hash = await f.deps.blobs.put(f.ownerId, Buffer.from(markdown), "text/markdown");

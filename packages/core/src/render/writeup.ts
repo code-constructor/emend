@@ -12,10 +12,11 @@ export type RenderedWriteup = {
 const unwrittenDecisions =
   "Decisions and drift: not written. Only the session where the change was asked for can tell what drifted from it.";
 
+/** `meta.media` maps declared media paths to their SHA-256; only those paths resolve as images. */
 export async function renderWriteup(
   writeup: WriteupInput,
   topics: TopicMeta[],
-  meta: { links?: PublishLinks; repoUrl?: string } = {},
+  meta: { links?: PublishLinks; repoUrl?: string; media?: ReadonlyMap<string, string> } = {},
 ): Promise<RenderedWriteup> {
   const sections: RenderedWriteup["sections"] = [];
   const highlightBudget = { highlightedBytes: 0 };
@@ -25,7 +26,7 @@ export async function renderWriteup(
       key,
       label,
       topic,
-      blocks: await renderMarkdownWithBudget(markdown, key, highlightBudget, meta.repoUrl),
+      blocks: await renderMarkdownWithBudget(markdown, key, highlightBudget, meta.repoUrl, meta.media),
     });
   };
   await append("overview", "Overview", writeup.overview);

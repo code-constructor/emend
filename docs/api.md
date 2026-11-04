@@ -97,6 +97,7 @@ a machine token reaches only reviews from its own instance.
 | PUT | `/api/v1/reviews/:id/viewed` | Reviewer | Mark or unmark diff files as viewed; return 204. |
 | GET | `/api/v1/files/:fileId/old` | Reviewer | Read the old file side. |
 | GET | `/api/v1/files/:fileId/new` | Reviewer | Read the new file side. |
+| GET | `/api/v1/media/:sha256` | Reviewer | Read a writeup image by content hash. |
 | GET | `/api/v1/events` | Reviewer | Subscribe to owner-wide review events using SSE. |
 | GET | `/api/v1/reviews/:id/events` | Reviewer | Subscribe to review events using SSE. |
 | POST | `/api/v1/reviews/:id/threads` | Reviewer | Create a thread and user comment. |
@@ -134,6 +135,32 @@ An unknown or foreign file, a doc or asset, a flagged file, or an absent side
 returns `404 not_found`. `HEAD` applies the same authorization and headers, with
 no response body. File and blob lookups filter the authenticated owner's id;
 the number of queries is bounded independently of revision size.
+
+### Writeup media
+
+`GET /api/v1/media/:sha256` serves one image that a writeup embeds. A parameter that is not 64
+lowercase hex characters returns `404 not_found`. The server looks up one file of the
+authenticated owner with `role` `asset` and no parent doc, `newBlob` equal to the hash and a
+stored media type of `image/png`, `image/jpeg`, `image/gif`, `image/webp` or `image/avif`. No such
+row, a diff side, an SVG, an HTML doc's own asset or any other asset, a foreign owner's row or a
+missing stored blob returns `404 not_found`.
+Otherwise it returns `200` with the stored bytes, `Content-Type` set to the row's stored media type,
+`X-Content-Type-Options: nosniff`, `Cross-Origin-Resource-Policy: same-origin`,
+`Cache-Control: no-store`, `Content-Disposition: inline` and
+`Content-Security-Policy: sandbox; default-src 'none'`. That CSP replaces the app CSP on this
+route only. `HEAD` applies the same authorization and headers, with no body.
+
+An image keeps a source only when it names a declared media path of the same revision. Every other
+image source, relative or absolute, is dropped, in writeups, Markdown docs and comments alike. A declared
+path never contains a colon. The renderer drops any query or fragment, strips a leading `./`, percent-decodes, and refuses a
+result with a `..` segment, a leading `/`, a scheme, a backslash, a control character or an
+invalid or encoded-slash escape. A match becomes
+`<span class="emend-media"><img src="/api/v1/media/<sha256>" alt loading="lazy" decoding="async"><span class="emend-media-caption">…</span></span>`;
+the caption is the alt text, or the file name when the alt text is empty. A paragraph holding only
+such images also has the class `emend-media-row`. Author classes keep the `user-content-`
+prefix, so they never match the generated classes. A block's id covers each image's alt text, path
+and SHA-256, so a re-shot image at the same path shows as changed. Markdown docs render no
+local images.
 
 ### Viewed files
 
@@ -591,7 +618,11 @@ Assets name a declared HTML doc in `parent`, stay inside its folder and have no 
 segments. Allowed extensions are js, mjs, css, png, jpg, jpeg, gif, svg, webp, avif, ico, bmp,
 woff, woff2, ttf, otf, mp4, webm, ogg, mp3, wav and m4a (case insensitive). Shared assets are
 published once, with the first doc as parent. Diff rows always have media type `text/plain`.
-Only assets have parents. Docs and assets have a new blob, no old side and no flag; flagged
+An asset with no `parent` is writeup media. Its extension is png, jpg, jpeg, gif, webp or avif
+(case insensitive), no segment starts with `.`, and it has no `topic`, `assets` or `notes`. No
+HTML doc lists it in `assets`. A request holds at most `mediaPerRevision` (50) of them. Media have
+no `FileRole` of their own; they use `role: "asset"` and never appear in file lists, counts or
+viewed progress. Only assets have parents. Docs and assets have a new blob, no old side and no flag; flagged
 diffs have no blobs. Source filenames never leave the CLI.
 
 `HEAD /api/v1/blobs/:sha256` returns 204 for an owner's blob whose content is stored at the recorded
@@ -620,33 +651,10 @@ Placement exceeding 30 seconds returns 413 `too_large` with "The placement timed
 Other placement failures return 400 `invalid_request` with "The comments could not be placed."
 These failures never leave a partial revision.
 
-`PublishManifest = { version: 1, title, base?, head?, main?, topics: TopicMeta[], files, writeup,
-links?, repoUrl? }`.
+`PublishManifest = { version: 1, title, base?, head?, main?, topics: TopicMeta[], files, media?, writeup,
+links?, repoUrl? }`. `links` and `repoUrl` are described under "Links and repoUrl" at the end of
+this section.
 
-#### Links and repoUrl
-
-`links?: PublishLink[]` holds at most 8 entries `{ url, label, kind?: "pr" | "issue" | "other" }`.
-`url` is an absolute `https:` URL of at most 2048 characters, without credentials, whitespace or
-control characters. `label` is 1 through 60 characters of visible text, without control or format
-characters. An invalid link refuses the request (`400 invalid_request`). Links are not Markdown, they
-are never counted in `writeupEmpty`, and so a docs-only publish with links stays `kind: "publish"`.
-
-`repoUrl?` is exactly `https://host/owner/name`: a lowercase ASCII host with an optional port, and two
-path segments of `A-Za-z0-9._-` (not `.` or `..`), with no userinfo, query or fragment. The CLI derives
-it from the repository's `remote.origin.url` (SSH, scp-style and `git://` remotes become https, a trailing
-`.git` goes away; a path, a `file:` URL, `http:`, a remote with credentials, or a remote host without a
-dot, such as an ssh alias, gives none). A manifest's own `repoUrl` wins when it is valid; an invalid string
-in a manifest is dropped and the derived one is used, but one in a `PublishRequest` is refused. A manifest
-may set `"repoUrl": null` to opt out: the CLI then sends no `repoUrl` and no `#123` links render. With a
-`repoUrl`, the server turns `#123` in rendered writeup and Markdown doc text into a link
-to `<repoUrl>/issues/123`, never inside code, a fence, a diagram or an existing link. A number is 1
-through 7 digits and must follow a non-word character.
-
-Both ride in the writeup's source and rendered blobs, so an import or export keeps them; no table
-changes. Every absolute `http:` or `https:` link in rendered Markdown carries `target="_blank"` and
-`rel="noopener noreferrer nofollow"`, including an absolute link back to the same emend review. Clients
-open `links` the same way, after checking again that each URL is https, and show each link's host
-(punycode for a non-ASCII host) beside its label, with the full URL as the title.
 `main?: "writeup" | FilePath` declares the opening page. A path must name a file of this
 manifest with `role: "doc"`; otherwise validation issues `["main"]` with the message
 `main is not a doc of this revision`. `"writeup"` opens Writeup even if its Markdown is empty.
@@ -656,6 +664,17 @@ Docs-only reviews can omit both. Manifest files are `{ path, role: "diff" | "doc
 `source` is a non-empty local filename from which the CLI reads a doc, separate from its published
 path. It may be absolute or relative, has at most `pathChars` characters, must be well-formed UTF-16,
 and cannot contain NUL, C0 controls or DEL.
+
+`media?: { path: FilePath, source? }[]` lists images that the writeup embeds, at most
+`mediaPerRevision` (50). A `path` ends in png, jpg, jpeg, gif, webp or avif (case insensitive;
+SVG and video are refused), has no segment starting with `.`, is unique among media, and never
+equals a doc's path. `source` follows the doc `source` rules. The CLI resolves `source ?? path`
+exactly like a doc source (the worktree or a `docRoots` folder, regular files only, no symlink
+out, none in the git folder), and reads at most `assetBytes` (8 MiB) from each. The real source's
+extension must equal the path's extension, ignoring case. Each image is published as a
+parentless `asset` file and counts toward `filesPerRevision` and `revisionBytes`. A media path
+that equals an HTML doc's asset path is refused. The writeup embeds an image with
+`![Alt](path)`.
 
 Only a `diff` entry accepts `notes`; docs and assets reject the field, even an empty array.
 `AgentNote = { side: "old" | "new", start, end, summary, rationale?, ref? }` uses positive integer
@@ -718,6 +737,31 @@ Every Markdown string is limited to `writeupSectionBytes` UTF-8 bytes; the sum o
 `writeupBytes`. These limits measure UTF-8 bytes, not character count. Parsed `topics` has a null
 prototype: an absent `topics["constructor"]` is `undefined`, while an explicitly declared
 `constructor` topic remains accessible and serializes normally.
+
+#### Links and repoUrl
+
+`links?: PublishLink[]` holds at most 8 entries `{ url, label, kind?: "pr" | "issue" | "other" }`.
+`url` is an absolute `https:` URL of at most 2048 characters, without credentials, whitespace or
+control characters. `label` is 1 through 60 characters of visible text, without control or format
+characters. An invalid link refuses the request (`400 invalid_request`). Links are not Markdown, they
+are never counted in `writeupEmpty`, and so a docs-only publish with links stays `kind: "publish"`.
+
+`repoUrl?` is exactly `https://host/owner/name`: a lowercase ASCII host with an optional port, and two
+path segments of `A-Za-z0-9._-` (not `.` or `..`), with no userinfo, query or fragment. The CLI derives
+it from the repository's `remote.origin.url` (SSH, scp-style and `git://` remotes become https, a trailing
+`.git` goes away; a path, a `file:` URL, `http:`, a remote with credentials, or a remote host without a
+dot, such as an ssh alias, gives none). A manifest's own `repoUrl` wins when it is valid; an invalid string
+in a manifest is dropped and the derived one is used, but one in a `PublishRequest` is refused. A manifest
+may set `"repoUrl": null` to opt out: the CLI then sends no `repoUrl` and no `#123` links render. With a
+`repoUrl`, the server turns `#123` in rendered writeup and Markdown doc text into a link
+to `<repoUrl>/issues/123`, never inside code, a fence, a diagram or an existing link. A number is 1
+through 7 digits and must follow a non-word character.
+
+Both ride in the writeup's source and rendered blobs, so an import or export keeps them; no table
+changes. Every absolute `http:` or `https:` link in rendered Markdown carries `target="_blank"` and
+`rel="noopener noreferrer nofollow"`, including an absolute link back to the same emend review. Clients
+open `links` the same way, after checking again that each URL is https, and show each link's host
+(punycode for a non-ASCII host) beside its label, with the full URL as the title.
 
 ### Targets and placement
 
@@ -1004,6 +1048,7 @@ limit with `413 too_large` before parsing. Upload content also has the role's by
 | `blocksPerRevision` | 100000 rendered blocks across every path, including the writeup |
 | `renderedBytesPerRevision` | 268435456 rendered JSON bytes across every path, including the writeup |
 | `filesPerRevision` | 10000 files |
+| `mediaPerRevision` | 50 writeup images (counted in `filesPerRevision`; each at most `assetBytes`) |
 | `agentNotesPerFile` | 8 notes |
 | `agentNotesPerRevision` | 64 notes |
 | `pathChars` | 4096 characters per path or source; also per publish URL or block id |

@@ -2,12 +2,15 @@ import { z } from "zod";
 import { AgentNotes, validateAgentNotes } from "./agent-note.ts";
 import { LIMITS } from "./limits.ts";
 import { PublishLinks, RepoUrl } from "./links.ts";
-import { PublishManifest, WriteupInput } from "./manifest.ts";
+import { MEDIA_EXTENSIONS, PublishManifest, WriteupInput } from "./manifest.ts";
 import { FileFlag, FilePath, FileRole, FileStatus, OTHER_TOPIC, TopicMeta, TopicSlug } from "./review.ts";
 
 export const ASSET_EXTENSIONS = new Set(
   "js mjs css png jpg jpeg gif svg webp avif ico bmp woff woff2 ttf otf mp4 webm ogg mp3 wav m4a".split(" "),
 );
+
+// The manifest module defines the set so it can validate `media` without importing this module.
+export { MEDIA_EXTENSIONS };
 
 export const Sha256 = z
   .string()
@@ -69,6 +72,8 @@ export const PublishRequest = z
     const keys = new Set(request.files.map((file) => `${file.role === "diff" ? "diff" : "doc"}:${file.path}`));
     const paths = new Map(request.files.filter((file) => file.role !== "diff").map((file) => [file.path, file]));
     if (keys.size !== request.files.length) issue("duplicate file path in namespace");
+    const listed = new Set(request.files.flatMap((file) => file.assets ?? []));
+    let mediaCount = 0;
     for (const file of request.files) {
       if (file.topic && !topics.has(file.topic)) issue("file topic is not declared");
       if (file.role === "doc" && /\.html?$/i.test(file.path)) {
@@ -79,7 +84,19 @@ export const PublishRequest = z
           if (paths.get(path)?.role !== "asset" || !path.startsWith(folder))
             issue("HTML assets must be request assets inside the doc folder");
       } else if (file.assets !== undefined) issue("only HTML docs list assets");
-      if (file.role === "asset") {
+      if (file.role === "asset" && file.parent === undefined) {
+        // A parentless asset is writeup media.
+        mediaCount++;
+        if (
+          !MEDIA_EXTENSIONS.has(file.path.split(".").at(-1)?.toLowerCase() ?? "") ||
+          file.path.split("/").some((part) => part.startsWith("."))
+        )
+          issue("media must be a visible image file");
+        if (file.path.includes(":")) issue("media path must not contain a colon");
+        if (file.topic !== undefined || file.assets !== undefined || file.notes !== undefined)
+          issue("media has no topic, assets or notes");
+        if (listed.has(file.path)) issue("media is already a doc asset");
+      } else if (file.role === "asset") {
         const parent = file.parent ? paths.get(file.parent) : undefined;
         if (parent?.role !== "doc" || !/\.html?$/i.test(parent.path)) issue("asset parent must be an HTML doc");
         const folder = parent?.path.slice(0, parent.path.lastIndexOf("/") + 1);
@@ -98,6 +115,7 @@ export const PublishRequest = z
         issue("docs and assets require one unflagged new blob");
       if (file.flag !== null && (file.oldBlob !== null || file.newBlob !== null)) issue("flagged files have no blobs");
     }
+    if (mediaCount > LIMITS.mediaPerRevision) issue("too many media files");
     for (const slug of Object.keys(request.writeup.topics))
       if (!topics.has(slug)) issue("writeup topic is not declared");
   });
