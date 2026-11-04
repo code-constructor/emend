@@ -17,6 +17,7 @@ import {
   subscribeDrafts,
 } from "../../lib/drafts.ts";
 import { Button } from "../ui/Button.tsx";
+import { Dialog } from "../ui/Dialog.tsx";
 import { inputClass, inputSizes } from "../ui/field.tsx";
 import { Icon } from "../ui/Icon.tsx";
 import { Sheet } from "../ui/Sheet.tsx";
@@ -66,6 +67,8 @@ export function SendBar({
     };
   }, []);
   const submitting = useRef(false);
+  const approveTrigger = useRef<HTMLButtonElement>(null);
+  const [confirmApprove, setConfirmApprove] = useState(false);
   const agentNow = useRef(agent);
   useLayoutEffect(() => {
     agentNow.current = agent;
@@ -138,6 +141,25 @@ export function SendBar({
       : undefined;
   const disabled = sending || commentSaving || unsavedCount > 0 || revision === undefined || !!olderReason || retired;
   const approveBlocked = unsentCount > 0 && !approved && !retired;
+  // When approving stops being possible (a newer revision, comments, another tab, a retirement) the
+  // dialog's Approve would do nothing: close it and let the bar show its usual reason.
+  const cannotApprove =
+    commentSaving ||
+    unsavedCount > 0 ||
+    revision === undefined ||
+    !!olderReason ||
+    retired ||
+    unsentCount > 0 ||
+    approved;
+  useEffect(() => {
+    if (!confirmApprove || !cannotApprove || sending) return;
+    if (approved) setApprovedHere(true);
+    setConfirmApprove(false);
+  }, [confirmApprove, cannotApprove, sending, approved]);
+  const statusRef = useRef<HTMLDivElement>(null);
+  // After this dialog's approval the trigger is disabled: focus goes to the bar's status, not to the
+  // page. Set in the same update that closes the dialog, because the cached `approved` arrives later.
+  const [approvedHere, setApprovedHere] = useState(false);
   const unsavedReason = unsavedCount
     ? unsavedCount === 1
       ? "1 unsaved comment: save or discard it first."
@@ -195,7 +217,11 @@ export function SendBar({
         if (phone && sheetOpenNow.current) deferred.current = atSend;
         else setHandoff(atSend);
         setSheetOpen(false);
-      } else toast.show({ tone: "success", title: `Approved revision ${revision}` });
+      } else {
+        setApprovedHere(true);
+        setConfirmApprove(false);
+        toast.show({ tone: "success", title: `Approved revision ${revision}` });
+      }
     } catch {
       // The mutation retains the error for the inline alert.
     } finally {
@@ -221,6 +247,7 @@ export function SendBar({
   const approvalReason = <span id={blocked}>Send or delete before approving</span>;
   const approveButton = (
     <Button
+      ref={approveTrigger}
       variant="approve"
       size={phone ? "lg" : "md"}
       icon={Check}
@@ -235,7 +262,13 @@ export function SendBar({
           .filter(Boolean)
           .join(" ") || undefined
       }
-      onClick={() => void submit("approve")}
+      onClick={() => {
+        // Approving asks first: nothing is sent until the dialog's Approve is pressed.
+        if (submitting.current) return;
+        mutation.reset();
+        setApprovedHere(false);
+        setConfirmApprove(true);
+      }}
     >
       {approved ? "Approved" : phone || revision === undefined ? "Approve" : `Approve revision ${revision}`}
     </Button>
@@ -244,7 +277,11 @@ export function SendBar({
     <ReviewActions reviewId={reviewId} lifecycle={lifecycle} unsentCount={unsentCount} phone={phone} />
   );
   const status = (
-    <div className={cn("flex min-w-0 flex-col gap-0.5", phone && "flex-1 overflow-hidden")}>
+    <div
+      ref={statusRef}
+      tabIndex={-1}
+      className={cn("flex min-w-0 flex-col gap-0.5 outline-none", phone && "flex-1 overflow-hidden")}
+    >
       <span className="flex items-center gap-1.5 whitespace-nowrap text-13 font-semibold leading-[1.2] text-fg-1">
         {unsentCount > 0 && (
           <span
@@ -436,6 +473,28 @@ export function SendBar({
       {!phone && showNote && agent && (
         <HandOverNote reviewId={reviewId} agent={agent} lifecycle={lifecycle} className="px-4 pb-2" />
       )}
+      <Dialog
+        open={confirmApprove}
+        returnFocus={approvedHere ? statusRef : approveTrigger}
+        preferReturnFocus={approvedHere}
+        onOpenChange={(open) => {
+          if (!open && !sending) setConfirmApprove(false);
+        }}
+        title={revision === undefined ? "Approve this revision?" : `Approve revision ${revision}?`}
+        description="The agent receives the approval, now if one is waiting and otherwise when it next picks up. The review moves to Done."
+        actions={
+          <>
+            <Button data-autofocus disabled={sending} onClick={() => setConfirmApprove(false)}>
+              Cancel
+            </Button>
+            <Button variant="approve" loading={sending} onClick={() => void submit("approve")}>
+              Approve
+            </Button>
+          </>
+        }
+      >
+        {feedback && <div className="mt-2">{feedback}</div>}
+      </Dialog>
       {handoff && (
         <HandoffWindow
           reviewId={reviewId}
@@ -452,7 +511,7 @@ export function SendBar({
       {(!phone || !sheetOpen) &&
         (unavailable ||
           (phone && (approveBlocked || olderReason || unsavedReason || retiredReason)) ||
-          mutation.error) && (
+          (mutation.error && !confirmApprove)) && (
           <div className="space-y-1 px-4 pb-2">
             {unavailable && (
               <p
@@ -466,7 +525,7 @@ export function SendBar({
             {phone && approveBlocked && <p className="m-0 text-fg-3 [font:var(--type-meta)]">{approvalReason}</p>}
             {phone && (unsavedReason || retiredReason) && reason}
             {phone && olderReason && <p className="m-0 text-fg-3 [font:var(--type-meta)]">{olderMessage}</p>}
-            {feedback}
+            {!confirmApprove && feedback}
           </div>
         )}
     </section>

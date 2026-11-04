@@ -73,6 +73,9 @@ test.each(["Send", "Approve"].flatMap((action) => ["success", "failure"].map((ou
     const view = mount(bar());
     fireEvent.change(instructions(), { target: { value: "Submitted instructions" } });
     fireEvent.click(button(action === "Send" ? "Send" : /^Approve/));
+    // Approving asks first.
+    if (action === "Approve")
+      fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Approve" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
     view.rerender(bar(other));
     fireEvent.change(instructions(), { target: { value: "Other review instructions" } });

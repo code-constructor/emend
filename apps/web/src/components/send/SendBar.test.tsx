@@ -48,6 +48,15 @@ async function closeSent() {
   fireEvent.click(button("Close"));
   await waitFor(() => expect(screen.queryByText(sentText)).toBeNull());
 }
+/** Presses the dialog's Approve, which the bar's Approve opens. */
+function confirmApproval() {
+  fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Approve" }));
+}
+/** Approving asks first: the bar's Approve opens the dialog, and its Approve sends. */
+function approve(name: string | RegExp) {
+  fireEvent.click(button(name));
+  confirmApproval();
+}
 function input() {
   return screen.getByRole<HTMLInputElement | HTMLTextAreaElement>("textbox", { name: "Instructions" });
 }
@@ -122,7 +131,7 @@ test.each([false, true])(
   "approval uses only revision and kind; approved state is disabled (phone %s)",
   async (phone) => {
     const { rerender } = mount({ phone });
-    fireEvent.click(button(phone ? "Approve" : "Approve revision 3"));
+    approve(phone ? "Approve" : "Approve revision 3");
     await screen.findByText("Approved revision 3");
     expectSend({ revision: 3, kind: "approve" });
     rerender(<SendBar reviewId={reviewId} revision={3} newestRevision={3} unsentCount={0} approved phone={phone} />);
@@ -204,7 +213,7 @@ test.each([false, true])(
 test("network failure is inline, never just a toast", async () => {
   fetchMock.mockRejectedValue(new Error("Synthetic failure"));
   mount();
-  fireEvent.click(button("Approve revision 3"));
+  approve("Approve revision 3");
   expect((await screen.findByRole("alert")).textContent).toBe("The request failed. Try again.");
   expect(screen.queryByText("Approved revision 3")).toBeNull();
 });
@@ -324,14 +333,22 @@ test.each([
   const activate =
     action === "Enter"
       ? () => fireEvent.keyDown(input(), { key: "Enter", ctrlKey: true })
-      : () =>
-          fireEvent.click(
-            button(action === "Approve" ? /^Approve/ : phone ? "Send 1 comment on revision 3" : "Send 1"),
-          );
-  act(() => {
-    activate();
-    activate();
-  });
+      : action === "Approve"
+        ? () => approve(/^Approve/)
+        : () => fireEvent.click(button(phone ? "Send 1 comment on revision 3" : "Send 1"));
+  if (action === "Approve") {
+    // The dialog's Approve is the one pressed twice.
+    fireEvent.click(button(/^Approve/));
+    const confirm = within(screen.getByRole("alertdialog")).getByRole("button", { name: "Approve" });
+    act(() => {
+      fireEvent.click(confirm);
+      fireEvent.click(confirm);
+    });
+  } else
+    act(() => {
+      activate();
+      activate();
+    });
   await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
   await act(async () => pending.resolve(new Response(null, { status: 201 })));
   if (action === "Approve") await screen.findByText("Approved revision 3");
@@ -395,7 +412,7 @@ test.each([false, true])(
     if (phone) fireEvent.click(button("Send instructions on revision 2"));
     await closeSent();
     expectSend({ revision: 2, kind: "go", mode: "fix-clear", instruction: "Keep the instruction" });
-    fireEvent.click(button(/^Approve/));
+    approve(/^Approve/);
     await screen.findByText("Approved revision 2");
     expect(fetchMock).toHaveBeenLastCalledWith(
       `/api/v1/reviews/${reviewId}/sends`,
@@ -601,19 +618,21 @@ test.each([
   },
 );
 
-test("opening the phone sheet immediately after Approve does not detach its pending outcome", async () => {
+test("a pending Approve holds its dialog; the Send sheet works once it settles", async () => {
   const pending = Promise.withResolvers<Response>();
   fetchMock.mockReturnValueOnce(pending.promise);
   mount({ phone: true });
-  act(() => {
-    fireEvent.click(button("Approve"));
-    fireEvent.click(button("Send"));
-  });
-  expect(screen.getByRole("dialog", { name: "Send feedback" })).toBeTruthy();
+  approve("Approve");
+  expect(screen.getByRole("alertdialog")).toBeTruthy();
   await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
   expectSend({ revision: 3, kind: "approve" });
+  // The modal makes the bar inert while the approval is pending.
+  expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Send", hidden: true }).closest("[aria-hidden='true']")).toBeTruthy();
   await act(async () => pending.resolve(new Response(null, { status: 201 })));
   await screen.findByText("Approved revision 3");
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  fireEvent.click(button("Send"));
   fireEvent.change(input(), { target: { value: "Follow-up instruction" } });
   fireEvent.click(button("Send instructions on revision 3"));
   await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
@@ -699,7 +718,8 @@ test.each([
         ),
       },
     );
-    fireEvent.click(button(action === "Send" ? "Send 1" : "Approve revision 3"));
+    if (action === "Send") fireEvent.click(button("Send 1"));
+    else approve("Approve revision 3");
     await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
     expectSend(
       action === "Send"
@@ -709,7 +729,7 @@ test.each([
     rerender(<SendBar key={nextReviewId} reviewId={nextReviewId} revision={7} newestRevision={7} unsentCount={0} />);
     fireEvent.change(input(), { target: { value: "Keep review B's draft" } });
     if (ownToast) {
-      fireEvent.click(button("Approve revision 7"));
+      approve("Approve revision 7");
       await screen.findByText("Approved revision 7");
     }
     await act(async () => pending.resolve(new Response(null, { status: 201 })));

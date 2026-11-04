@@ -1113,6 +1113,9 @@ test.each(["Send", "Approve"])(
     for (const name of [/^Send/, /^Approve/])
       expect((screen.getByRole("button", { name }) as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: new RegExp(`^${action}`) }));
+    // Approving asks first.
+    if (action === "Approve")
+      fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Approve" }));
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
         `/api/v1/reviews/${id}/sends`,

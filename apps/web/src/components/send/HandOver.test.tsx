@@ -191,9 +191,15 @@ test("a pickedUpAt from an earlier Send never counts as a pick-up", async () => 
   expect(screen.getByText("The agent picked up your feedback.")).toBeTruthy();
 });
 
+/** Approving asks first: the bar's Approve opens a dialog, and its Approve sends. */
+function approve(name: string) {
+  fireEvent.click(screen.getByRole("button", { name }));
+  fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Approve" }));
+}
+
 test("Approve opens no window", async () => {
   mount({ agent: waiting, unsentCount: 0 });
-  fireEvent.click(screen.getByRole("button", { name: "Approve revision 3" }));
+  approve("Approve revision 3");
   await settle();
   expect(screen.getByText("Approved revision 3")).toBeTruthy();
   expect(screen.queryByRole("alertdialog")).toBeNull();
@@ -525,12 +531,12 @@ test("an Approve answered by the server shows its toast and frees the button whi
   await settle();
   probe.mode = "hang";
   mount({ agent: idle, unsentCount: 0 });
-  fireEvent.click(screen.getByRole("button", { name: "Approve revision 3" }));
+  approve("Approve revision 3");
   await settle();
   expect(screen.getByText("Approved revision 3")).toBeTruthy();
-  const approve = screen.getByRole<HTMLButtonElement>("button", { name: "Approve revision 3" });
-  expect(approve.getAttribute("aria-busy")).not.toBe("true");
-  expect(approve.disabled).toBe(false);
+  const approveButton = screen.getByRole<HTMLButtonElement>("button", { name: "Approve revision 3" });
+  expect(approveButton.getAttribute("aria-busy")).not.toBe("true");
+  expect(approveButton.disabled).toBe(false);
   expect(screen.queryByRole("alertdialog")).toBeNull();
 });
 

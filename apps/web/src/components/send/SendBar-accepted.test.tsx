@@ -1,6 +1,6 @@
 import type { ReviewView } from "@emend/contract";
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { inboxQuery, reviewQuery } from "../../api/queries.ts";
 import { reconnectReviewEvents } from "../../lib/event-stream.ts";
@@ -140,6 +140,11 @@ async function mount(extra?: React.ReactNode) {
   await settle();
 }
 const button = (name: string, hidden = false) => screen.getByRole<HTMLButtonElement>("button", { name, hidden });
+/** Approving asks first: the bar's Approve opens a dialog, and its Approve sends. */
+function approve(name: string) {
+  fireEvent.click(button(name));
+  fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Approve" }));
+}
 const lostText =
   "emend cannot reach its server right now, so a pick-up may not show here. If no agent has it yet, hand it over with the command below.";
 const normalText = "No agent has picked this up yet. emend keeps it until one does.";
@@ -148,13 +153,27 @@ test("a second Approve in the gap before the refetch lands sends nothing", async
   server = { ...base, unsentCount: 0 };
   await mount();
   mode = "hang";
-  fireEvent.click(button("Approve revision 3"));
+  approve("Approve revision 3");
   await settle();
   expect(posts).toBe(1);
   expect(button("Approved").disabled).toBe(true);
   fireEvent.click(button("Approved"));
   await settle();
   expect(posts).toBe(1);
+});
+
+test("after a successful approval focus moves to the bar's status, not to the page", async () => {
+  server = { ...base, unsentCount: 0 };
+  await mount();
+  server = { ...server, state: "approved" };
+  approve("Approve revision 3");
+  await settle();
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  const bar = screen.getByRole("region", { name: "Send and approve" });
+  expect(button("Approved").disabled).toBe(true);
+  await settle(50);
+  expect(document.activeElement).toBe(bar.querySelector("[tabindex='-1']"));
+  expect(document.activeElement).not.toBe(document.body);
 });
 
 test("a second Send after closing the window, while the refetch hangs, sends nothing", async () => {
@@ -249,7 +268,8 @@ test.each(["Send", "Approve"] as const)("a fetch that started before the accepte
   await settle();
   const stale = [...held];
   expect(stale.map((fetch) => fetch.url).sort()).toEqual(["/api/v1/reviews", `/api/v1/reviews/${reviewId}`]);
-  fireEvent.click(button(kind === "Send" ? "Send 1" : "Approve revision 3"));
+  if (kind === "Send") fireEvent.click(button("Send 1"));
+  else approve("Approve revision 3");
   await settle();
   // Both stale fetches now answer with the data from before the write.
   for (const fetch of stale)

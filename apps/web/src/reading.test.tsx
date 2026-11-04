@@ -618,6 +618,8 @@ test.each([
 test("Approve has no mode or instruction, invalidates the displayed revision, review and inbox", async () => {
   mount(<SendBar reviewId={id} revision={2} newestRevision={2} unsentCount={0} />);
   fireEvent.click(screen.getByRole("button", { name: "Approve revision 2" }));
+  // Approving asks first.
+  fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Approve" }));
   await screen.findByText("Approved revision 2");
   expect(fetchMock).toHaveBeenCalledWith(
     `/api/v1/reviews/${id}/sends`,
