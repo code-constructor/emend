@@ -13,7 +13,7 @@ it is not. `docs/architecture.md` describes how it is built.
 ## What to do next
 
 The work queue is `tasks/`. When asked "what now?", "what's next?" or similar, follow
-`tasks/README.md`. Keep task status and the queue table current as work lands.
+`tasks/README.md`. `bin/wt tasks` prints the queue. Keep each task file's status current as work lands.
 
 ## Layout
 
@@ -23,6 +23,8 @@ The work queue is `tasks/`. When asked "what now?", "what's next?" or similar, f
 - `packages/contract`: zod schemas for the API, the review manifest, file roles, capabilities.
 - `packages/core`: pure logic (Markdown to safe blocks, block ids, placing comments, topics). No
   Node-only and no browser-only API; WebCrypto is fine.
+- `bin/`: `bin/wt`, the worktree and pull-request lifecycle CLI (node only, no dependencies, tests
+  in `bin/lib/wt/`), and `.claude/skills/e-*`, its skills.
 - `plugin/`: the Claude Code plugin. `plugin/skills/` holds the review skills, their only copy;
   `plugin/` holds nothing else but `.claude-plugin/plugin.json`. `docs/api.md`: the v1 contract.
   `sync/`: surfaces shared with hunk-review-skill, and synthetic fixtures. `tasks/`: the work
@@ -65,11 +67,18 @@ Each line prevents a real failure. "Before you touch" names the rule file with t
 
 ## Delivery
 
-- **Until the first release, all work lands directly on `main`.** No feature branches, no PRs.
-- Commit only when the owner asks. One logical change per commit; the body names the plan task.
-- Agents never push. The owner pushes `main`. Never push tags, never force-push, never run
-  `gh pr merge`. The Release workflow publishes to npm from `main`; agents never start or
-  re-run it.
+- Feature work happens on a branch in a `bin/wt` worktree under `.claude/worktrees/`. Claude Code
+  sessions start at the root of the main checkout or of such a worktree.
+- On its own feature branch an agent commits with plain `git commit` (the git config signs it) and
+  pushes that branch. One logical change per commit; the body names the plan task.
+- A merge happens only through `/e-pr-merge` (squash, pinned to the head the owner approved in
+  emend) or `/e-merge-local`, after the owner approved that head in emend. Outside those skills,
+  never run `gh pr merge`.
+- Agents never push `main` or tags, and never force-push without a lease. Direct commits to `main`
+  happen only when the owner asks. The Release workflow publishes to npm from `main`; agents never
+  start or re-run it.
+- The lifecycle skills: `/e-spawn`, `/e-work`, `/e-pr`, `/e-pr-finalize`, `/e-pr-merge`, `/e-rebase`,
+  `/e-merge-local`.
 - Tests never touch emend's real state directory, which holds client diffs: the Vitest setup
   sets a temporary `EMEND_HOME`, and every test that needs state uses its own.
 - Changing `.claude/settings.json`, `.claude/hooks/` or `.codex/` needs the owner's approval
@@ -83,8 +92,9 @@ Each line prevents a real failure. "Before you touch" names the rule file with t
   `model: "sonnet"`. Start it with `sandbox: "workspace-write"`, never `danger-full-access`, and
   decline its escalation requests. It never commits, pushes or installs dependencies, and it
   never edits `.claude/`, `.codex/`, `.github/`, `scripts/` or a dependency unless the commission
-  says so. After every build, `git status --short -- .claude .codex .github scripts` must be
-  empty; anything else is a blocker.
+  says so. After every build, `git status --short -- .claude .codex .github scripts bin` must be
+  empty, also in every linked worktree when the build ran in the main checkout; anything else is a
+  blocker.
 - **Codex unavailable** (sandbox, MCP, timeout, any error): a Sonnet sub-agent writes instead.
   Report that the fallback ran and why.
 - **Before "done":** `emend-reviewer` (Sonnet) and a fresh read-only Codex review through

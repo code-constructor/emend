@@ -88,7 +88,7 @@ their reviews.
   read emend's state folder can act as you. Developing from a checkout moves from the README to
   `docs/setup/development.md`.
 - 2026-11-04: Opened from your request. You chose the `release` branch for the plugin and open
-  networking. 012 stays with plan task 5.1.
+  networking. 014 stays with plan task 5.1.
 - 2026-11-04: Codex was not reachable (no `codex` MCP server), so Sonnet sub-agents built and a
   second Sonnet reviewer stood in for the Codex review. The security reviews added S.3 and S.4,
   and moved the publish step to a fresh clone of the pushed tag.
