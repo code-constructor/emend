@@ -528,7 +528,7 @@ function LoadedReview({
     <AppFrame isReview onCommentReview={revision ? commentOnReview : undefined}>
       <div className="contents" onClickCapture={followReadingLink}>
         <Panes
-          inbox={<ReviewInbox collapsed={collapsed} onCollapsedChange={setCollapsed} />}
+          inbox={<ReviewInbox currentReviewId={review.id} collapsed={collapsed} onCollapsedChange={setCollapsed} />}
           tab={tab}
           hasDiff={hasDiff}
           phoneTabs={<PhoneTabs {...tabProps} />}

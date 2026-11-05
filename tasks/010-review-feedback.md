@@ -30,6 +30,8 @@ per step, in this order.
 - [x] F.10: comments render Markdown, sanitized on the server.
 - [x] F.11: both review skills put tests that only follow the code into one folded skim topic.
 - [x] F.12: the inbox filters by kind: All, Reviews, Published.
+- [x] F.13: the kind filter is a button group, All / Reviews / Pubs, in the sidebar and on the inbox
+      page, with one saved choice. The open review stays listed.
 - [x] You: check that file headers stick under the topic line once E.3 (2c67873) is deployed.
 
 ## Done when

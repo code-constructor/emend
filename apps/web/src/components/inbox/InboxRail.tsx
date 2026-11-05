@@ -9,6 +9,7 @@ import { cn } from "../ui/utils.ts";
 import { doneDimmed, needsAttention } from "./ReviewRow.tsx";
 
 export function InboxRail({ onShow }: { onShow: () => void }) {
+  // The collapsed rail ignores kind and machine filters; the expanded inbox applies its kind choice.
   const query = useQuery(inboxQuery());
   return (
     <aside

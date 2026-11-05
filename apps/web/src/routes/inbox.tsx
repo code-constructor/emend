@@ -7,6 +7,7 @@ import { AppFrame } from "../components/layout/AppFrame.tsx";
 import { Button } from "../components/ui/Button.tsx";
 import { Icon } from "../components/ui/Icon.tsx";
 import { IconButton } from "../components/ui/IconButton.tsx";
+import { SegmentedControl } from "../components/ui/SegmentedControl.tsx";
 import { Select } from "../components/ui/Select.tsx";
 import { TextField } from "../components/ui/TextField.tsx";
 import { plural } from "../lib/count.ts";
@@ -33,11 +34,13 @@ function readKind(): Kind {
 
 export function Inbox({
   compact = false,
+  currentReviewId,
   hideHead = false,
   onCollapse,
   onOpen,
 }: {
   compact?: boolean;
+  currentReviewId?: string;
   hideHead?: boolean;
   onCollapse?: () => void;
   onOpen?: () => void;
@@ -78,14 +81,15 @@ export function Inbox({
   );
   const machineFilter =
     !compact && origins.length > 1 && origins.some((origin) => origin.id === machine) ? machine : "";
-  // The collapsed rail stays unfiltered by kind, like it does by machine.
-  const kindFilter = compact ? "" : kind;
   const needle = filter.toLocaleLowerCase();
   const filtered = items.filter(
     (review) =>
       (!machineFilter || review.origin.id === machineFilter) &&
-      // A review an agent waits on is never hidden by the Reviews filter.
-      (!kindFilter || review.kind === kindFilter || (kindFilter === "review" && review.agentWaiting)) &&
+      // Keep the open sidebar review, and never hide an agent-waiting item under Reviews.
+      (!kind ||
+        review.kind === kind ||
+        (kind === "review" && review.agentWaiting) ||
+        (compact && review.id === currentReviewId)) &&
       [review.title, review.branch, review.origin.name].some((value) => value?.toLocaleLowerCase().includes(needle)),
   );
   const highlighted = useInboxArrivals(items);
@@ -110,7 +114,7 @@ export function Inbox({
             )}
           </div>
         ))}
-      <div className={compact ? "px-2.5 pb-2" : "mb-3 flex flex-wrap items-center gap-2.5"}>
+      <div className={compact ? "flex flex-col gap-2 px-2.5 pb-2" : "mb-3 flex flex-wrap items-center gap-2.5"}>
         <TextField
           aria-label="Filter reviews"
           placeholder="Filter by title, branch, machine"
@@ -118,19 +122,21 @@ export function Inbox({
           size="sm"
           value={filter}
           onChange={(event) => setFilter(event.target.value)}
-          className="min-w-0 flex-1"
+          className={compact ? "min-w-0" : "min-w-0 flex-[1_1_16rem]"}
         />
-        {!compact && items.length > 0 && (
-          <Select
-            aria-label="Kind"
+        {items.length > 0 && (
+          <SegmentedControl
+            label="Kind"
             size="sm"
-            className="min-w-0 max-w-full"
-            value={kindFilter}
-            onChange={(event) => setKind(event.target.value as Kind)}
+            className={compact ? "w-full [&>button]:flex-1 [&>button]:justify-center" : "max-w-full shrink-0"}
+            value={kind}
+            onChange={(value) => {
+              if (value === "" || value === "review" || value === "publish") setKind(value);
+            }}
             options={[
               { value: "", label: "All" },
               { value: "review", label: "Reviews" },
-              { value: "publish", label: "Published" },
+              { value: "publish", label: "Pubs" },
             ]}
           />
         )}

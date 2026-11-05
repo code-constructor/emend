@@ -2059,7 +2059,7 @@ test("machine Select appears for multiple origins, sorts names and combines with
   expect(screen.getByRole("link", { name: /Another proposal/ })).toBeTruthy();
 });
 
-test("kind Select filters every list, works with the text filter and clears with the rest", async () => {
+test("kind group filters every list, works with the text filter and clears with the rest", async () => {
   const published = { ...secondItem, kind: "publish" as const, agentWaiting: false, title: "Published notes" };
   const doneReview = {
     ...item,
@@ -2077,25 +2077,25 @@ test("kind Select filters every list, works with the text filter and clears with
   };
   withInbox([item, published, doneReview, donePublish]);
   mount();
-  const kind = await screen.findByRole("combobox", { name: "Kind" });
+  const kind = await screen.findByRole("radiogroup", { name: "Kind" });
   expect(
     within(kind)
-      .getAllByRole("option")
+      .getAllByRole("radio")
       .map((option) => option.textContent),
-  ).toEqual(["All", "Reviews", "Published"]);
-  fireEvent.change(kind, { target: { value: "publish" } });
+  ).toEqual(["All", "Reviews", "Pubs"]);
+  fireEvent.click(within(kind).getByRole("radio", { name: "Pubs" }));
   expect(screen.queryByRole("link", { name: /Synthetic review/ })).toBeNull();
   expect(screen.getByRole("link", { name: /Published notes/ })).toBeTruthy();
   // Searching makes the Done list visible, still within the kind.
   fireEvent.change(screen.getByRole("textbox", { name: "Filter reviews" }), { target: { value: "finished" } });
   expect(screen.getByRole("link", { name: /Finished notes/ })).toBeTruthy();
   expect(screen.queryByRole("link", { name: /Finished work/ })).toBeNull();
-  fireEvent.change(kind, { target: { value: "review" } });
+  fireEvent.click(within(kind).getByRole("radio", { name: "Reviews" }));
   expect(screen.getByRole("link", { name: /Finished work/ })).toBeTruthy();
   fireEvent.change(screen.getByRole("textbox", { name: "Filter reviews" }), { target: { value: "notes" } });
   expect(screen.getByText("No reviews match this filter.")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Clear filter" }));
-  expect((screen.getByRole("combobox", { name: "Kind" }) as HTMLSelectElement).value).toBe("");
+  expect(within(kind).getByRole("radio", { name: "All", checked: true })).toBeTruthy();
   expect(screen.getByRole("link", { name: /Published notes/ })).toBeTruthy();
 });
 
@@ -2103,12 +2103,11 @@ test("the chosen kind survives an unmount and remount, and Clear filter forgets 
   const published = { ...secondItem, kind: "publish" as const, agentWaiting: false, title: "Published notes" };
   withInbox([item, published]);
   const first = mount();
-  fireEvent.change(await screen.findByRole("combobox", { name: "Kind" }), { target: { value: "publish" } });
+  fireEvent.click(await screen.findByRole("radio", { name: "Pubs" }));
   expect(localStorage.getItem("emend:inbox-kind")).toBe("publish");
   first.unmount();
   mount();
-  const kind = (await screen.findByRole("combobox", { name: "Kind" })) as HTMLSelectElement;
-  expect(kind.value).toBe("publish");
+  expect(await screen.findByRole("radio", { name: "Pubs", checked: true })).toBeTruthy();
   expect(screen.queryByRole("link", { name: /Synthetic review/ })).toBeNull();
   fireEvent.change(screen.getByRole("textbox", { name: "Filter reviews" }), { target: { value: "zzz" } });
   fireEvent.click(screen.getByRole("button", { name: "Clear filter" }));
@@ -2126,10 +2125,10 @@ test("a published item with a waiting agent still shows under Reviews", async ()
   };
   withInbox([item, waiting, quiet]);
   mount();
-  fireEvent.change(await screen.findByRole("combobox", { name: "Kind" }), { target: { value: "review" } });
+  fireEvent.click(await screen.findByRole("radio", { name: "Reviews" }));
   expect(screen.getByRole("link", { name: /Waiting notes/ })).toBeTruthy();
   expect(screen.queryByRole("link", { name: /Quiet notes/ })).toBeNull();
-  fireEvent.change(screen.getByRole("combobox", { name: "Kind" }), { target: { value: "publish" } });
+  fireEvent.click(screen.getByRole("radio", { name: "Pubs" }));
   expect(screen.getByRole("link", { name: /Quiet notes/ })).toBeTruthy();
   expect(screen.queryByRole("link", { name: /Synthetic review/ })).toBeNull();
 });
@@ -2138,16 +2137,138 @@ test("a stored garbage kind shows All", async () => {
   localStorage.setItem("emend:inbox-kind", "nonsense");
   withInbox([item, secondItem]);
   mount();
-  const kind = (await screen.findByRole("combobox", { name: "Kind" })) as HTMLSelectElement;
-  expect(kind.value).toBe("");
+  expect(await screen.findByRole("radio", { name: "All", checked: true })).toBeTruthy();
   expect(screen.getByRole("link", { name: /Synthetic review/ })).toBeTruthy();
 });
 
-test("kind Select is absent from an empty inbox", async () => {
+test("kind group is absent from an empty inbox", async () => {
   withInbox([]);
   mount();
   await screen.findByText("No reviews yet.");
-  expect(screen.queryByRole("combobox", { name: "Kind" })).toBeNull();
+  expect(screen.queryByRole("radiogroup", { name: "Kind" })).toBeNull();
+});
+
+async function openReviewInbox() {
+  await screen.findByRole("heading", { name: item.title, level: 1 });
+  if (width < 1280) {
+    fireEvent.click(screen.getByRole("button", { name: "Show inbox" }));
+    return within(await screen.findByRole("dialog", { name: "Inbox" }));
+  }
+  return within(screen.getByTestId("inbox-pane"));
+}
+
+test.each([1280, 900])("sidebar kind group filters and retains the open review at %s px", async (size) => {
+  width = size;
+  const published = {
+    ...secondItem,
+    id: "77777777-7777-4777-8777-777777777777",
+    kind: "publish" as const,
+    agentWaiting: false,
+    title: "Published notes",
+  };
+  withInbox([item, secondItem, published]);
+  mount(`/r/${id}`);
+  const sidebar = await openReviewInbox();
+  const kind = await sidebar.findByRole("radiogroup", { name: "Kind" });
+  expect(
+    within(kind)
+      .getAllByRole("radio")
+      .map((option) => option.textContent),
+  ).toEqual(["All", "Reviews", "Pubs"]);
+  expect(sidebar.queryByRole("combobox", { name: "Machine" })).toBeNull();
+  fireEvent.click(within(kind).getByRole("radio", { name: "Pubs" }));
+  expect(sidebar.getByRole("link", { name: /Published notes/ })).toBeTruthy();
+  expect(sidebar.getByRole("link", { name: /Synthetic review/ }).getAttribute("aria-current")).toBe("page");
+  expect(sidebar.queryByRole("link", { name: /Another proposal/ })).toBeNull();
+  fireEvent.click(within(kind).getByRole("radio", { name: "All" }));
+  expect(sidebar.getByRole("link", { name: /Another proposal/ })).toBeTruthy();
+});
+
+test.each([1280, 900])("kind choice is shared across sidebar and page remounts at %s px", async (size) => {
+  width = size;
+  const published = { ...secondItem, kind: "publish" as const, agentWaiting: false, title: "Published notes" };
+  withInbox([item, published]);
+  const first = mount(`/r/${id}`);
+  const sidebar = await openReviewInbox();
+  fireEvent.click(await sidebar.findByRole("radio", { name: "Pubs" }));
+  expect(localStorage.getItem("emend:inbox-kind")).toBe("publish");
+  first.unmount();
+  const page = mount();
+  expect(await screen.findByRole("radio", { name: "Pubs", checked: true })).toBeTruthy();
+  expect(screen.getByRole("link", { name: /Published notes/ })).toBeTruthy();
+  expect(screen.queryByRole("link", { name: /Synthetic review/ })).toBeNull();
+  fireEvent.click(screen.getByRole("radio", { name: "Reviews" }));
+  expect(localStorage.getItem("emend:inbox-kind")).toBe("review");
+  page.unmount();
+  mount(`/r/${id}`);
+  const remounted = await openReviewInbox();
+  expect(await remounted.findByRole("radio", { name: "Reviews", checked: true })).toBeTruthy();
+  expect(remounted.queryByRole("link", { name: /Published notes/ })).toBeNull();
+  fireEvent.change(remounted.getByRole("textbox", { name: "Filter reviews" }), { target: { value: "zzz" } });
+  fireEvent.click(remounted.getByRole("button", { name: "Clear filter" }));
+  expect(remounted.getByRole("radio", { name: "All", checked: true })).toBeTruthy();
+  expect(localStorage.getItem("emend:inbox-kind")).toBeNull();
+  expect(remounted.getByRole("link", { name: /Published notes/ })).toBeTruthy();
+});
+
+test.each([1280, 900])("sidebar Reviews keeps waiting publishes and the open publish at %s px", async (size) => {
+  width = size;
+  localStorage.setItem("emend:inbox-kind", "review");
+  const waiting = { ...secondItem, kind: "publish" as const, title: "Waiting notes" };
+  const quiet = {
+    ...waiting,
+    id: "77777777-7777-4777-8777-777777777777",
+    agentWaiting: false,
+    title: "Quiet notes",
+  };
+  withInbox([{ ...item, kind: "publish", agentWaiting: false }, waiting, quiet]);
+  mount(`/r/${id}`);
+  const sidebar = await openReviewInbox();
+  expect(await sidebar.findByRole("radio", { name: "Reviews", checked: true })).toBeTruthy();
+  expect(sidebar.getByRole("link", { name: /Synthetic review/ })).toBeTruthy();
+  expect(sidebar.getByRole("link", { name: /Waiting notes/ })).toBeTruthy();
+  expect(sidebar.queryByRole("link", { name: /Quiet notes/ })).toBeNull();
+});
+
+test.each([
+  { path: "/", size: 390 },
+  { path: `/r/${id}`, size: 1280 },
+  { path: `/r/${id}`, size: 900 },
+])("kind storage failures default to All and leave controls usable at $path ($size px)", async ({ path, size }) => {
+  width = size;
+  const denied = vi.fn(() => {
+    throw new Error("Storage denied");
+  });
+  vi.stubGlobal("localStorage", { getItem: denied, setItem: denied, removeItem: denied });
+  withInbox([item, { ...secondItem, kind: "publish", agentWaiting: false }]);
+  const first = mount(path);
+  if (path !== "/") await openReviewInbox();
+  expect(await screen.findByRole("radio", { name: "All", checked: true })).toBeTruthy();
+  fireEvent.click(screen.getByRole("radio", { name: "Reviews" }));
+  expect(screen.getByRole("radio", { name: "Reviews", checked: true })).toBeTruthy();
+  expect(screen.queryByRole("link", { name: /Another proposal/ })).toBeNull();
+  fireEvent.click(screen.getByRole("radio", { name: "All" }));
+  expect(screen.getByRole("link", { name: /Another proposal/ })).toBeTruthy();
+  fireEvent.click(screen.getByRole("radio", { name: "Pubs" }));
+  first.unmount();
+  mount(path);
+  if (path !== "/") await openReviewInbox();
+  expect(await screen.findByRole("radio", { name: "All", checked: true })).toBeTruthy();
+  expect(denied).toHaveBeenCalledWith("emend:inbox-kind");
+  expect(denied).toHaveBeenCalledWith("emend:inbox-kind", "review");
+});
+
+test.each([1280, 900])("collapsed rail ignores the saved kind at %s px", async (size) => {
+  width = size;
+  localStorage.setItem("emend:inbox-kind", "publish");
+  withInbox([item, { ...secondItem, agentWaiting: false }]);
+  mount(`/r/${id}`);
+  await screen.findByRole("heading", { name: item.title, level: 1 });
+  if (size === 1280) fireEvent.click(screen.getByRole("button", { name: "Collapse inbox" }));
+  const rail = within(screen.getByRole("complementary", { name: "Inbox" }));
+  expect(await rail.findByRole("link", { name: /Another proposal/ })).toBeTruthy();
+  expect(rail.getByRole("link", { name: /Synthetic review/ })).toBeTruthy();
+  expect(rail.queryByRole("radiogroup", { name: "Kind" })).toBeNull();
 });
 
 test("single origin omits the machine filter; subtitle excludes moved and completed reviews", async () => {
