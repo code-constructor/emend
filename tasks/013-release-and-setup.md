@@ -41,16 +41,17 @@ attached to their hub, or all of them. The first outside user starts on 2026-11-
 
 6.3 Smooth updates and any network:
 
-- [ ] R.3: `.github/workflows/release.yml` releases nightly at 02:00 UTC and on a manual trigger,
+- [x] R.3: `.github/workflows/release.yml` releases nightly at 02:00 UTC and on a manual trigger,
       only when shipped changes landed since the last `v*` tag. It picks patch or minor from the
       commit types, runs `pnpm verify`, packs, publishes through npm trusted publishing with
       provenance, tags the released `main` commit, moves `release` and creates a GitHub Release.
       Nothing is committed back. `plugin.json` drops its version, so the plugin follows commits.
       `pnpm release` and `release-pack` go away; `install:local` stamps the newest tag's version.
-- [ ] You: create the GitHub environment `npm` and the rulesets for `release` and `v*` (done
-      2026-11-05), then the npm trusted publisher with direct `npm publish` allowed, then set the
-      repository variable `RELEASE_ENABLED` (docs/releasing.md, "One-time setup"). Then run the
-      workflow with `dry_run`, then for real.
+- [x] You: create the GitHub environment `npm` and the rulesets for `release` and `v*`, then the
+      npm trusted publisher with direct `npm publish` allowed, then set the repository variable
+      `RELEASE_ENABLED` (docs/releasing.md, "One-time setup"). Then run the workflow with
+      `dry_run`, then for real (done 2026-11-05: 0.2.0 released from GitHub Actions, and npm
+      publishing now requires 2FA and disallows tokens).
 - [ ] N.1: `emend serve --public-url <origin>` for a hub behind your own address;
       `docs/setup/hub-network.md`.
 - [ ] S.1: `emend` and `emend service status` say when the running server is another version.
