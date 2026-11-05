@@ -12,7 +12,8 @@ Code or Codex do the setup with you.
 | [One machine](setup/local.md) | You try emend or review agent work where the agents run. | Linux or macOS, Node.js 24.18 or newer, git 2.44 or newer. | Only this machine (`127.0.0.1:3636`). |
 | [Your own hub on Tailscale](setup/hub-tailscale.md) | You want to review from your phone and other devices. | An always-on machine, Tailscale on it and on every device, MagicDNS and HTTPS certificates on. | Your own devices on your tailnet, over HTTPS. |
 | [Attach more machines](setup/attach.md) | You run a hub and work with agents on other machines. | A working hub and emend on each machine. | Each machine sends its reviews to your hub. |
-| [Set up your agents](setup/agents.md) | You want Claude Code, Codex or others to publish and wait. | emend installed and your agent. | Nothing new; it sets up the skills, the sandbox rules and the MCP server. |
+| [Set up your agents](setup/agents.md) | You want Claude Code, Codex or others to publish and wait. | emend installed and your agent. | Nothing new; it sets up the skills and the MCP server. |
+| [Develop emend from a checkout](setup/development.md) | You change emend itself or run it from a clone. | A clone, Node.js 24.18 or newer, git 2.44 or newer and pnpm. | Nothing new; it installs a build from the checkout. |
 | [Update](setup/update.md) | A new version is out. | The setups you run. | The hub updates first, then its machines. |
 | [Troubleshooting](setup/troubleshooting.md) | A setup or update step fails. | The error line. | Nothing. |
 
@@ -57,6 +58,7 @@ https://github.com/shllg/emend/blob/release/docs/setup.md.
 - [Your own hub on Tailscale](setup/hub-tailscale.md)
 - [Attach more machines](setup/attach.md)
 - [Set up your agents](setup/agents.md)
+- [Develop emend from a checkout](setup/development.md)
 - [Update](setup/update.md)
 - [Troubleshooting](setup/troubleshooting.md)
 

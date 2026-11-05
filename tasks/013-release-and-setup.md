@@ -47,7 +47,7 @@ attached to their hub, or all of them. The first outside user starts on 2026-11-
 - [ ] S.2: `emend stop`.
 - [ ] S.3: `publish`, `wait`, `feedback`, `reply` and `mcp` refuse an `emend` that resolves inside
       the current repository, as `emend service install` already does. Under mise, a repo's own
-      tool config can point `emend` at its code, and these commands run outside the agent sandbox.
+      tool config can point `emend` at its code, and agents run these commands with full rights.
 - [ ] S.4: emend remembers the Tailscale Serve route it created, so a route left by a crash is
       still removed on the next stop (open owner item 31).
 
@@ -59,6 +59,10 @@ their reviews.
 
 ## Notes
 
+- 2026-11-05: For plan task 6.2, you chose to leave sandbox setup to each agent's own
+  documentation. The setup docs drop the sandbox and deny rules, and say that any program that can
+  read emend's state folder can act as you. Developing from a checkout moves from the README to
+  `docs/setup/development.md`.
 - 2026-11-04: Opened from your request. You chose the `release` branch for the plugin and open
   networking. 012 stays with plan task 5.1.
 - 2026-11-04: Codex was not reachable (no `codex` MCP server), so Sonnet sub-agents built and a

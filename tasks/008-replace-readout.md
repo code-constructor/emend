@@ -23,17 +23,16 @@ task 007.
 - [x] 4.4: the Send bar says whether an agent waits; one resume command for any agent. After a
       Send, a window waits for the agent to pick it up and shows the resume command if none does;
       a review shows "Not picked up yet" or "Picked up" from the agent's confirmation.
-- [x] 4.5: agent commands `emend ls` and `emend status`. Whether they join the sandbox exemptions
-      is your call: the security review advises `status` only, because `ls` shows every review on
-      the machine.
+- [x] 4.5: agent commands `emend ls` and `emend status`. The question whether they join the
+      sandbox exemptions fell away on 2026-11-05: the setup docs no longer list exemptions.
 - [ ] 4.6: built-in features for HTML docs. Waits for your go on plan task 1.12b.
 - [ ] 4.7: any text file as a doc, shown as source.
 - [ ] 4.8: larger size limits, measured first.
 - [ ] 4.9: the hosted service and its cost. Discussion, after task 007.
 - [ ] 4.10: sign-in per browser on the phone. You check it during task 007.
 - [ ] 4.11: the switch from readout. You switched on 2026-11-04, ahead of task 007 and 1.12b, and
-      `emend-publish` now has readout's trigger. Left for you: the sandbox exemptions, and
-      republishing the readout pages you keep before they expire around 2026-12-04.
+      `emend-publish` now has readout's trigger. Left for you: republishing the readout pages you
+      keep before they expire around 2026-12-04. The sandbox exemptions fell away on 2026-11-05.
 
 ## Done when
 

@@ -23,9 +23,9 @@ command; run no process listing yourself, ask me to run pgrep in my own terminal
 '[e]mend.mjs serve'; macOS: pgrep -lf '[e]mend.mjs serve').
 Set me up with emend on this one machine (https://github.com/shllg/emend). Follow
 https://github.com/shllg/emend/blob/release/docs/setup/local.md step by step. Ask me which
-optional steps I want: the service, the agent skills and sandbox rules, and docRoots folders. For
-the final check, give me the emend publish command to run in my own terminal; run it yourself only
-if agents.md step 3 is already set up and the command works inside your sandbox.
+optional steps I want: the service, the agent skills, and docRoots folders. For the final check,
+give me the emend publish command to run in my own terminal; run it yourself only if the command
+works inside your sandbox.
 ```
 
 ## What you need
@@ -256,12 +256,11 @@ emend on Linux, ~/Library/Logs/emend.log on macOS) and diagnose it with
 https://github.com/shllg/emend/blob/release/docs/setup/troubleshooting.md.
 ```
 
-## 5. Give your agents the skills and sandbox rules
+## 5. Give your agents the skills
 
-Your agents need the review skills, and an agent in a sandbox needs `emend publish`, `wait`,
-`feedback` and `reply` to leave it. [agents.md](agents.md) covers both for Claude Code and Codex:
-the plugin, `emend skills install`, the sandbox rules and the MCP server. Do that page now. Skip
-this step if you do not use agents with emend yet.
+Your agents need the review skills. [agents.md](agents.md) covers the plugin, `emend skills install`
+and the MCP server for Claude Code and Codex. Do that page now. Skip this step if you do not use
+agents with emend yet.
 
 ```text
 Rules: show me each change and wait for my yes; never read secrets (tokens, .env files, credential
@@ -269,7 +268,7 @@ stores) or emend's state folder; never open ~/.claude/settings.json whole; if a 
 manages a file or link you would change (a symlink into a dotfiles repository, stow, chezmoi,
 home-manager or similar), change its source and tell me how to apply it; outside your sandbox run
 only emend skills install.
-Give my coding agents the emend skills and sandbox rules: follow
+Give my coding agents the emend skills: follow
 https://github.com/shllg/emend/blob/release/docs/setup/agents.md and skip any agent I do not use.
 ```
 

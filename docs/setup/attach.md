@@ -23,8 +23,8 @@ Attach this machine to my emend hub (https://github.com/shllg/emend). Follow
 https://github.com/shllg/emend/blob/release/docs/setup/attach.md step by step. emend must already be
 installed here (https://github.com/shllg/emend/blob/release/docs/setup/local.md). Tell me what to
 run on the hub and what to run here, and wait for me between the two. For the final check, give me
-the emend publish command to run in my own terminal; run it yourself only if agents.md step 3 is
-already set up and the command works inside your sandbox.
+the emend publish command to run in my own terminal; run it yourself only if the command works
+inside your sandbox.
 ```
 
 ## What you need
@@ -99,7 +99,8 @@ The machine credential sits in this machine's state folder. Anyone with a copy o
 as a backup or a lost laptop, can act as this machine. If you lose a machine or a phone, revoke it
 at once on the hub: `emend devices`, then `emend devices --revoke <id>`.
 
-You run this yourself. A sandboxed agent cannot attach your machine, by design.
+You run this yourself, never an agent: attaching sends this machine's reviews to the hub. See
+[What an agent can do with emend](agents.md#what-an-agent-can-do-with-emend).
 
 ```text
 Rules: never read secrets (tokens, .env files, credential stores) or emend's state folder; never run
@@ -111,9 +112,7 @@ success line (on stderr) looks like: "emend: attached to <hub name>; copied <n> 
 
 ## 3. Set up the agents on this machine
 
-The agents here need the review skills. Follow [agents.md](agents.md). The sandbox rules there
-apply to an attached machine too: `emend publish`, `wait`, `feedback` and `reply` talk to the hub
-and need to leave an agent's sandbox.
+The agents here need the review skills. Follow [agents.md](agents.md).
 
 This machine needs no service of its own. An attached emend does not use a local server: its
 `emend publish`, `wait`, `feedback`, `reply` and MCP tools go to the hub. Run `emend` and it prints
@@ -127,7 +126,7 @@ stores) or emend's state folder; if a dotfiles tool manages a file or link you w
 symlink into a dotfiles repository, stow, chezmoi, home-manager or similar), change its source and
 tell me how to apply it; outside your sandbox run only emend skills install, and no other command;
 never retry a command through another program (for example script) to get a terminal.
-Give the agents on this attached machine the emend skills and sandbox rules: follow
+Give the agents on this attached machine the emend skills: follow
 https://github.com/shllg/emend/blob/release/docs/setup/agents.md and skip any agent I do not use. Do
 not install an emend service here; this machine uses the hub.
 ```

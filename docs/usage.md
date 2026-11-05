@@ -7,8 +7,8 @@ install and set up emend first, start with [setup.md](setup.md).
 
 `emend config` lists the settings. `emend config add docRoots <folder>` lets agents publish docs
 from a folder outside their repository. `emend config set openBrowser true` makes `emend` open your
-browser instead of printing a one-time sign-in link. Run these yourself: an agent in its sandbox
-cannot write emend's settings.
+browser instead of printing a one-time sign-in link. Run these yourself, never through an agent:
+they change what your agents may publish.
 
 ## Publish a doc
 

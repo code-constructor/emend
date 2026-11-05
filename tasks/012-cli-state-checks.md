@@ -28,4 +28,5 @@ Both checks have landed and passed their reviews.
 ## Notes
 
 - 2026-11-05: Opened from the security review of plan task 4.5. The sandbox hint for `emend ls`
-  and `emend status` stays out until you decide whether the setup docs exempt them.
+  and `emend status` is no longer needed: the setup docs stopped listing sandbox exemptions the
+  same day.

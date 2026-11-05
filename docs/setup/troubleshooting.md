@@ -11,17 +11,15 @@ the lines below show it only where the exact text matters.
 emend prints:
 
 ```text
-emend cannot write its state folder <folder>. If an agent sandbox runs emend, let emend run outside it: https://github.com/shllg/emend#use-with-sandboxed-agents
+emend cannot write its state folder <folder>. If an agent sandbox runs emend, let emend run outside it: https://github.com/shllg/emend/blob/release/docs/setup/troubleshooting.md#an-agents-sandbox-blocks-emend
 ```
 
-Why: an agent's sandbox keeps `emend publish`, `wait`, `feedback` and `reply` from reaching the
-server on `127.0.0.1` and from writing emend's state folder.
+Why: some agents run commands in a sandbox that keeps them from emend's state folder or from
+the server on `127.0.0.1`.
 
-Fix: add the sandbox rules for your agent, once per machine, as
-[agents.md](agents.md#3-use-with-sandboxed-agents) says. Read each
-change closely: these commands then run with your full rights. A command that needs the service
-manager, `127.0.0.1` or the state folder, such as `emend service install`, must run outside the
-sandbox too. Run it in your own terminal if you cannot.
+Fix: run the command in your own terminal, or allow emend in your agent's own settings.
+How depends on your agent, so see its documentation. Before you allow it, read
+[What an agent can do with emend](agents.md#what-an-agent-can-do-with-emend).
 
 Related lines:
 

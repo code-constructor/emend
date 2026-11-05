@@ -16,7 +16,7 @@ export class CliSignalExit extends Error {
   }
 }
 export const sandboxHint =
-  "If an agent sandbox runs emend, let emend run outside it: https://github.com/shllg/emend#use-with-sandboxed-agents";
+  "If an agent sandbox runs emend, let emend run outside it: https://github.com/shllg/emend/blob/release/docs/setup/troubleshooting.md#an-agents-sandbox-blocks-emend";
 
 export class CliError extends Error {
   readonly sandboxStateDir?: string;

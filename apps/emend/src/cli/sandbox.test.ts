@@ -21,7 +21,7 @@ test("the state-folder diagnostic always carries the exact sandbox hint on one l
     "emend cannot write its state folder /synthetic/state.",
   );
   expect(errorLine(new StateFolderWriteError("/synthetic/state"), "feedback")).toBe(
-    "emend cannot write its state folder /synthetic/state. If an agent sandbox runs emend, let emend run outside it: https://github.com/shllg/emend#use-with-sandboxed-agents\n",
+    "emend cannot write its state folder /synthetic/state. If an agent sandbox runs emend, let emend run outside it: https://github.com/shllg/emend/blob/release/docs/setup/troubleshooting.md#an-agents-sandbox-blocks-emend\n",
   );
   expect(errorLine(new StateFolderWriteError("/synthetic/state\nfolder"), "feedback")).toBe(
     `emend cannot write its state folder /synthetic/state\\u{a}folder. ${sandboxHint}\n`,

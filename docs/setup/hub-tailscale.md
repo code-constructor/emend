@@ -27,8 +27,7 @@ Make this machine my emend hub on my own tailnet (https://github.com/shllg/emend
 https://github.com/shllg/emend/blob/release/docs/setup/hub-tailscale.md step by step. emend must
 already be installed here (https://github.com/shllg/emend/blob/release/docs/setup/local.md). Ask me
 before each step, and tell me when I must act on my phone or in the Tailscale admin console. For the final check, give me the emend publish command to run in my own
-terminal; run it yourself only if agents.md step 3 is already set up and the command works inside
-your sandbox.
+terminal; run it yourself only if the command works inside your sandbox.
 ```
 
 ## What you need
@@ -181,7 +180,7 @@ because it has its own storage; on another phone install the app from the browse
 ## 4. Attach your machines and set up their agents (optional)
 
 To make the agents on your other machines publish to the hub, follow [attach.md](attach.md). The
-agent side of each machine, including the sandbox rules, is on [agents.md](agents.md).
+agent side of each machine is on [agents.md](agents.md).
 
 ```text
 Rules: never read secrets (tokens, .env files, credential stores) or emend's state folder; never run
