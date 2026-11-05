@@ -95,7 +95,10 @@ beforeEach(() => {
   vi.stubGlobal("fetch", fetchMock);
   client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 function mount(path = "/") {
   const history = createMemoryHistory({ initialEntries: [path] });
@@ -123,6 +126,8 @@ function inboxItems(): InboxItem[] {
 }
 
 test("the inbox shows Active, Snoozed and Done in order with counts, wake times and a collapsed Done", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-11-04T12:00:00.000Z"));
   inbox = inboxItems();
   mount();
   await screen.findByRole("link", { name: /Active one/ });
@@ -270,6 +275,10 @@ test.each([
   ["a timed snooze", "2026-11-05T09:00:00.000Z"],
   ["a snooze until the next revision", null],
 ])("the header names %s", async (_name, snoozedUntil) => {
+  if (snoozedUntil) {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-04T12:00:00.000Z"));
+  }
   review = { ...item, list: "snoozed", snoozed: true, snoozedUntil };
   mount(`/r/${id}`);
   await screen.findByRole("heading", { name: "Synthetic review", level: 1 });
