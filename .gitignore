@@ -11,6 +11,8 @@ dist
 .sync-counterpart-path
 .claude/settings.local.json
 .claude/worktrees/
+# bin/wt state for each worktree
+.wt/
 
 # Throwaway spikes (plan tasks 0.3 and 0.4)
 spikes/

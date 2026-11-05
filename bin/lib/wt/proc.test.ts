@@ -1,0 +1,34 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { run } from "./proc.ts";
+
+test("run returns output and exit code without a shell", () => {
+  const r = run(process.execPath, ["-e", "process.stdout.write(process.argv[1]); process.exit(3)", "$HOME;x"], {
+    cwd: "/",
+  });
+  assert.equal(r.code, 3);
+  assert.equal(r.stdout, "$HOME;x");
+});
+
+test("run passes input, keeps the caller's environment and fixes prompts and pagers", () => {
+  process.env.WT_TEST_KEEP = "kept";
+  try {
+    const r = run(
+      process.execPath,
+      [
+        "-e",
+        "const e = process.env; process.stdout.write([e.WT_TEST_KEEP, e.GIT_TERMINAL_PROMPT, e.GH_PROMPT_DISABLED, e.GH_NO_UPDATE_NOTIFIER, e.GH_PAGER, e.GIT_PAGER, e.PAGER, e.LC_ALL, require('fs').readFileSync(0, 'utf8')].join(':'))",
+      ],
+      { cwd: "/", input: "in" },
+    );
+    assert.equal(r.stdout, "kept:0:1:1:cat:cat:cat:C.UTF-8:in");
+  } finally {
+    delete process.env.WT_TEST_KEEP;
+  }
+});
+
+test("run reports a missing program as 127 and a timeout as 124", () => {
+  assert.equal(run("wt-no-such-program", [], { cwd: "/" }).code, 127);
+  const slow = run(process.execPath, ["-e", "setTimeout(() => {}, 5000)"], { cwd: "/", timeoutMs: 200 });
+  assert.equal(slow.code, 124);
+});

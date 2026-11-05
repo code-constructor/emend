@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Launcher for bin/wt: runs the TypeScript entry point that sits next to this file. Works through a symlink.
+self="${BASH_SOURCE[0]}"
+while [ -L "$self" ]; do
+  link="$(readlink "$self")"
+  case "$link" in
+    /*) self="$link" ;;
+    */*) self="${self%/*}/$link" ;;
+    *) self="./$link" ;;
+  esac
+done
+case "$self" in
+  */*) dir="${self%/*}" ;;
+  *) dir="." ;;
+esac
+dir="$(cd -P "$dir" && pwd -P)"
+exec node "$dir/lib/wt/main.ts" "$@"

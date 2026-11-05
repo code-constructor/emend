@@ -1,5 +1,5 @@
 # Machine-local files that a new worktree needs, such as the MCP server registration.
-# Claude Code copies the gitignored files listed here into each worktree it creates.
+# Claude Code and `bin/wt setup` copy the gitignored files listed here into each worktree they create.
 # The leading slash limits each pattern to the repository root.
 /.mcp.json
 /.claude/settings.local.json
