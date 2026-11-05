@@ -397,7 +397,7 @@ to make a read fit a per-Send or per-revision limit. The limits below apply to t
 | `RenderedWriteup.sections[].label` | `titleChars + " — Example".length` (210), the longest renderer suffix appended to a topic title |
 | Section `blocks` and Markdown doc `blocks` | Each at most `blocksPerRevision` (100000); the same limit also applies to all writeup blocks combined and to writeup plus doc blocks combined |
 | `RenderedBlock.html`, `text`, `source` | Each bounded by `renderedBytesPerRevision` (268435456) UTF-8 bytes, the stored renderer output budget; source is optional |
-| `RenderedWriteup`, Markdown doc block arrays, and revision rendered content | Serialized UTF-8 JSON must fit `renderedBytesPerRevision`, including escaping and structure. The revision budget combines the writeup and nonempty Markdown doc block arrays; empty arrays can represent docs without stored rendered data and add no bytes to that combined read check |
+| `RenderedWriteup`, Markdown doc block arrays, and revision rendered content | Serialized UTF-8 JSON must fit `renderedBytesPerRevision`, including escaping and structure. The revision budget combines the writeup, present doc title/heading metadata and nonempty Markdown doc block arrays; empty arrays can represent docs without stored rendered data and add no bytes to that combined read check |
 | File/doc paths, `oldPath`, block IDs and `changedBlocks[].blockId` | Reuse `FilePath`/`BlockId`, including `pathChars` (4096), path segments of at most `pathSegmentChars` (255), and the existing format checks |
 | Topics and section/file topic references | Reuse `TopicMeta`/`TopicSlug`: 64-character slugs, `titleChars`, `summaryChars`, `blastScopeChars` and `blastNoteChars` limits and their existing value checks |
 | `ThreadView.comments[].body` | Reuses `CommentBody`: `commentBodyChars` (20000), nonblank, well-formed UTF-16 |
@@ -508,7 +508,7 @@ metadata, revisions, topics, files, agent notes, doc assets, writeups, threads, 
 changed blocks, comments, Sends and retained deliveries. Potential repo/blob inserts are counted
 conservatively even when already present. An excess is `400 invalid_request` before the writer
 transaction starts. `importRenderedBytes` (1073741824, 1 GiB) bounds cumulative rendered writeup
-and Markdown output, counting each rendering even when content hashes repeat. Exceeding it stops
+and Markdown output plus doc title/heading metadata, counting each rendering even when content hashes repeat. Exceeding it stops
 the import with `413 too_large`, without database rows; immutable files already staged may remain.
 
 `importDerivedBytes` (67108864, 64 MiB) bounds the bytes of the hub-derived placement and
@@ -1055,6 +1055,9 @@ limit with `413 too_large` before parsing. Upload content also has the role's by
 | `prefixSuffixChars` | 32 characters each |
 | `diffContextLines` | 3 lines per side |
 | `titleChars` | 200 characters |
+| `headingsPerDoc` | 1024 h2/h3 entries per doc |
+| `headingTextChars` | 200 characters per cleaned heading label |
+| `headingIdChars` | 256 characters per declared Markdown heading ID, including its prefix |
 | `diffSideBytes` | 1048576 bytes shown per side |
 | `markdownDocBytes` | 1048576 bytes |
 | `htmlDocBytes` | 8388608 bytes |
@@ -1156,3 +1159,42 @@ escaped line on stderr.
 | `too_large` | 413 | A JSON request body or uploaded content exceeds its byte limit; reject before parsing. |
 | `client_outdated` | 426 | The CLI version is below the minimum supported version. |
 | `rate_limited` | 429 | Pairing code entry is locked for 10 minutes after five wrong attempts. |
+
+### Document metadata and links
+
+`PublishManifest.files[].title` and `PublishRequest.files[].title` are optional strings, nonblank
+and at most `LIMITS.titleChars` (200), allowed only on files whose role is `doc`; other roles reject
+a title. At publish the server applies `cleanDocTitle`; an empty result is ignored. Doc titles
+fall back to the document's own title, then its filename. HTML uses
+only `head > title`, then the first HTML-namespace `h1` in the body. Markdown uses the first
+rendered `h1` heading block, so removed raw HTML cannot supply a title. CLI inferred review titles
+use the same extraction. Titles and heading labels are plain cleaned text.
+
+Each `RevisionView.docs[]` optionally includes `title: string` and
+`headings: { level: 2 | 3; text: string; id?: string }[]`. Older revisions without either field
+remain valid. Markdown heading IDs name the rendered heading's anchor. HTML headings carry no `id`;
+their list index addresses them in document order, including entries with empty cleaned labels.
+The HTML parser uses scripting enabled, a nesting limit of 512, and the same skipped elements as
+`docText`. Unreadable HTML has an empty heading list.
+
+`LIMITS.headingsPerDoc` is 1024 and `LIMITS.headingTextChars` is 200. Heading IDs are bounded by
+`LIMITS.headingIdChars` (256), including the prefix. An author's sanitized `user-content-` ID is
+kept only if unique among all element IDs in the doc; otherwise the heading gets a generated
+`heading-<hash>` ID. Declared heading IDs are unique.
+Present title/heading metadata counts toward the existing revision rendered-byte budget and the
+import rendered-byte budget. Absent metadata adds no bytes for older revisions.
+Export and import file rows optionally carry nullable `title`, never heading lists; the import
+schema discards supplied `headings`. The hub cleans titles and recomputes headings from source
+when rendering, preserving compatibility with older exports.
+
+After sanitize, writeup and Markdown links that resolve to a doc in the revision become
+`?tab=docs&doc=<manifest path>` using `URLSearchParams`. A fragment `f` keeps `#h-user-content-<f>`
+(URL-encoded) only when `user-content-<f>` is a declared heading ID of the target doc. A fragment is
+never compared with a declared ID directly, so generated `heading-` IDs are never link targets.
+Author queries and undeclared fragments are discarded. Links to HTML docs keep
+no fragment. Markdown docs that fail rendering or exceed its budget declare no headings, but
+keep their title. Links into such a doc may keep a fragment, which the app then ignores.
+The shared resolver decodes each segment once and rejects encoded separators, controls, schemes,
+network or root-relative paths, queries and traversal above the manifest root. Writeup paths
+start at that root; doc paths start at the linking doc's directory. Paths match exactly.
+Other relative links retain no href. Comment HTML receives no doc context and stays unchanged.

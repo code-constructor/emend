@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { AgentNotes, validateAgentNotes } from "./agent-note.ts";
+import { DocTitle } from "./doc.ts";
 import { LIMITS } from "./limits.ts";
 import { PublishLinks, RepoUrl } from "./links.ts";
 import { FilePath, OTHER_TOPIC, TopicMeta, TopicSlug } from "./review.ts";
@@ -66,7 +67,12 @@ export const PublishManifest = z
             role: z.enum(["diff", "doc"]),
             topic: TopicSlug.optional(),
             source: source.optional(),
+            title: DocTitle.optional(),
             notes: AgentNotes.optional(),
+          })
+          .refine((file) => file.role === "doc" || file.title === undefined, {
+            path: ["title"],
+            message: "only doc files have titles",
           })
           .refine((file) => file.role === "diff" || file.notes === undefined, {
             path: ["notes"],

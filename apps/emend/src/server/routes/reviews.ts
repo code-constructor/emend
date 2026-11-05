@@ -298,8 +298,13 @@ async function revisionView(ownerId: string, q: Queries, deps: AppDeps, reviewId
   const docs = [];
   for (const file of fileRows) {
     if (file.role !== "doc") continue;
+    const metadata = {
+      ...(file.title !== null ? { title: file.title } : {}),
+      ...(file.headings !== null ? { headings: file.headings } : {}),
+    };
     if (file.mediaType === "text/html") {
       docs.push({
+        ...metadata,
         path: file.path,
         kind: "html",
         contentUrl: `/content/${revision.contentKey}${file.id.replaceAll("-", "")}/${file.path.split("/").map(encodeURIComponent).join("/")}`,
@@ -308,6 +313,7 @@ async function revisionView(ownerId: string, q: Queries, deps: AppDeps, reviewId
       docs.push({
         path: file.path,
         kind: "markdown",
+        ...metadata,
         blocks: file.renderedBlob ? await readJson(file.renderedBlob) : [],
       });
     }

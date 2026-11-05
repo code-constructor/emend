@@ -81,6 +81,30 @@ test("bundle strips authority and capability fields while preserving row identit
   const { placements: _placements, changedBlocks: _changedBlocks, ...expected } = input;
   expect(result).toEqual(expected);
 });
+
+test("import strips heading declarations while preserving a doc title", () => {
+  const input = bundle();
+  const file = {
+    id: randomUUID(),
+    revisionId: input.revisions[0]?.id,
+    path: "doc.md",
+    oldPath: null,
+    role: "doc",
+    status: null,
+    topicSlug: null,
+    ord: 0,
+    oldBlob: null,
+    newBlob: "a".repeat(64),
+    renderedBlob: null,
+    title: "Named",
+    headings: [{ level: 2, text: "Forged", id: "thread-foreign" }],
+    flag: null,
+    parentDocId: null,
+  };
+  const result = ImportBundle.parse({ ...input, files: [file] });
+  expect(result.files[0]).not.toHaveProperty("headings");
+  expect(result.files[0]?.title).toBe("Named");
+});
 test("imported notes keep ids and order, count as rows and reject foreign files, duplicate refs and ordinals", () => {
   const input = bundle();
   const file = {

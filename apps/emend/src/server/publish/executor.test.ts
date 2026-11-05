@@ -1,7 +1,15 @@
+import type { Worker } from "node:worker_threads";
+import type { PublishRequest } from "@emend/contract";
 import { expect, test, vi } from "vitest";
 import { WorkTimeout, workerExecutor } from "./executor.ts";
+import { renderRevision } from "./render.ts";
+import type { Work } from "./work.ts";
 
-const created = vi.hoisted(() => ({ count: 0, limits: [] as unknown[] }));
+const created = vi.hoisted(() => ({
+  count: 0,
+  limits: [] as unknown[],
+  posts: [] as { kind: string; docs?: unknown }[],
+}));
 vi.mock("node:worker_threads", async (original) => {
   const module = await original<typeof import("node:worker_threads")>();
   return {
@@ -12,8 +20,86 @@ vi.mock("node:worker_threads", async (original) => {
         created.count++;
         created.limits.push(args[1]?.resourceLimits);
       }
+      override postMessage(...args: Parameters<Worker["postMessage"]>) {
+        created.posts.push(args[0]);
+        return super.postMessage(...args);
+      }
     },
   };
+});
+
+test("many docs post one heading map per worker and a later publish replaces it", async () => {
+  const execute = workerExecutor();
+  const before = created.posts.length;
+  const stored = new Map<string, Buffer>();
+  const input: PublishRequest = {
+    reviewKey: "a".repeat(64),
+    repo: null,
+    branch: null,
+    title: "Synthetic",
+    base: null,
+    head: null,
+    topics: [],
+    writeup: { overview: "[go](0.md)", tldr: "", decisions: null, topics: {} },
+    files: Array.from({ length: 30 }, (_, index) => ({
+      path: `${index}.md`,
+      role: "doc",
+      oldPath: null,
+      oldBlob: null,
+      newBlob: "b".repeat(64),
+      flag: null,
+    })),
+  };
+  const read = async (hash: string) =>
+    Uint8Array.from(stored.get(hash) ?? Buffer.from("## Part\n\n[self](#missing)")).buffer;
+  const put = async (bytes: Buffer) => {
+    const hash = String(stored.size);
+    stored.set(hash, bytes);
+    return hash;
+  };
+  try {
+    await renderRevision(input, execute, read, put);
+    const posts = created.posts.slice(before);
+    expect(posts.filter((post) => post.docs !== undefined)).toHaveLength(1);
+    expect(
+      posts.filter((post) => post.kind === "doc" || post.kind === "writeup").every((post) => post.docs === undefined),
+    ).toBe(true);
+    const next = await renderRevision({ ...input, files: [] }, execute, read, put);
+    expect(stored.get(next.renderedBlob)?.toString()).not.toContain("?tab=docs");
+    expect(created.posts.slice(before).filter((post) => post.docs !== undefined)).toHaveLength(2);
+  } finally {
+    await execute.close();
+  }
+});
+
+test.each(["timeout", "failure"])("a doc after worker %s still gets its links", async (reason) => {
+  const timeouts = { render: 10000, place: 30000 };
+  const execute = workerExecutor(timeouts);
+  const docs = new Map([["target.md", new Set(["user-content-part"])]]);
+  const work = (): Extract<Work, { kind: "doc" }> => ({
+    kind: "doc",
+    path: "source.md",
+    source: new TextEncoder().encode("[go](target.md#part)").buffer,
+    docs,
+  });
+  const before = created.posts.length;
+  try {
+    await execute(work());
+    if (reason === "timeout") {
+      timeouts.render = 1;
+      await expect(
+        execute({ ...work(), source: new TextEncoder().encode("word ".repeat(200000)).buffer }),
+      ).rejects.toBeInstanceOf(WorkTimeout);
+    } else await expect(execute({ ...work(), source: null } as unknown as Work)).rejects.toThrow("Worker failed");
+    timeouts.render = 10000;
+    const result = await execute(work());
+    if (result.kind !== "doc") throw new Error("wrong result");
+    expect(new TextDecoder().decode(result.bytes)).toContain("doc=target.md#h-user-content-part");
+    const posts = created.posts.slice(before);
+    expect(posts.filter((post) => post.docs !== undefined)).toHaveLength(2);
+  } finally {
+    await execute.close();
+  }
 });
 
 test("line counts treat CRLF as one delimiter and lone CR as content, with no phantom last line", async () => {
@@ -123,7 +209,11 @@ test("real worker reuses jobs with bounded memory and is replaced after failure 
     });
     expect(placed).toMatchObject({ kind: "place", placements: [{ placement: { status: "placed" } }] });
     expect(created.count - before).toBe(1);
-    expect(created.limits.at(-1)).toEqual({ maxOldGenerationSizeMb: 256, maxYoungGenerationSizeMb: 32 });
+    expect(created.limits.at(-1)).toEqual({
+      maxOldGenerationSizeMb: 256,
+      maxYoungGenerationSizeMb: 32,
+      stackSizeMb: 4,
+    });
     if (!("ids" in rendered)) throw new Error("missing bytes");
     expect(new TextDecoder().decode(rendered.bytes)).not.toContain("evil()");
     expect(new TextDecoder().decode(rendered.bytes)).toContain("Safe");

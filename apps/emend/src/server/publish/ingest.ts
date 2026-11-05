@@ -285,7 +285,7 @@ async function computePublish(
       (bytes) => deps.blobs.put(ownerId, bytes, "application/json"),
       deps.signal,
     );
-    const { ids, renderedBlob, sourceBlob, docBlobs, unrendered } = prepared;
+    const { ids, renderedBlob, sourceBlob, docBlobs, unrendered, metadata } = prepared;
     const sideTexts = new Map<string, ArrayBuffer>();
     const sideText = async (sha: string) => {
       let value = sideTexts.get(sha);
@@ -496,6 +496,8 @@ async function computePublish(
             newBlob: file.newBlob,
             flag: file.flag,
             parentDocId: file.parent ? ids.get(`doc:${file.parent}`) : null,
+            title: file.role === "doc" ? (metadata.get(file.path)?.title ?? null) : null,
+            headings: file.role === "doc" ? (metadata.get(file.path)?.headings ?? null) : null,
             renderedBlob: file.role === "doc" ? (docBlobs.get(file.path) ?? null) : null,
           });
           for (const [noteOrd, note] of (file.notes ?? []).entries())

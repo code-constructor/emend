@@ -146,18 +146,19 @@ test("stops splitting containers at depth 64", async () => {
   expect((await render(64)).map((block) => block.text)).toEqual(["OneTwo"]);
 });
 
-test("renders 2000 nested divs without overflowing the stack", async () => {
-  const blocks = await renderMarkdown(`${"<div>".repeat(2000)}<p>Deep content</p>${"</div>".repeat(2000)}`, "overview");
+// Production depth is covered through the worker in apps/emend/src/server/publish/render-depth.test.ts.
+test("renders 1000 nested divs without overflowing the stack", async () => {
+  const blocks = await renderMarkdown(`${"<div>".repeat(1000)}<p>Deep content</p>${"</div>".repeat(1000)}`, "overview");
   expect(blocks).toHaveLength(1);
   expect(blocks[0]).toMatchObject({ kind: "paragraph", text: "Deep content" });
   expect(blockText(blocks[0]?.html ?? "")).toBe("Deep content");
 });
 
-test("deep containers preserve sanitized markup, escaped text and identity", async () => {
+test("1000 nested containers preserve sanitized markup, escaped text and identity", async () => {
   const content =
     '<p title="&quot;quoted&quot; &amp; text">Deep <strong>&lt;content&gt;</strong><br>&amp; more<img src="https://example.com/a.png" onerror="bad()"></p>';
   const [shallow] = await renderMarkdown(content, "overview");
-  const [deep] = await renderMarkdown(`${"<div>".repeat(2000)}${content}${"</div>".repeat(2000)}`, "overview");
+  const [deep] = await renderMarkdown(`${"<div>".repeat(1000)}${content}${"</div>".repeat(1000)}`, "overview");
   expect(deep?.id).toBe(shallow?.id);
   expect(deep?.text).toBe("Deep <content>& more");
   expect(deep?.html).toContain(shallow?.html);

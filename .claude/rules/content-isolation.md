@@ -38,12 +38,12 @@ with the reviewer's session can send instructions to the waiting agent in the re
   frame, never comment bodies. A link to another doc arrives as `emend:navigate`; the parent opens
   only a doc of the same revision, in that doc's own section. No doc script runs, so only emend's
   own code can send. After a load the parent did not cause, the parent accepts nothing from the
-  frame until it reloads it.
+  frame until it reloads it. `doc-navigation.md` adds `emend:goto` and `emend:position`.
 - A doc's own scripts never run: no inline script, event handler, `javascript:` URL or script
   file. Only emend's bridge runs, allowed by its hash. WebRTC reaches the network and no CSP stops
   it, so never allow a doc's own script.
 - Links: only `http:`, `https:` and `mailto:`, with `rel="noopener noreferrer nofollow"`. Relative
-  links in Markdown keep no `href`.
+  links keep no `href`, except links between docs as `doc-navigation.md` defines them.
 - Mermaid: one frame per diagram from `/mermaid-frame.html` (built from
   `apps/web/mermaid-frame.html` and `mermaid-frame.ts`), `sandbox="allow-scripts"`
   without `allow-same-origin`, a bundled and pinned Mermaid (never a CDN), `securityLevel:

@@ -1,5 +1,6 @@
 import { toString as hastText } from "hast-util-to-string";
 import { defaultSchema } from "rehype-sanitize";
+import { type DocLinks, resolveDocLink } from "../links.ts";
 import {
   type HtmlElement,
   type HtmlNode,
@@ -115,7 +116,10 @@ export function restoreFootnotes() {
       if (!("children" in parent)) continue;
       for (const [index, child] of parent.children.entries()) {
         if ((child as { type: string }).type === FOOTNOTE_NODE) {
-          parent.children[index] = (child as unknown as FootnoteNode).data.element;
+          const element = (child as unknown as FootnoteNode).data.element;
+          parent.children[index] = element;
+          const link = element.children[0];
+          if (element.tagName === "sup" && link?.type === "element") renderData(link).emendFootnoteMarker = true;
         } else pending.push(child);
       }
     }
@@ -227,6 +231,8 @@ function wrapMedia(node: HtmlNode, media: ReadonlyMap<string, string>) {
 export function hardenLinks() {
   return (tree: HtmlRoot, file: { data: Record<string, unknown> }) => {
     const media = file.data.media as ReadonlyMap<string, string> | undefined;
+    const docs = file.data.docs as DocLinks | undefined;
+    const base = typeof file.data.docBase === "string" ? file.data.docBase : "";
     visitElements(tree, (element) => {
       const classes = renderData(element).emendClasses;
       if (
@@ -249,6 +255,31 @@ export function hardenLinks() {
         delete element.properties.href;
         delete element.properties.rel;
         delete element.properties.target;
+        if (
+          docs &&
+          element.tagName === "a" &&
+          !renderData(element).emendFootnoteMarker &&
+          !hasBlockChildren(element) &&
+          typeof href === "string"
+        ) {
+          // Queries are discarded here; the shared resolver itself refuses them.
+          const hash = href.indexOf("#");
+          const query = href.indexOf("?");
+          const lookup =
+            query >= 0 && (hash < 0 || query < hash) ? href.slice(0, query) + (hash < 0 ? "" : href.slice(hash)) : href;
+          // Even a missing target can resolve in another folder. Fragment-only links
+          // additionally depend on the filename, so those cannot share a folder render.
+          file.data.docBaseUsed = true;
+          if (lookup.startsWith("#")) file.data.docPathUsed = true;
+          const link = resolveDocLink(base, lookup, docs);
+          if (link) {
+            const params = new URLSearchParams({ tab: "docs", doc: link.path });
+            const ids = docs.get(link.path);
+            const id = link.fragment && ids?.has(`${prefix}${link.fragment}`) ? `${prefix}${link.fragment}` : undefined;
+            const heading = id ? `#h-${encodeURIComponent(id)}` : "";
+            element.properties.href = `?${params}${heading}`;
+          }
+        }
       }
       if (element.tagName === "img") {
         // The app CSP allows only same-origin images, and an absolute same-origin URL could show

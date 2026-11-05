@@ -39,7 +39,7 @@ export type PublishOptions = {
   review?: string;
   key?: string | ((instanceId: string) => string);
   skipNodeModules?: boolean;
-  titleFromMain?: (bytes: Uint8Array) => string;
+  titleFromMain?: (bytes: Uint8Array) => string | Promise<string>;
   docFolders?: ReadonlyMap<string, readonly PublishedFolder[]>;
 };
 const sha256 = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
@@ -233,12 +233,13 @@ export async function resolvePublish(
       return readResolvedDoc(actual);
     };
     const bytes = await readResolvedDoc(source);
-    if (file.path === manifest.main && options.titleFromMain) title = options.titleFromMain(bytes);
+    if (file.path === manifest.main && options.titleFromMain) title = await options.titleFromMain(bytes);
     const resolvedDoc: PublishFile = {
       path: file.path,
       oldPath: null,
       role: "doc",
       topic: file.topic,
+      title: file.title,
       oldBlob: null,
       newBlob: addRequired(bytes, readDoc),
       flag: null,

@@ -1,4 +1,5 @@
 import {
+  type DocHeading,
   type Placement,
   type PlacementLocation,
   type PublishLinks,
@@ -11,13 +12,19 @@ import {
   type Block,
   blockHash,
   composeRenames,
+  type DocLinks,
   docText,
   type FileSides,
+  htmlHeadings,
+  inferDocTitle,
+  markdownHeadings,
+  markdownTitle,
   type PlaceContext,
   placeThread,
   type RenderedWriteup,
   renderCommentHtml,
   renderDoc,
+  renderMetadataBlocks,
   renderWriteup,
   resectionBlocks,
 } from "@emend/core";
@@ -31,6 +38,7 @@ export type PlacementDoc = PlaceContext["docs"] extends Map<string, infer T> ? T
 /** Import caches opaque worker output; parsed content never crosses by structured clone. */
 export type EncodedPlacementDoc = { bytes: ArrayBuffer; textBytes: number; encodedBytes: number };
 export type Work =
+  | { kind: "doc-metadata"; format: "html" | "markdown"; bytes: ArrayBuffer }
   | { kind: "line-count"; bytes: ArrayBuffer }
   | { kind: "writeup-source"; bytes: ArrayBuffer }
   | { kind: "placement-doc"; format: "html" | "markdown" | "writeup"; bytes: ArrayBuffer }
@@ -41,8 +49,9 @@ export type Work =
       links?: PublishLinks;
       repoUrl?: string;
       media: [string, string][];
+      docs?: DocLinks;
     }
-  | { kind: "doc"; path: string; source: ArrayBuffer; repoUrl?: string }
+  | { kind: "doc"; path: string; source: ArrayBuffer; repoUrl?: string; docs?: DocLinks }
   | { kind: "resection"; path: string; bytes: ArrayBuffer }
   | { kind: "comment-md"; bodies: string[]; repoUrl?: string }
   | { kind: "changed"; previous: { format: "writeup" | "doc"; bytes: ArrayBuffer }[]; next: ArrayBuffer[] }
@@ -63,7 +72,9 @@ export type Work =
         carried?: { path: string | null; side?: "old" | "new" };
       }[];
     };
+export type DocMetadata = { title?: string; headings: DocHeading[] };
 export type WorkResult =
+  | ({ kind: "doc-metadata" } & DocMetadata)
   | { kind: "line-count"; count: number }
   | { kind: "writeup-source"; source: WriteupInput; links?: PublishLinks; repoUrl?: string }
   | ({ kind: "placement-doc" } & EncodedPlacementDoc)
@@ -71,22 +82,39 @@ export type WorkResult =
   | { kind: "changed"; bytes: ArrayBuffer }
   | { kind: "comment-md"; html: (string | null)[] }
   | { kind: "place"; placements: { id: string; placement: Placement }[] };
-export type RenderedBytes = { bytes: ArrayBuffer; ids: ArrayBuffer; count: number };
+export type RenderedBytes = {
+  bytes: ArrayBuffer;
+  ids: ArrayBuffer;
+  count: number;
+  pathDependent?: boolean;
+  selfDependent?: boolean;
+};
 const decode = (bytes: ArrayBuffer) => new TextDecoder().decode(bytes);
 const parse = (bytes: ArrayBuffer, format: "writeup" | "doc"): Block[] => {
   const value = JSON.parse(decode(bytes));
   return format === "writeup" ? (value as RenderedWriteup).sections.flatMap((s) => s.blocks) : (value as Block[]);
 };
-export function serializeRendered(value: RenderedWriteup | Block[]): RenderedBytes {
+export function serializeRendered(value: RenderedWriteup | Block[], pathDependent = false): RenderedBytes {
   const blocks = Array.isArray(value) ? value : value.sections.flatMap((s) => s.blocks);
   return {
     bytes: new TextEncoder().encode(JSON.stringify(value)).buffer,
     ids: new TextEncoder().encode(blocks.map(({ id }) => id).join("\n")).buffer,
     count: blocks.length,
+    pathDependent,
   };
 }
 export type Executor = (work: Work) => Promise<WorkResult>;
 export const executeWork: Executor = async (work) => {
+  if (work.kind === "doc-metadata") {
+    if (work.format === "html")
+      return {
+        kind: "doc-metadata",
+        title: await inferDocTitle("html", new Uint8Array(work.bytes)),
+        headings: htmlHeadings(decode(work.bytes)),
+      };
+    const blocks = await renderMetadataBlocks(decode(work.bytes));
+    return { kind: "doc-metadata", title: markdownTitle(blocks), headings: markdownHeadings(blocks) };
+  }
   if (work.kind === "line-count") {
     // Count LF only (including CRLF): lone CR must not invent selectable lines beyond the diff's LF-based lines.
     const bytes = new Uint8Array(work.bytes);
@@ -118,19 +146,29 @@ export const executeWork: Executor = async (work) => {
     const bytes = encoder.encode(JSON.stringify(doc)).buffer;
     return { kind: "placement-doc", bytes, textBytes, encodedBytes: bytes.byteLength };
   }
-  if (work.kind === "writeup")
+  if (work.kind === "writeup") {
+    const effects: { docBaseUsed?: boolean } = {};
+    const rendered = await renderWriteup(work.source, work.topics, {
+      links: work.links,
+      repoUrl: work.repoUrl,
+      media: new Map(work.media),
+      docs: work.docs,
+      effects,
+    });
     return {
       kind: "writeup",
-      ...serializeRendered(
-        await renderWriteup(work.source, work.topics, {
-          links: work.links,
-          repoUrl: work.repoUrl,
-          media: new Map(work.media),
-        }),
-      ),
+      ...serializeRendered(rendered, effects.docBaseUsed),
     };
-  if (work.kind === "doc")
-    return { kind: "doc", ...serializeRendered(await renderDoc(decode(work.source), work.path, work.repoUrl)) };
+  }
+  if (work.kind === "doc") {
+    const effects: { docBaseUsed?: boolean; docPathUsed?: boolean } = {};
+    const blocks = await renderDoc(decode(work.source), work.path, work.repoUrl, work.docs, effects);
+    return {
+      kind: "doc",
+      ...serializeRendered(blocks, effects.docBaseUsed),
+      selfDependent: effects.docPathUsed,
+    };
+  }
   if (work.kind === "comment-md") {
     // One failing comment gives null for that comment alone.
     const html: (string | null)[] = [];

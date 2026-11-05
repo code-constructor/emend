@@ -10,6 +10,7 @@ import { cleanDocTitle } from "@emend/core";
 import { expect, test, vi } from "vitest";
 import { reviews, revisions } from "../../db/schema.ts";
 import { run } from "../../main.ts";
+import * as executors from "../../server/publish/executor.ts";
 import { directFixture } from "../direct-test-support.ts";
 import { escapeReference } from "../escape.ts";
 import { provenTestServer } from "../test-support.ts";
@@ -23,6 +24,9 @@ import { SHORTCUT_LIMITS } from "./shortcut-walk.ts";
 vi.mock("node:fs/promises", async (original) => ({ ...(await original<typeof import("node:fs/promises")>()) }));
 vi.mock("./read.ts", async (original) => ({ ...(await original<typeof import("./read.ts")>()) }));
 vi.mock("./shortcut.ts", async (original) => ({ ...(await original<typeof import("./shortcut.ts")>()) }));
+vi.mock("../../server/publish/executor.ts", async (original) => ({
+  ...(await original<typeof import("../../server/publish/executor.ts")>()),
+}));
 
 async function fixture() {
   const f = await directFixture();
@@ -76,6 +80,48 @@ async function fixture() {
   }
   return { ...f, file, publish, capture };
 }
+
+test.each(["md", "html"])("failed %s title inference falls back and closes the worker", async (extension) => {
+  const f = await fixture();
+  await f.file(`fallback.${extension}`, extension === "md" ? "# Own title" : "<title>Own title</title>");
+  const capture = await f.capture();
+  const close = vi.fn(async () => {});
+  const execute = Object.assign(vi.fn().mockRejectedValue(new executors.WorkTimeout()), { close });
+  vi.spyOn(executors, "workerExecutor").mockReturnValueOnce(execute);
+  const result = await f.publish(`fallback.${extension}`);
+  expect(result.code, result.stderr.join("")).toBe(0);
+  expect(capture.requests[0]?.title).toBe(`fallback.${extension}`);
+  expect(execute).toHaveBeenCalledWith(
+    expect.objectContaining({ kind: "doc-metadata", format: extension === "md" ? "markdown" : "html" }),
+  );
+  expect(close).toHaveBeenCalledOnce();
+});
+
+test("reference-expansion main doc publishes with a bounded worker title", async () => {
+  const f = await fixture();
+  await f.file(
+    "expansion.md",
+    `# Reference title\n\n${"[x][r] ".repeat(1000)}\n\n[r]: https://example.test/${"x".repeat(20000)}`,
+  );
+  const capture = await f.capture();
+  const realWorker = executors.workerExecutor();
+  const close = vi.spyOn(realWorker, "close");
+  const execute = Object.assign(vi.fn(realWorker), { close });
+  const worker = vi.spyOn(executors, "workerExecutor").mockReturnValueOnce(execute);
+  const started = performance.now();
+  const result = await f.publish("expansion.md");
+  expect(result.code, result.stderr.join("")).toBe(0);
+  expect(performance.now() - started).toBeLessThan(12000);
+  expect(worker).toHaveBeenCalledOnce();
+  expect(execute).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ kind: "doc-metadata", format: "markdown", bytes: expect.any(ArrayBuffer) }),
+  );
+  const metadata = await execute.mock.results[0]?.value.catch(() => undefined);
+  expect(capture.requests[0]?.title).toBe(
+    metadata?.kind === "doc-metadata" && metadata.title ? metadata.title : "expansion.md",
+  );
+  expect(close).toHaveBeenCalledOnce();
+}, 15000);
 
 test("one doc publishes directly, prints only its URL, and republishes to one review with two revisions", async () => {
   const f = await fixture();
@@ -221,6 +267,8 @@ test.each([
   ["page.html", "<title>HTML title</title>", ["--title", "Explicit title"], "Explicit title"],
   ["page.html", "<TITLE> HTML &amp; title </TITLE>", [], "HTML & title"],
   ["page.htm", "<title>HTML title</title>", [], "HTML title"],
+  ["page.html", "<svg><title>Wrong</title></svg><h1>Body title</h1>", [], "Body title"],
+  ["plan.md", "<script>\n# Wrong\n</script>\n\n# Rendered title", [], "Rendered title"],
   ["plan.md", "## Ignore\n# First heading ###\n# Later heading", [], "First heading"],
   ["plan.markdown", "# Markdown title", [], "Markdown title"],
   ["plan.md", "No heading", [], "plan.md"],

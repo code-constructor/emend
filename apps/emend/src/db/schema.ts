@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { DocHeading } from "@emend/contract";
 import {
   FileFlag,
   FileRole,
@@ -223,6 +224,8 @@ export const files = sqliteTable(
     oldBlob: text("old_blob"),
     newBlob: text("new_blob"),
     renderedBlob: text("rendered_blob"),
+    title: text("title"),
+    headings: text("headings", { mode: "json" }).$type<DocHeading[]>(),
     flag: text("flag", { enum: enumValues(FileFlag.options) }),
     parentDocId: text("parent_doc_id"),
   },

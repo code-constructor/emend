@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { AgentNoteView, validateAgentNotes } from "./agent-note.ts";
+import { DocTitle } from "./doc.ts";
 import { indexImportBundle } from "./import-index.ts";
 import { LIMITS } from "./limits.ts";
 import { PublishRequest, Sha256 } from "./publish.ts";
@@ -56,6 +57,7 @@ const ImportRows = z.object({
       oldBlob: Sha256.nullable(),
       newBlob: Sha256.nullable(),
       renderedBlob: Sha256.nullable(),
+      title: DocTitle.nullable().optional(),
       flag: FileFlag.nullable(),
       parentDocId: id.nullable(),
     }),
@@ -235,6 +237,7 @@ export function importPublishInput(
     files: files.map((f) => ({
       ...f,
       status: f.status ?? undefined,
+      title: f.title ?? undefined,
       topic: f.topicSlug ?? undefined,
       notes: index.notesByFile.get(f.id)?.toSorted((a, b) => a.ord - b.ord),
       parent: f.parentDocId === null ? undefined : index.files.get(f.parentDocId)?.path,

@@ -98,7 +98,7 @@ export async function prepareImport(ownerId: string, bundle: ImportBundle, deps:
   signal?.addEventListener("abort", stop, { once: true });
   const rendered = new Map<
     string,
-    Pick<Awaited<ReturnType<typeof renderRevision>>, "sourceBlob" | "renderedBlob" | "docBlobs">
+    Pick<Awaited<ReturnType<typeof renderRevision>>, "sourceBlob" | "renderedBlob" | "docBlobs" | "metadata">
   >();
   const empty = new Map<string, boolean>();
   try {
@@ -204,6 +204,7 @@ export async function prepareImport(ownerId: string, bundle: ImportBundle, deps:
         sourceBlob: result.sourceBlob,
         renderedBlob: result.renderedBlob,
         docBlobs: result.docBlobs,
+        metadata: result.metadata,
       });
       empty.set(
         revision.id,

@@ -10,6 +10,7 @@ import remarkRehype from "remark-rehype";
 import { createHighlighterCore } from "shiki/core";
 import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
 import { unified } from "unified";
+import type { DocLinks } from "../links.ts";
 import { type Block, blocksFromTree, type HtmlRoot, renderData, visitElements } from "./blocks.ts";
 import { blockHash } from "./hash.ts";
 import { HIGHLIGHT_LINE_CHARS, type HighlightBudget, limitHighlighting } from "./highlight.ts";
@@ -111,6 +112,9 @@ export async function renderMarkdownWithBudget(
   highlightBudget: HighlightBudget,
   repoUrl?: string,
   media?: ReadonlyMap<string, string>,
+  docs?: DocLinks,
+  docBase = "",
+  effects?: { docBaseUsed?: boolean; docPathUsed?: boolean },
 ): Promise<Block[]> {
   // Check even an empty document: every emitted id must satisfy the contract.
   BlockId.parse(`${section}-00000000`);
@@ -120,10 +124,22 @@ export async function renderMarkdownWithBudget(
   });
   const processor = await processorPromise;
   const { source, tables } = prepareTables(markdown);
+  const data = {
+    highlightBudget,
+    largeTables: tables,
+    repoUrl,
+    media,
+    docs,
+    docBase,
+    docBaseUsed: false,
+    docPathUsed: false,
+  };
   const tree = await processor.run(processor.parse(source), {
     value: source,
-    data: { highlightBudget, largeTables: tables, repoUrl, media },
+    data,
   });
+  if (effects && data.docBaseUsed) effects.docBaseUsed = true;
+  if (effects && data.docPathUsed) effects.docPathUsed = true;
   return blocksFromTree(tree, section, (node) =>
     processor.stringify(node.type === "root" ? node : { type: "root", children: [node] }),
   );
@@ -146,6 +162,34 @@ export function renderMarkdown(markdown: string, section: string, repoUrl?: stri
   return renderMarkdownWithBudget(markdown, section, { highlightedBytes: 0 }, repoUrl);
 }
 
-export async function renderDoc(markdown: string, path: string, repoUrl?: string): Promise<Block[]> {
-  return renderMarkdown(markdown, `doc-${await blockHash(path)}`, repoUrl);
+export async function renderDoc(
+  markdown: string,
+  path: string,
+  repoUrl?: string,
+  docs?: DocLinks,
+  effects?: { docBaseUsed?: boolean; docPathUsed?: boolean },
+): Promise<Block[]> {
+  return renderMarkdownWithBudget(
+    markdown,
+    `doc-${await blockHash(path)}`,
+    { highlightedBytes: 0 },
+    repoUrl,
+    undefined,
+    docs,
+    path,
+    effects,
+  );
+}
+
+const metadataProcessor = sanitizedPipeline().use(isolateDiagrams).use(rehypeStringify);
+/** The same sanitized blocks, without syntax highlighting, for publish metadata and CLI titles. */
+export async function renderMetadataBlocks(markdown: string): Promise<Block[]> {
+  const { source, tables } = prepareTables(markdown);
+  const tree = await metadataProcessor.run(metadataProcessor.parse(source), {
+    value: source,
+    data: { largeTables: tables },
+  });
+  return blocksFromTree(tree, "metadata", (node) =>
+    metadataProcessor.stringify(node.type === "root" ? node : { type: "root", children: [node] }),
+  );
 }

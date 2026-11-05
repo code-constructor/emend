@@ -320,7 +320,8 @@ function LoadedReview({
     const url = new URL(link.href);
     if (url.origin !== window.location.origin || url.pathname !== `/r/${encodeURIComponent(review.id)}`) return;
     event.preventDefault();
-    navigateReading(validateReviewSearch(Object.fromEntries(url.searchParams)), url.hash.slice(1));
+    const next = validateReviewSearch(Object.fromEntries(url.searchParams));
+    navigateReading({ ...next, rev: next.rev ?? search.rev }, url.hash.slice(1));
   };
   const resume = (draft: SavedDraft) => {
     if (draft.commentId && revision) {

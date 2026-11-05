@@ -1150,6 +1150,7 @@ test("fix2: carries a rename through an unplaced revision using the last success
 
 test("fix2: rendered-byte budget is cumulative across repeated revisions", async () => {
   const input = await bundle();
+  input.files = []; // Isolate repeated writeup output from the separate doc metadata budget.
   const original = LIMITS.importRenderedBytes;
   const run = f.deps.publishExecutor;
   if (!run) throw new Error("Missing renderer");
@@ -2522,4 +2523,28 @@ test("a repeated import of a review deleted on the hub is skipped as deleted and
   expect(await retry.json()).toEqual({ skipped: true, deleted: true });
   expect(await snapshot()).toEqual(before);
   await error(await f.request(`/reviews/${input.review.id}`, "GET"), 404, "unknown_review");
+});
+
+test("import carries cleaned doc titles and derives headings from source instead of copied declarations", async () => {
+  const input = await bundle();
+  const doc = required(input.files[0]);
+  const newBlob = await f.deps.blobs.put(f.ownerId, Buffer.from("<h1>Own title</h1><h2>Real part</h2>"), "text/html");
+  const row = {
+    ...doc,
+    newBlob,
+    title: " Named\u200b\u202e\u0007 doc ",
+    headings: [{ level: 9, text: "Forged", id: "thread-foreign" }],
+  };
+  const response = await request("/import", { ...input, files: [row] });
+  expect(response.status).toBe(201);
+  const stored = await f.db.read((q) =>
+    q
+      .select()
+      .from(tables.files)
+      .where(and(eq(tables.files.ownerId, f.ownerId), eq(tables.files.id, doc.id)))
+      .get(),
+  );
+  expect(stored).toMatchObject({ title: "Named doc", headings: [{ level: 2, text: "Real part" }] });
+  const view = RevisionView.parse(await (await f.request(`/reviews/${input.review.id}/revisions/1`, "GET")).json());
+  expect(view.docs[0]).toMatchObject({ title: "Named doc", headings: [{ level: 2, text: "Real part" }] });
 });

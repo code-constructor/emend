@@ -377,7 +377,7 @@ test("revision byte budget rejects unique metadata before any blob read", async 
   expect(get).not.toHaveBeenCalled();
 });
 
-test("duplicate HTML and binary/asset content is never read without a placement target", async () => {
+test("duplicate HTML is read once for metadata; binary and asset content stay unread", async () => {
   const html = await blobs.put(f.ownerId, Buffer.alloc(8388608, 32), "text/html");
   const asset = await blobs.put(f.ownerId, Buffer.from([0, 1, 2]), "image/png");
   const get = vi.spyOn(blobs, "get");
@@ -396,7 +396,7 @@ test("duplicate HTML and binary/asset content is never read without a placement 
       { path: "binary.bin", role: "diff", oldPath: null, oldBlob: null, newBlob: null, flag: "binary" },
     ],
   });
-  expect(get).not.toHaveBeenCalled();
+  expect(get.mock.calls.map(([, hash]) => hash)).toEqual([html]);
 });
 
 test.each([
@@ -576,7 +576,8 @@ test("shared HTML placement serializes one source, not one copy per document", a
     return executeWork(work);
   });
   expect(result.placed).toBe(24);
-  expect(get.mock.calls.filter(([, sha]) => sha === hash)).toHaveLength(1);
+  // One source read for metadata, one for placement, regardless of the doc count.
+  expect(get.mock.calls.filter(([, sha]) => sha === hash)).toHaveLength(2);
 });
 
 test.each([false, true])("carried paths survive five unplaced revisions and a rename (legacy=%s)", async (legacy) => {

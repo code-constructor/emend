@@ -1,4 +1,4 @@
-import type { BlockId } from "@emend/contract";
+import { type BlockId, LIMITS } from "@emend/contract";
 import { fromHtml } from "hast-util-from-html";
 import { toString as hastText } from "hast-util-to-string";
 import { blockHash } from "./hash.ts";
@@ -251,15 +251,36 @@ export async function blocksFromTree(
   stringify: (node: HtmlNode) => string,
 ): Promise<Block[]> {
   const blocks: Block[] = [];
+  const elementIds = new Map<string, number>();
+  visitElements(tree, (element) => {
+    const id = element.properties.id;
+    if (typeof id === "string") elementIds.set(id, (elementIds.get(id) ?? 0) + 1);
+  });
   const occurrences = new Map<string, number>();
   const append = async ({ kind, node, source }: Fragment) => {
-    const html = kind === "diagram" ? "" : stringifyBlock(node, stringify);
+    let html = kind === "diagram" ? "" : stringifyBlock(node, stringify);
     // Diagrams have no HTML; their source is the text of the whole commentable block.
     const text = source ?? blockText(html);
     if (kind !== "diagram" && normalizeText(text) === "") return;
     const hash = await blockHash(normalizeText(source ?? identityText(node)));
     const count = (occurrences.get(hash) ?? 0) + 1;
     occurrences.set(hash, count);
+    if (kind === "heading" && node.type === "element") {
+      // Anchor identities are stable across doc paths and separate from block/thread routes.
+      const authorId = node.properties.id;
+      if (
+        typeof authorId !== "string" ||
+        !authorId.startsWith("user-content-") ||
+        elementIds.get(authorId) !== 1 ||
+        authorId.length > LIMITS.headingIdChars ||
+        Array.from(authorId).some((char) => {
+          const code = char.charCodeAt(0);
+          return code < 32 || (code >= 127 && code <= 159);
+        })
+      )
+        node.properties.id = `heading-${hash}${count === 1 ? "" : `-${count}`}`;
+      html = stringifyBlock(node, stringify);
+    }
     blocks.push({
       id: sectionBlockId(section, `${hash}${count === 1 ? "" : `-${count}`}`),
       section,

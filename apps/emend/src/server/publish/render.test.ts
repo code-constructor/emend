@@ -1,6 +1,7 @@
 import { LIMITS, type PublishRequest } from "@emend/contract";
 import { type Block, blockHash, renderMarkdown } from "@emend/core";
 import { expect, test, vi } from "vitest";
+import { WorkTimeout } from "./executor.ts";
 import { renderRevision } from "./render.ts";
 import { executeWork, serializeRendered } from "./work.ts";
 
@@ -22,13 +23,24 @@ const input = (paths: string[]): PublishRequest => ({
     flag: null,
   })),
 });
+
+test("writeup work reports doc-base use without inspecting serialized HTML", async () => {
+  const rendered = await executeWork({
+    kind: "writeup",
+    source: { overview: "[go](target.md)", tldr: "", decisions: null, topics: {} },
+    topics: [],
+    media: [],
+    docs: new Map([["target.md", new Set()]]),
+  });
+  expect(rendered).toMatchObject({ kind: "writeup", pathDependent: true });
+});
 test("one shared Markdown render produces exactly each path's normal block identities", async () => {
   const source =
     "# Title\n\nrepeat\n\nrepeat\n\nFoot[^1].\n\n[^1]: note\n\n<script>bad()</script>\n\n[bad](javascript:bad)";
   const stored = new Map<string, Buffer>();
   const execute = vi.fn(executeWork);
   const result = await renderRevision(
-    input(["one.md", "two.md"]),
+    input(["one/one.md", "two/two.md"]),
     execute,
     async (hash) => Uint8Array.from(stored.get(hash) ?? Buffer.from(source)).buffer,
     async (bytes) => {
@@ -38,12 +50,88 @@ test("one shared Markdown render produces exactly each path's normal block ident
     },
   );
   expect(execute.mock.calls.filter(([work]) => work.kind === "doc")).toHaveLength(1);
-  for (const path of ["one.md", "two.md"]) {
+  for (const path of ["one/one.md", "two/two.md"]) {
     const blob = stored.get(result.docBlobs.get(path) ?? "");
     expect(JSON.parse(blob?.toString() ?? "null")).toEqual(
       await renderMarkdown(source, `doc-${await blockHash(path)}`),
     );
   }
+});
+
+test.each(["failure", "timeout"])("identical bytes that %s cost one attempt across folders", async (reason) => {
+  const failed = Array.from({ length: 40 }, (_, i) => `folder-${i}/bad.md`);
+  const body = input([...failed, "later/good.md"]);
+  const good = body.files.at(-1);
+  if (!good) throw new Error("missing doc");
+  good.newBlob = "c".repeat(64);
+  const stored = new Map<string, Buffer>();
+  const execute = vi.fn(async (work: Parameters<typeof executeWork>[0]) => {
+    if (work.kind === "doc" && work.path !== good.path)
+      throw reason === "timeout" ? new WorkTimeout() : new Error("synthetic failure");
+    return executeWork(work);
+  });
+  const result = await renderRevision(
+    body,
+    execute,
+    async (hash) => Uint8Array.from(stored.get(hash) ?? Buffer.from(hash === good.newBlob ? "# Good" : "# Bad")).buffer,
+    async (bytes) => {
+      const key = String(stored.size);
+      stored.set(key, bytes);
+      return key;
+    },
+  );
+  expect(execute.mock.calls.filter(([work]) => work.kind === "doc").map(([work]) => work)).toEqual([
+    expect.objectContaining({ kind: "doc", path: failed[0] }),
+    expect.objectContaining({ kind: "doc", path: good.path }),
+  ]);
+  expect(result.unrendered).toEqual(failed);
+  expect(result.docBlobs.has(good.path)).toBe(true);
+});
+
+test("shared doc links render once per folder and resection copies keep that folder's link", async () => {
+  const paths = ["one/a.md", "one/b.md", "two/a.md", "two/b.md", "one/target.md", "two/target.md"];
+  const stored = new Map<string, Buffer>();
+  const execute = vi.fn(executeWork);
+  const result = await renderRevision(
+    input(paths),
+    execute,
+    async (hash) => Uint8Array.from(stored.get(hash) ?? Buffer.from("[go](target.md)")).buffer,
+    async (bytes) => {
+      const key = String(stored.size);
+      stored.set(key, bytes);
+      return key;
+    },
+  );
+  expect(execute.mock.calls.filter(([work]) => work.kind === "doc")).toHaveLength(2);
+  expect(execute.mock.calls.filter(([work]) => work.kind === "resection")).toHaveLength(4);
+  for (const path of paths) {
+    const blocks = JSON.parse(stored.get(result.docBlobs.get(path) ?? "")?.toString() ?? "[]") as Block[];
+    expect(blocks.map((block) => block.html).join("")).toContain(
+      `href="?tab=docs&#x26;doc=${path.startsWith("one/") ? "one" : "two"}%2Ftarget.md">go`,
+    );
+    expect(blocks[0]?.section).toBe(`doc-${await blockHash(path)}`);
+  }
+});
+
+test("a missing relative link in one folder cannot hide a declared link in another", async () => {
+  const body = input(["one/start.md", "two/start.md", "two/target.md"]);
+  const stored = new Map<string, Buffer>();
+  const execute = vi.fn(executeWork);
+  const result = await renderRevision(
+    body,
+    execute,
+    async (hash) => Uint8Array.from(stored.get(hash) ?? Buffer.from("[go](target.md)")).buffer,
+    async (bytes) => {
+      const key = String(stored.size);
+      stored.set(key, bytes);
+      return key;
+    },
+  );
+  const blocks = (path: string) =>
+    JSON.parse(stored.get(result.docBlobs.get(path) ?? "")?.toString() ?? "[]") as Block[];
+  expect(blocks("one/start.md")[0]?.html).toBe("<p><a>go</a></p>");
+  expect(blocks("two/start.md")[0]?.html).toContain('href="?tab=docs&#x26;doc=two%2Ftarget.md"');
+  expect(execute.mock.calls.filter(([work]) => work.kind === "doc")).toHaveLength(2);
 });
 test("the block cap counts repeated paths and stops every later Markdown doc", async () => {
   const blocks: Block[] = Array.from({ length: 3000 }, (_, i) => ({
@@ -54,7 +142,11 @@ test("the block cap counts repeated paths and stops every later Markdown doc", a
     text: "x",
   }));
   const execute = vi.fn(async (work: Parameters<typeof executeWork>[0]) =>
-    work.kind === "doc" ? { kind: "doc" as const, ...serializeRendered(blocks) } : executeWork(work),
+    work.kind === "doc-metadata"
+      ? { kind: "doc-metadata" as const, headings: [] }
+      : work.kind === "doc"
+        ? { kind: "doc" as const, ...serializeRendered(blocks) }
+        : executeWork(work),
   );
   const body = input(Array.from({ length: 40 }, (_, i) => `${i}.md`));
   const result = await renderRevision(
@@ -141,4 +233,53 @@ test("a Markdown doc keeps no image source even when the writeup declares that m
   expect(doc).not.toContain("src=");
   expect(doc).not.toContain("/api/v1/media/");
   expect(stored.map((blob) => blob.toString()).join("")).toContain(`src=\\"/api/v1/media/${"c".repeat(64)}\\"`);
+});
+
+test("shared source resolves each doc's own fragments and directory separately", async () => {
+  const source = "[self](#missing) [sibling](target.md)";
+  const stored = new Map<string, Buffer>();
+  const paths = ["one.md", "two.md", "folder/one.md", "target.md", "folder/target.md"];
+  const result = await renderRevision(
+    input(paths),
+    executeWork,
+    async (hash) => Uint8Array.from(stored.get(hash) ?? Buffer.from(source)).buffer,
+    async (bytes) => {
+      const key = String(stored.size);
+      stored.set(key, bytes);
+      return key;
+    },
+  );
+  for (const path of paths) {
+    const html = (JSON.parse(stored.get(result.docBlobs.get(path) ?? "")?.toString() ?? "[]") as Block[])
+      .map((b) => b.html)
+      .join("");
+    expect(html).toContain(`doc=${encodeURIComponent(path)}">self`);
+    expect(html).toContain(`doc=${path.includes("/") ? "folder%2F" : ""}target.md">sibling`);
+  }
+});
+
+test.each(["failure", "budget"])("unrendered docs keep titles but no headings after %s", async (reason) => {
+  const original = LIMITS.blocksPerRevision;
+  if (reason === "budget") Object.assign(LIMITS, { blocksPerRevision: 1 });
+  const body = input(["a.md", "b.md", "c.md"]);
+  const stored = new Map<string, Buffer>();
+  try {
+    const result = await renderRevision(
+      body,
+      async (work) => {
+        if (reason === "failure" && work.kind === "doc") throw new Error("synthetic render failure");
+        return executeWork(work);
+      },
+      async (hash) => Uint8Array.from(stored.get(hash) ?? Buffer.from("# Title\n\n## Part")).buffer,
+      async (bytes) => {
+        const hash = String(stored.size);
+        stored.set(hash, bytes);
+        return hash;
+      },
+    );
+    expect(result.unrendered).toEqual(["a.md", "b.md", "c.md"]);
+    for (const path of result.unrendered) expect(result.metadata.get(path)).toEqual({ title: "Title", headings: [] });
+  } finally {
+    Object.assign(LIMITS, { blocksPerRevision: original });
+  }
 });

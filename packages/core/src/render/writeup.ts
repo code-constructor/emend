@@ -1,4 +1,5 @@
 import type { PublishLinks, TopicMeta, WriteupInput } from "@emend/contract";
+import type { DocLinks } from "../links.ts";
 import type { Block } from "./blocks.ts";
 import { renderMarkdownWithBudget } from "./markdown.ts";
 
@@ -16,7 +17,13 @@ const unwrittenDecisions =
 export async function renderWriteup(
   writeup: WriteupInput,
   topics: TopicMeta[],
-  meta: { links?: PublishLinks; repoUrl?: string; media?: ReadonlyMap<string, string> } = {},
+  meta: {
+    links?: PublishLinks;
+    repoUrl?: string;
+    media?: ReadonlyMap<string, string>;
+    docs?: DocLinks;
+    effects?: { docBaseUsed?: boolean };
+  } = {},
 ): Promise<RenderedWriteup> {
   const sections: RenderedWriteup["sections"] = [];
   const highlightBudget = { highlightedBytes: 0 };
@@ -26,7 +33,16 @@ export async function renderWriteup(
       key,
       label,
       topic,
-      blocks: await renderMarkdownWithBudget(markdown, key, highlightBudget, meta.repoUrl, meta.media),
+      blocks: await renderMarkdownWithBudget(
+        markdown,
+        key,
+        highlightBudget,
+        meta.repoUrl,
+        meta.media,
+        meta.docs,
+        "",
+        meta.effects,
+      ),
     });
   };
   await append("overview", "Overview", writeup.overview);

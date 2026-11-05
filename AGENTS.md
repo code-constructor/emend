@@ -102,6 +102,7 @@ Codex reads only this file. Open the matching rule file before you edit these pa
 | You touch | Read first |
 |---|---|
 | `packages/core/src/render/`, `apps/web/src/`, `apps/web/public/`, the content path, headers | `.claude/rules/content-isolation.md` |
+| Links between docs, Contents, doc titles, reading positions, frame messages | `.claude/rules/doc-navigation.md` |
 | `apps/emend/src/server/`, `packages/contract/`, `docs/api.md` | `.claude/rules/api-and-auth.md` |
 | `apps/emend/src/db/`, `apps/emend/drizzle/`, `apps/emend/drizzle.config.ts` | `.claude/rules/db.md` |
 | `apps/emend/src/cli/`, `apps/emend/bin/` | `.claude/rules/cli.md` |

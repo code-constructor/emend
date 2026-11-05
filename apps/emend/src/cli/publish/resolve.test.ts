@@ -23,7 +23,7 @@ const manifest = (source?: string): PublishManifest => ({
   version: 1,
   title: "Synthetic",
   topics: [],
-  files: [{ path: "plan.md", role: "doc", ...(source ? { source } : {}) }],
+  files: [{ path: "plan.md", role: "doc", title: "Named doc", ...(source ? { source } : {}) }],
   writeup: { overview: "", tldr: "", decisions: null, topics: {} },
 });
 test("doc sources resolve only inside the worktree or configured real doc roots", async () => {
@@ -38,6 +38,7 @@ test("doc sources resolve only inside the worktree or configured real doc roots"
     await writeFile(join(docs, "plan.md"), "external doc");
     const collect = (source?: string) =>
       resolvePublish(manifest(source), { manifest: "synthetic", key: "plan" }, state, "instance", root, () => {});
+    expect((await collect()).request.files[0]?.title).toBe("Named doc");
     expect((await [...(await collect()).blobs.values()][0]?.read())?.toString()).toBe("local doc");
     await writeFile(join(state, "config.json"), JSON.stringify({ openBrowser: true }));
     expect((await [...(await collect()).blobs.values()][0]?.read())?.toString()).toBe("local doc");

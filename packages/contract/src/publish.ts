@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { AgentNotes, validateAgentNotes } from "./agent-note.ts";
+import { DocTitle } from "./doc.ts";
 import { LIMITS } from "./limits.ts";
 import { PublishLinks, RepoUrl } from "./links.ts";
 import { MEDIA_EXTENSIONS, PublishManifest, WriteupInput } from "./manifest.ts";
@@ -19,6 +20,7 @@ export const Sha256 = z
 export const PublishFile = z
   .object({
     path: FilePath,
+    title: DocTitle.optional(),
     oldPath: FilePath.nullable(),
     role: FileRole,
     status: FileStatus.optional(),
@@ -29,6 +31,10 @@ export const PublishFile = z
     parent: FilePath.optional(),
     assets: z.array(FilePath).max(LIMITS.filesPerRevision).optional(),
     notes: AgentNotes.optional(),
+  })
+  .refine((file) => file.role === "doc" || file.title === undefined, {
+    path: ["title"],
+    message: "only doc files have titles",
   })
   .refine((file) => file.role === "diff" || file.notes === undefined, {
     path: ["notes"],

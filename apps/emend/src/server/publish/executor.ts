@@ -1,14 +1,19 @@
 import { Worker } from "node:worker_threads";
-import type { Executor } from "./work.ts";
+import type { DocLinks } from "@emend/core";
+import type { Executor, Work } from "./work.ts";
+
+export type WorkerMessage = Work | { kind: "doc-context"; docs: DocLinks | undefined };
 
 export class WorkTimeout extends Error {}
 export type WorkerExecutor = Executor & { close(): Promise<void> };
 export function workerExecutor(timeouts = { render: 10000, place: 30000 }): WorkerExecutor {
   let worker: Worker | undefined;
+  let workerDocs: DocLinks | undefined;
   let busy = false;
   const close = async () => {
     const current = worker;
     worker = undefined;
+    workerDocs = undefined;
     if (current) await current.terminate();
   };
   const execute: Executor = (work) =>
@@ -19,9 +24,13 @@ export function workerExecutor(timeouts = { render: 10000, place: 30000 }): Work
       }
       busy = true;
       if (!worker) {
+        workerDocs = undefined;
         worker = new Worker(
           new URL(import.meta.url.endsWith(".ts") ? "./worker.ts" : "./publish-worker.mjs", import.meta.url),
-          { resourceLimits: { maxOldGenerationSizeMb: 256, maxYoungGenerationSizeMb: 32 } },
+          {
+            // Deep author nesting relies on Node's default 4 MB worker stack.
+            resourceLimits: { maxOldGenerationSizeMb: 256, maxYoungGenerationSizeMb: 32, stackSizeMb: 4 },
+          },
         );
         const created = worker;
         // Exits while idle must also invalidate the cached worker without an unhandled error.
@@ -68,7 +77,8 @@ export function workerExecutor(timeouts = { render: 10000, place: 30000 }): Work
         const buffers =
           work.kind === "doc"
             ? [work.source]
-            : work.kind === "resection" ||
+            : work.kind === "doc-metadata" ||
+                work.kind === "resection" ||
                 work.kind === "placement-doc" ||
                 work.kind === "writeup-source" ||
                 work.kind === "line-count"
@@ -82,7 +92,16 @@ export function workerExecutor(timeouts = { render: 10000, place: 30000 }): Work
                       ...(work.parsedWriteup ? [work.parsedWriteup.bytes] : []),
                     ]
                   : [];
-        current.postMessage(work, [...new Set(buffers)]);
+        if (work.kind === "doc" || work.kind === "writeup") {
+          const { docs, ...job } = work;
+          // Each revision owns one immutable map. Transport it once per worker, including
+          // after a restart, and replace/clear it when another revision or bare job arrives.
+          if (docs !== workerDocs) {
+            current.postMessage({ kind: "doc-context", docs } satisfies WorkerMessage);
+            workerDocs = docs;
+          }
+          current.postMessage(job, [...new Set(buffers)]);
+        } else current.postMessage(work, [...new Set(buffers)]);
       } catch {
         failed();
       }

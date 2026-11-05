@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { AgentNoteView } from "./agent-note.ts";
+import { DocHeadings, DocTitle } from "./doc.ts";
 import { LIMITS } from "./limits.ts";
 import { PublishLinks, RepoUrl } from "./links.ts";
 import { Placement } from "./placement.ts";
@@ -184,6 +185,8 @@ export const RevisionView = z
           z.object({
             path: FilePath,
             kind: z.literal("markdown"),
+            title: DocTitle.optional(),
+            headings: DocHeadings.optional(),
             blocks: z
               .array(RenderedBlock)
               .max(LIMITS.blocksPerRevision)
@@ -192,7 +195,13 @@ export const RevisionView = z
                 "doc exceeds the rendered JSON byte budget",
               ),
           }),
-          z.object({ path: FilePath, kind: z.literal("html"), contentUrl }),
+          z.object({
+            path: FilePath,
+            kind: z.literal("html"),
+            contentUrl,
+            title: DocTitle.optional(),
+            headings: DocHeadings.optional(),
+          }),
         ]),
       )
       .max(LIMITS.filesPerRevision),
@@ -209,6 +218,8 @@ export const RevisionView = z
   .refine((view) => {
     let bytes = renderedBytes(view.writeup);
     for (const doc of view.docs) {
+      if (doc.title !== undefined || doc.headings !== undefined)
+        bytes += renderedBytes({ title: doc.title, headings: doc.headings });
       // An empty array also represents an unrendered doc, which has no stored JSON bytes.
       if (doc.kind === "markdown" && doc.blocks.length) bytes += renderedBytes(doc.blocks);
       if (bytes > LIMITS.renderedBytesPerRevision) return false;

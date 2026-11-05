@@ -187,6 +187,25 @@ function mount(search = "?tab=writeup&rev=1") {
   return { ...render(<App queryClient={client} history={history} />), history };
 }
 
+test("writeup doc links keep the older revision when their href has no rev", async () => {
+  currentReview.newestRevision = 2;
+  currentReview.revisions.push({ seq: 2, createdAt: "2026-01-02T00:00:00.000Z" });
+  const block = currentRevision.writeup.sections[0]?.blocks[0];
+  if (!block) throw new Error("Missing block");
+  block.html = '<p><a href="?tab=docs&amp;doc=seed.md">Read seed</a></p>';
+  // Memory history does not update the document base used by native relative anchors.
+  window.history.replaceState(null, "", `/r/${id}?tab=writeup&rev=1`);
+  try {
+    const { history } = mount();
+    fireEvent.click(await screen.findByRole("link", { name: "Read seed" }));
+    await waitFor(() => expect(new URLSearchParams(history.location.search).get("doc")).toBe("seed.md"));
+    expect(new URLSearchParams(history.location.search).get("rev")).toBe("1");
+    expect(fetch).not.toHaveBeenCalledWith(`/api/v1/reviews/${id}/revisions/2`, expect.anything());
+  } finally {
+    window.history.replaceState(null, "", "/");
+  }
+});
+
 test.each([
   { pixels: 1280, mode: "standard", pane: "split", key: "click", path: "seed.txt" },
   { pixels: 1280, mode: "standard", pane: "split", key: "click", path: "pnpm-lock.yaml" },

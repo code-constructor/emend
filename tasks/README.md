@@ -45,3 +45,4 @@ When the owner asks what to do next:
 | 011 | [Screenshots in the writeup](011-writeup-media.md) | agent + your approval | 005 | done |
 | 012 | [CLI state checks](012-cli-state-checks.md) | agent + your approval | 005 | open |
 | 013 | [Release emend and document every setup](013-release-and-setup.md) | agent + your approval | 005 | open |
+| 015 | [Reading docs, slice A](015-reading-docs-slice-a.md) | agent + your approval | 005 | open |

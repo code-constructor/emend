@@ -2,7 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { lstat } from "node:fs/promises";
 import { basename, dirname, relative, resolve, sep } from "node:path";
 import { LIMITS, PublishManifest } from "@emend/contract";
-import { cleanDocTitle, inferDocTitle } from "@emend/core";
+import { cleanDocTitle } from "@emend/core";
+import { workerExecutor } from "../../server/publish/executor.ts";
 import { readDocRoots } from "../config.ts";
 import { escapeReference } from "../escape.ts";
 import { CliError } from "../http.ts";
@@ -127,7 +128,21 @@ export async function shortcutManifest(
   const fallbackTitle = cleanDocTitle(basename(main)) || "Document";
   const titleFromMain = givenTitle
     ? undefined
-    : (bytes: Uint8Array) => inferDocTitle(isHtml(main) ? "html" : "markdown", bytes) || fallbackTitle;
+    : async (bytes: Uint8Array) => {
+        const execute = workerExecutor();
+        try {
+          const result = await execute({
+            kind: "doc-metadata",
+            format: isHtml(main) ? "html" : "markdown",
+            bytes: Uint8Array.from(bytes).buffer,
+          });
+          return (result.kind === "doc-metadata" && result.title) || fallbackTitle;
+        } catch {
+          return fallbackTitle;
+        } finally {
+          await execute.close();
+        }
+      };
   const parsed = PublishManifest.safeParse(
     {
       version: 1,

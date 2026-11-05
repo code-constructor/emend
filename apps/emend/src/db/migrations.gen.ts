@@ -195,5 +195,14 @@ export const MIGRATIONS: readonly { tag: string; when: number; hash: string; sta
       "CREATE INDEX `writeups_owner_source_blob_idx` ON `writeups` (`owner_id`,`source_blob`);",
       "CREATE INDEX `writeups_owner_rendered_blob_idx` ON `writeups` (`owner_id`,`rendered_blob`);"
     ]
+  },
+  {
+    "tag": "0012_curved_epoch",
+    "when": 1793838919412,
+    "hash": "ac89ed1e7d7dc8570347cc62b58843e0db605d3e30c651326aacf30007fd6d09",
+    "statements": [
+      "ALTER TABLE `files` ADD `title` text;",
+      "ALTER TABLE `files` ADD `headings` text;"
+    ]
   }
 ];

@@ -195,6 +195,10 @@ export async function importReview(principal: Principal, bundle: ImportBundle, d
             .map((r) => ({
               ...r,
               ownerId,
+              title:
+                r.role === "doc" ? (prepared.rendered.get(r.revisionId)?.metadata.get(r.path)?.title ?? null) : null,
+              headings:
+                r.role === "doc" ? (prepared.rendered.get(r.revisionId)?.metadata.get(r.path)?.headings ?? null) : null,
               mediaType: r.role === "diff" ? "text/plain" : mediaType(r.path),
               renderedBlob:
                 r.role === "doc" ? (prepared.rendered.get(r.revisionId)?.docBlobs.get(r.path) ?? null) : null,

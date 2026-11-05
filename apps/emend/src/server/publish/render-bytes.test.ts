@@ -35,11 +35,13 @@ const block: Block = {
 };
 test("rendered bytes count each shared path and stop later docs even with different sources", async () => {
   const execute = vi.fn<Executor>(async (work) =>
-    work.kind === "writeup"
-      ? { kind: "writeup", ...serializeRendered({ sections: [] }) }
-      : work.kind === "doc"
-        ? { kind: "doc", ...serializeRendered([block]) }
-        : executeWork(work),
+    work.kind === "doc-metadata"
+      ? { kind: "doc-metadata", headings: [] }
+      : work.kind === "writeup"
+        ? { kind: "writeup", ...serializeRendered({ sections: [] }) }
+        : work.kind === "doc"
+          ? { kind: "doc", ...serializeRendered([block]) }
+          : executeWork(work),
   );
   const result = await renderRevision(
     input,
@@ -67,4 +69,20 @@ test("a writeup alone above the byte cap has the fixed size error", async () => 
       async () => "stored",
     ),
   ).rejects.toMatchObject({ code: "too_large", message: "The writeup has too many blocks." });
+});
+
+test("doc metadata is bounded before storing any rendered blobs", async () => {
+  const put = vi.fn(async () => "stored");
+  await expect(
+    renderRevision(
+      input,
+      async (work) =>
+        work.kind === "doc-metadata"
+          ? { kind: "doc-metadata", title: "x".repeat(200), headings: [{ level: 2, text: "y".repeat(200) }] }
+          : executeWork(work),
+      async () => new ArrayBuffer(0),
+      put,
+    ),
+  ).rejects.toMatchObject({ code: "too_large" });
+  expect(put).not.toHaveBeenCalled();
 });

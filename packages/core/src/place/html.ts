@@ -9,11 +9,11 @@ const omitted = new Set(["script", "style", "template", "noscript"]);
 export const HTML_NESTING_LIMIT = 512;
 class HtmlNestingLimitError extends Error {}
 
-/** Static body textContent only; parse errors or excess nesting make the document unreadable. */
-export function docText(html: string): string | null {
+/** Shared by placement and doc metadata. A failed or over-nested parse has no usable tree. */
+export function parseDocHtml(html: string): DefaultTreeAdapterTypes.Document | null {
   try {
     let openElements = 0;
-    const tree = parse(html, {
+    return parse(html, {
       scriptingEnabled: true,
       treeAdapter: {
         ...defaultTreeAdapter,
@@ -25,25 +25,57 @@ export function docText(html: string): string | null {
         },
       },
     });
-    const document = tree.childNodes.find((node) => defaultTreeAdapter.isElementNode(node) && node.tagName === "html");
-    const body =
-      document && defaultTreeAdapter.isElementNode(document)
-        ? document.childNodes.find((node) => defaultTreeAdapter.isElementNode(node) && node.tagName === "body")
-        : undefined;
-    if (!body) return "";
-    const parts: string[] = [];
-    const pending: DefaultTreeAdapterTypes.Node[] = [body];
-    for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-      if (defaultTreeAdapter.isTextNode(node)) parts.push(node.value);
-      else if (defaultTreeAdapter.isElementNode(node) && !omitted.has(node.tagName)) {
-        // Template content lives separately; only visit ordinary childNodes in document order.
-        for (let index = node.childNodes.length - 1; index >= 0; index--) {
-          const child = node.childNodes[index];
-          if (child) pending.push(child);
-        }
-      }
+  } catch {
+    return null;
+  }
+}
+export function htmlPart(
+  tree: DefaultTreeAdapterTypes.Document,
+  tag: "head" | "body",
+): DefaultTreeAdapterTypes.ChildNode | undefined {
+  const root = tree.childNodes.find((node) => defaultTreeAdapter.isElementNode(node) && node.tagName === "html");
+  return root && defaultTreeAdapter.isElementNode(root)
+    ? root.childNodes.find((node) => defaultTreeAdapter.isElementNode(node) && node.tagName === tag)
+    : undefined;
+}
+export function* docNodes(
+  root: DefaultTreeAdapterTypes.Node,
+  nodeLimit = Infinity,
+): Generator<DefaultTreeAdapterTypes.Node> {
+  // Lazy child iterators let bounded text readers stop without enumerating a wide subtree.
+  const pending: Iterator<DefaultTreeAdapterTypes.Node>[] = [[root][Symbol.iterator]()];
+  while (pending.length) {
+    const next = pending.at(-1)?.next();
+    if (!next || next.done) {
+      pending.pop();
+      continue;
     }
-    return normalizeText(parts.join(""));
+    if (nodeLimit-- <= 0) return;
+    const node = next.value;
+    if (defaultTreeAdapter.isElementNode(node) && omitted.has(node.tagName)) continue;
+    yield node;
+    if (defaultTreeAdapter.isElementNode(node)) pending.push(node.childNodes[Symbol.iterator]());
+  }
+}
+export function nodeText(root: DefaultTreeAdapterTypes.Node, limit = Infinity): string {
+  const parts: string[] = [];
+  if (limit <= 0) return "";
+  for (const node of docNodes(root, 8 * limit)) {
+    if (!defaultTreeAdapter.isTextNode(node)) continue;
+    const part = node.value.slice(0, limit);
+    parts.push(part);
+    limit -= part.length;
+    if (limit <= 0) break;
+  }
+  return parts.join("");
+}
+/** Static body textContent only; parse errors or excess nesting make the document unreadable. */
+export function docText(html: string): string | null {
+  try {
+    const tree = parseDocHtml(html);
+    if (!tree) return null;
+    const body = htmlPart(tree, "body");
+    return body ? normalizeText(nodeText(body)) : "";
   } catch {
     return null;
   }

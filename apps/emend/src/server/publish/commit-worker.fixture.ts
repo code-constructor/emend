@@ -1,11 +1,14 @@
 import { parentPort } from "node:worker_threads";
 import { LIMITS } from "@emend/contract";
 import { type Block, blockHash } from "@emend/core";
-import { executeWork, serializeRendered, type Work, type WorkResult } from "./work.ts";
+import type { WorkerMessage } from "./executor.ts";
+import { executeWork, serializeRendered, type WorkResult } from "./work.ts";
 
 // Synthetic cap-sized renderer input; production serialization, parsing and placement
 // still run in a real worker, with the production executor and transfer protocol.
-parentPort?.on("message", async (work: Work) => {
+parentPort?.on("message", async (work: WorkerMessage) => {
+  // Synthetic blocks have no links, but context messages still have no job reply.
+  if (work.kind === "doc-context") return;
   try {
     let result: WorkResult;
     if (work.kind === "writeup" || work.kind === "doc") {

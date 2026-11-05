@@ -16,6 +16,11 @@ declare global {
     decode(input: Uint8Array): string;
   }
 
+  class URLSearchParams {
+    constructor(init: Record<string, string>);
+    toString(): string;
+  }
+
   class URL {
     constructor(input: string);
     readonly protocol: string;
