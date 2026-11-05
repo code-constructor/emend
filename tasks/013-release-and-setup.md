@@ -23,11 +23,12 @@ attached to their hub, or all of them. The first outside user starts on 2026-11-
 - [x] R.1: `apps/emend/package.json`, `apps/emend/src/version.ts` and `plugin.json` carry the
       same version. `version.test.ts` fails when `version.ts` differs, and `check:package` fails
       when `plugin.json` differs. `pnpm release` writes all three; nobody edits them by hand.
+      Superseded by R.3.
 - [x] R.2: `pnpm release <x.y.z>` bumps the versions, drafts `CHANGELOG.md` from the commits since
       the last tag, runs the gate and writes the commit message. It never commits, tags, pushes or
-      publishes. `docs/releasing.md` holds the policy and your checklist.
+      publishes. `docs/releasing.md` holds the policy and your checklist. Superseded by R.3.
 - [x] R.4: the docs install the Claude Code plugin from `shllg/emend@release`.
-- [ ] You: publish 0.1.0 to npm, then push `main`, the tag and `release`.
+- [x] You: publish 0.1.0 to npm, then push `main`, the tag and `release` (done 2026-11-05).
 
 6.2 Setup docs:
 
@@ -40,7 +41,16 @@ attached to their hub, or all of them. The first outside user starts on 2026-11-
 
 6.3 Smooth updates and any network:
 
-- [ ] R.3: a release workflow publishes a signed tag to npm with provenance.
+- [ ] R.3: `.github/workflows/release.yml` releases nightly at 02:00 UTC and on a manual trigger,
+      only when shipped changes landed since the last `v*` tag. It picks patch or minor from the
+      commit types, runs `pnpm verify`, packs, publishes through npm trusted publishing with
+      provenance, tags the released `main` commit, moves `release` and creates a GitHub Release.
+      Nothing is committed back. `plugin.json` drops its version, so the plugin follows commits.
+      `pnpm release` and `release-pack` go away; `install:local` stamps the newest tag's version.
+- [ ] You: create the GitHub environment `npm` and the rulesets for `release` and `v*` (done
+      2026-11-05), then the npm trusted publisher with direct `npm publish` allowed, then set the
+      repository variable `RELEASE_ENABLED` (docs/releasing.md, "One-time setup"). Then run the
+      workflow with `dry_run`, then for real.
 - [ ] N.1: `emend serve --public-url <origin>` for a hub behind your own address;
       `docs/setup/hub-network.md`.
 - [ ] S.1: `emend` and `emend service status` say when the running server is another version.
@@ -59,6 +69,20 @@ their reviews.
 
 ## Notes
 
+- 2026-11-05: For R.3, you chose fully automatic publishing. The security review flagged that a
+  push to `main` now reaches npm by the next nightly with no 2FA step. You turned down npm's
+  staged publishing (approve each version with 2FA) and a GitHub approval gate. The approval gate
+  would not stop an agent anyway, because `gh` on your machine is signed in as you. The
+  workflow does nothing until `RELEASE_ENABLED` is set, so the first nightly cannot tag before the
+  setup is done. A tag that reached npm but not `release` is finished by the next run. A tag that
+  never reached npm is published only from a run at its own commit, since npm provenance names the
+  run's commit. No run publishes or tags a commit behind `release`. A deny rule for
+  `gh workflow run` was dropped: a manual run ships only what the nightly would ship.
+- 2026-11-05: You asked to release from GitHub Actions instead of your terminal: nightly when
+  changes landed, plus a manual trigger. You accepted that a nightly may ship half-finished work
+  pushed to sync your machines. Release tags are no longer signed by your key; trust rests on npm
+  provenance, on only you pushing `main`, and on the ruleset. A checkout version with build
+  metadata (`0.3.0+4.g…`) was dropped: the server accepts only a plain `x.y.z` client version.
 - 2026-11-05: For plan task 6.2, you chose to leave sandbox setup to each agent's own
   documentation. The setup docs drop the sandbox and deny rules, and say that any program that can
   read emend's state folder can act as you. Developing from a checkout moves from the README to

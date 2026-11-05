@@ -1,72 +1,76 @@
-// Prepares a release: bumps the three version files, drafts CHANGELOG.md from the commits since the
-// last tag, runs the gate and prints the owner's next steps. It never commits, tags, pushes or
-// publishes (AGENTS.md, "Delivery"). The release commit's paths are not in sync/manifest.json, so
-// the printed commit message needs no Sync trailer.
+// Plans releases from shipped commits and stamps only the temporary build's version files.
+// GitHub Actions owns verification, tagging, publishing and the release branch.
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export type GateRunner = (root: string) => void;
-
-export interface ReleaseOptions {
-  root: string;
-  version: string;
-  date: string;
-  gate: GateRunner;
-  skipGate?: boolean;
-  stdout?: (line: string) => void;
-}
-
-export interface ReleaseResult {
-  version: string;
-  previousTag?: string;
-  changelogSection: string;
-  nextSteps: string[];
-}
-
 export class ReleaseError extends Error {}
+class UsageError extends Error {}
 
-const VERSION_SOURCE = "apps/emend/src/version.ts";
-const VERSION_FILES = ["apps/emend/package.json", "plugin/.claude-plugin/plugin.json", VERSION_SOURCE];
-const CHANGELOG_HEADER =
-  "# Changelog\n\nNewest first. Each entry is a Conventional Commit subject since the previous release.\n";
-const VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+export const VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?![\s\S])/;
 const VERSION_VALUE = /("version"\s*:\s*")([^"]*)(")/;
+const VERSION_SOURCE = "apps/emend/src/version.ts";
+
+// Directories include everything below them; the other entries name exact root-relative files.
+export const SHIPPED_PATHS = [
+  "apps/emend/",
+  "apps/web/",
+  "packages/",
+  "plugin/",
+  ".claude-plugin/",
+  "README.md",
+  "LICENSE",
+  "docs/setup.md",
+  "docs/setup/",
+  "docs/usage.md",
+  "package.json",
+  "pnpm-lock.yaml",
+  "pnpm-workspace.yaml",
+  "tsconfig.base.json",
+  ".pnpmfile.mjs",
+] as const;
 
 function git(root: string, args: string[]): string {
-  return execFileSync("git", ["-C", root, ...args], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  try {
+    return execFileSync("git", ["-C", root, ...args], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      maxBuffer: 64 * 1024 * 1024,
+    });
+  } catch {
+    throw new ReleaseError(`release: git ${args[0]} failed`);
+  }
 }
 
 export function compareVersions(a: string, b: string): number {
-  const left = a.split(".").map(Number);
-  const right = b.split(".").map(Number);
+  const left = a.split(".").map(BigInt);
+  const right = b.split(".").map(BigInt);
   for (let i = 0; i < 3; i++) {
-    const difference = (left[i] ?? 0) - (right[i] ?? 0);
-    if (difference !== 0) return difference < 0 ? -1 : 1;
+    const difference = (left[i] ?? 0n) - (right[i] ?? 0n);
+    if (difference !== 0n) return difference < 0n ? -1 : 1;
   }
   return 0;
 }
 
-// "Newest" means the highest plain v<x.y.z> tag merged into HEAD. Prerelease or odd tags and tags
+// "Newest" means the highest plain v<x.y.z> tag merged into ref. Prerelease or odd tags and tags
 // on other branches do not count. No tags is an empty list; a git failure refuses the release.
-export function lastTag(root: string): string | undefined {
+function mergedTags(root: string, ref: string): string[] {
   let listing: string;
   try {
-    listing = git(root, ["tag", "--merged", "HEAD", "--list", "v*"]);
+    listing = git(root, ["tag", "--merged", ref, "--list", "v*"]);
   } catch (error) {
     const reason = error instanceof Error ? error.message.split("\n")[0] : String(error);
     throw new ReleaseError(`release: could not list tags (${reason})`);
   }
-  let newest: string | undefined;
-  for (const tag of listing.split("\n")) {
-    if (!tag.startsWith("v") || !VERSION_PATTERN.test(tag.slice(1))) continue;
-    if (newest === undefined || compareVersions(tag.slice(1), newest.slice(1)) > 0) newest = tag;
-  }
-  return newest;
+  return listing
+    .split("\n")
+    .filter((tag) => tag.startsWith("v") && VERSION_PATTERN.test(tag.slice(1)))
+    .sort((a, b) => compareVersions(b.slice(1), a.slice(1)));
+}
+
+export function lastTag(root: string, ref = "HEAD"): string | undefined {
+  return mergedTags(root, ref)[0];
 }
 
 function topLevelVersion(text: string, file: string): unknown {
@@ -75,12 +79,6 @@ function topLevelVersion(text: string, file: string): unknown {
   } catch {
     throw new ReleaseError(`release: ${file} is not valid JSON`);
   }
-}
-
-function readVersion(root: string, file: string): string {
-  const found = topLevelVersion(readFileSync(join(root, file), "utf8"), file);
-  if (typeof found !== "string") throw new ReleaseError(`release: no top-level version in ${file}`);
-  return found;
 }
 
 // Changes only the first "version" value, so key order, indentation and the final newline stay.
@@ -95,7 +93,7 @@ export function bumpedVersionText(root: string, file: string, version: string): 
   return bumped;
 }
 
-const VERSION_LINE = /^(export const VERSION = ")([^"\n]*)(";)$/gm;
+const VERSION_LINE = /^(export const VERSION = ")([^"\r\n]*)(";)(?=\r?$)/gm;
 
 // Replaces only the string literal in the single `export const VERSION = "<x>";` line.
 export function bumpedSourceText(root: string, file: string, version: string): string {
@@ -115,16 +113,6 @@ export function localDate(now = new Date()): string {
   return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 }
 
-export function parseArgs(args: string[]): { version: string; skipGate: boolean } {
-  const skipGate = args.includes("--skip-gate");
-  const rest = args.filter((arg) => arg !== "--skip-gate");
-  const [version] = rest;
-  if (version === undefined || rest.length !== 1 || version.startsWith("-")) {
-    throw new ReleaseError("Usage: pnpm release <x.y.z> [--skip-gate]");
-  }
-  return { version, skipGate };
-}
-
 interface Entry {
   group: "breaking" | "feat" | "fix" | "perf";
   line: string;
@@ -139,28 +127,52 @@ const GROUPS: [Entry["group"], string][] = [
 
 export function classifyCommit(subject: string, body: string): Entry | undefined {
   const match = /^(\w+)(?:\(([^)]*)\))?(!)?:\s*(.+)$/.exec(subject.trim());
-  if (!match) return;
+  if (!match)
+    return /^BREAKING[ -]CHANGE:/m.test(body) ? { group: "breaking", line: `- ${subject.trim()}` } : undefined;
   const [, type = "", scope, bang, summary = ""] = match;
   const line = `- ${summary.trim()}${scope ? ` (${scope})` : ""}`;
   if (bang || /^BREAKING[ -]CHANGE:/m.test(body)) return { group: "breaking", line };
   if (type === "feat" || type === "fix" || type === "perf") return { group: type, line };
 }
 
-export function changelogSection(
-  root: string,
-  version: string,
-  date: string,
-  previousTag: string | undefined,
-): string {
-  const heading = `## ${version} (${date})`;
-  if (!previousTag) return `${heading}\n\nFirst release.\n`;
-  const log = git(root, ["log", `${previousTag}..HEAD`, "--format=%s%x1f%b%x1e"]);
-  const entries: Entry[] = [];
-  for (const record of log.split("\x1e")) {
-    const [subject = "", body = ""] = record.replace(/^\n/, "").split("\x1f");
-    const entry = classifyCommit(subject, body);
-    if (entry) entries.push(entry);
+export interface Commit {
+  subject: string;
+  body: string;
+}
+
+function countedCommits(root: string, previous: string, end = "HEAD"): Commit[] {
+  const log = git(root, ["log", "--no-merges", `${previous}..${end}`, "--format=%H%x00%s%x00%b%x00"]);
+  const fields = log.split("\0");
+  const commits: Commit[] = [];
+  for (let i = 0; i + 2 < fields.length; i += 3) {
+    const sha = fields[i].trim();
+    const subject = fields[i + 1];
+    const body = fields[i + 2];
+    if (/^(test|ci)(?:\([^)]*\))?!?:/.test(subject)) continue;
+    // Disable rename detection so moving a file out of a shipped path still counts.
+    const paths = git(root, [
+      "diff-tree",
+      "--root",
+      "--no-commit-id",
+      "--name-only",
+      "--no-renames",
+      "-r",
+      "-z",
+      sha,
+    ]).split("\0");
+    if (
+      paths.some((path) =>
+        SHIPPED_PATHS.some((shipped) => (shipped.endsWith("/") ? path.startsWith(shipped) : path === shipped)),
+      )
+    )
+      commits.push({ subject, body });
   }
+  return commits;
+}
+
+export function changelogSection(version: string, date: string, commits: Commit[]): string {
+  const heading = `## ${version} (${date})`;
+  const entries = commits.flatMap(({ subject, body }) => classifyCommit(subject, body) ?? []);
   if (entries.length === 0) return `${heading}\n\nMaintenance release.\n`;
   const blocks = GROUPS.flatMap(([group, title]) => {
     const lines = entries.filter((entry) => entry.group === group).map((entry) => entry.line);
@@ -169,117 +181,179 @@ export function changelogSection(
   return `${heading}\n\n${blocks.join("\n")}`;
 }
 
-function insertSection(existing: string | undefined, section: string): string {
-  if (existing === undefined || !existing.startsWith("# Changelog")) {
-    return `${CHANGELOG_HEADER}\n${section}${existing ? `\n${existing}` : ""}`;
+export function stampVersion(root: string, version: string): void {
+  if (!VERSION_PATTERN.test(version)) throw new ReleaseError("release: version must be plain x.y.z");
+  // Validate both replacements before writing either file.
+  const manifest = bumpedVersionText(root, "apps/emend/package.json", version);
+  const source = bumpedSourceText(root, VERSION_SOURCE, version);
+  writeFileSync(join(root, "apps/emend/package.json"), manifest);
+  writeFileSync(join(root, VERSION_SOURCE), source);
+}
+
+type Bump = "auto" | "patch" | "minor";
+interface PlanOptions {
+  root: string;
+  bump?: Bump;
+  notes?: string;
+  date?: string;
+  output?: string;
+  stdout?: (line: string) => void;
+  isPublished?: (version: string) => Promise<boolean>;
+  releaseRef?: string;
+}
+
+export async function isPublished(version: string): Promise<boolean> {
+  let response: Response;
+  try {
+    response = await fetch(`https://registry.npmjs.org/@shllg%2Femend/${encodeURIComponent(version)}`, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(30_000),
+    });
+    await response.body?.cancel();
+  } catch {
+    throw new ReleaseError(`release: could not check npm for @shllg/emend@${version}`);
   }
-  const at = existing.search(/^## /m);
-  if (at === -1) return `${existing.trimEnd()}\n\n${section}`;
-  return `${existing.slice(0, at)}${section}\n${existing.slice(at)}`;
+  if (response.status === 200) return true;
+  if (response.status === 404) return false;
+  throw new ReleaseError(`release: npm returned HTTP ${response.status} for @shllg/emend@${version}`);
 }
 
-export function nextSteps(version: string): string[] {
-  return [
-    "Review CHANGELOG.md.",
-    "git add apps/emend/package.json plugin/.claude-plugin/plugin.json apps/emend/src/version.ts CHANGELOG.md",
-    "git diff --staged",
-    "Check that it shows only the version lines and the new changelog section; another session could have edited the files while the gate ran.",
-    `git commit -S -m "chore: release ${version}"`,
-    `git tag -s v${version} -m "emend ${version}"`,
-    `git push origin main v${version}`,
-    `d="$(mktemp -d)" && git clone --depth 1 --branch v${version} https://github.com/shllg/emend.git "$d/emend" && node "$d/emend/scripts/release-pack.ts" ${version}`,
-    "Run the npm publish command it prints; compare its shasum line, and the start and end of its integrity line, with npm's before you enter the 2FA code.",
-    `npm view @shllg/emend@${version} version --registry=https://registry.npmjs.org/`,
-    `Continue only when it prints ${version}; the marketplace follows the release branch.`,
-    `git push origin 'v${version}^{commit}:refs/heads/release'`,
-    'Remove the two temporary folders: "$d" and the one release-pack kept.',
-  ];
-}
-
-function checkChangelog(root: string, version: string): void {
-  const file = join(root, "CHANGELOG.md");
-  if (!existsSync(file)) return;
-  const escaped = version.replaceAll(".", "\\.");
-  if (new RegExp(`^## ${escaped}( |$)`, "m").test(readFileSync(file, "utf8"))) {
-    throw new ReleaseError(`release: CHANGELOG.md already has a section for ${version}`);
+function releaseCommit(root: string, ref: string): string {
+  try {
+    return git(root, ["rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`]).trim();
+  } catch {
+    throw new ReleaseError(`release: release ref ${ref} is missing or invalid`);
   }
 }
 
-export function release(options: ReleaseOptions): ReleaseResult {
-  const { root, version, date, gate } = options;
+function isAncestor(root: string, ancestor: string, descendant: string): boolean {
+  const result = spawnSync("git", ["-C", root, "merge-base", "--is-ancestor", ancestor, descendant], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (!result.error && result.status === 0) return true;
+  if (!result.error && result.status === 1) return false;
+  throw new ReleaseError(`release: could not check whether ${ancestor} is an ancestor of ${descendant}`);
+}
+
+export async function plan(options: PlanOptions) {
+  const { root, bump = "auto", notes, date = localDate(), output } = options;
   const out = options.stdout ?? (() => {});
-  if (!VERSION_PATTERN.test(version)) {
-    throw new ReleaseError(`release: version must be plain x.y.z, got "${version}"`);
-  }
-  const branch = git(root, ["rev-parse", "--abbrev-ref", "HEAD"]).trim();
-  if (branch !== "main") throw new ReleaseError(`release: run on main, not "${branch}"`);
-  if (git(root, ["status", "--porcelain"]).trim() !== "") {
-    throw new ReleaseError("release: the working tree is not clean");
-  }
-  if (spawnSync("git", ["-C", root, "rev-parse", "-q", "--verify", `refs/tags/v${version}`]).status === 0) {
-    throw new ReleaseError(`release: the tag v${version} already exists`);
-  }
-  const previousTag = lastTag(root);
-  if (previousTag) {
-    if (compareVersions(version, previousTag.slice(1)) <= 0) {
-      throw new ReleaseError(`release: ${version} is not greater than ${previousTag}`);
+  const newest = lastTag(root);
+  if (!newest) throw new ReleaseError("release: no plain v<x.y.z> tag is merged into HEAD");
+  const taggedSha = git(root, ["rev-parse", "--verify", `refs/tags/${newest}^{commit}`]).trim();
+  const releaseRef = options.releaseRef ?? "refs/remotes/origin/release";
+  const released = releaseCommit(root, releaseRef);
+  const contained = isAncestor(root, taggedSha, released);
+  const requireCurrentRelease = (sha: string) => {
+    if (!isAncestor(root, released, sha)) {
+      throw new ReleaseError(`release: ${releaseRef} is ahead of or diverged from ${sha}; refusing a stale release`);
     }
-  } else {
-    const current = readVersion(root, VERSION_FILES[0] as string);
-    if (compareVersions(version, current) < 0) {
-      throw new ReleaseError(`release: ${version} is lower than the current version ${current}`);
-    }
-  }
-  checkChangelog(root, version);
-
-  const section = changelogSection(root, version, date, previousTag);
-  const bumped = VERSION_FILES.map(
-    (file) =>
-      [file, (file === VERSION_SOURCE ? bumpedSourceText : bumpedVersionText)(root, file, version)] as const,
-  );
-  for (const [file, text] of bumped) writeFileSync(join(root, file), text);
-  const changelog = join(root, "CHANGELOG.md");
-  const existing = existsSync(changelog) ? readFileSync(changelog, "utf8") : undefined;
-  writeFileSync(changelog, insertSection(existing, section));
-  out(`Bumped ${VERSION_FILES.join(", ")} to ${version}; drafted CHANGELOG.md.`);
-
-  if (options.skipGate !== true) {
+  };
+  const checkPublished = async (version: string) => {
     try {
-      gate(root);
+      return await (options.isPublished ?? isPublished)(version);
     } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
+      if (error instanceof ReleaseError) throw error;
+      throw new ReleaseError(`release: could not check npm for @shllg/emend@${version}`);
+    }
+  };
+  const published = await checkPublished(newest.slice(1));
+  if (!published || !contained) {
+    requireCurrentRelease(taggedSha);
+    if (!published && contained) {
+      throw new ReleaseError(`release: release already holds ${newest}'s commit but npm lacks ${newest.slice(1)}`);
+    }
+    if (!published && git(root, ["rev-parse", "HEAD"]).trim() !== taggedSha) {
       throw new ReleaseError(
-        `release: the gate failed (${reason}); the bumped files are left in place for you to inspect`,
+        `release: ${newest} is tagged but not on npm; publish it from a run at its commit (re-run the failed jobs of the run that tagged it) or push a higher lightweight tag at main's HEAD and start the workflow`,
       );
     }
+    const previous = mergedTags(root, "HEAD").find((tag) => compareVersions(tag.slice(1), newest.slice(1)) < 0);
+    if (!previous) throw new ReleaseError(`release: cannot resume ${newest}: no earlier plain tag is merged into HEAD`);
+    const version = newest.slice(1);
+    const sha = taggedSha;
+    const section = changelogSection(version, date, countedCommits(root, previous, sha));
+    if (notes) writeFileSync(notes, section);
+    if (output)
+      appendFileSync(output, `release=true\nresume=true\nversion=${version}\nprevious=${previous}\nsha=${sha}\n`);
+    const ignored = bump === "auto" ? "" : `; --bump ${bump} ignored when resuming`;
+    out(`release: resumes ${newest} at ${sha} since ${previous}${ignored}`);
+    return { release: true as const, resume: true, version, previous, sha, section };
   }
-  if (options.skipGate === true) out("The gate did not run (--skip-gate); pnpm verify must pass before you tag.");
-  const steps = nextSteps(version);
-  out("Next steps, in this order:");
-  steps.forEach((step, index) => {
-    out(`${index + 1}. ${step}`);
-  });
-  return { version, previousTag, changelogSection: section, nextSteps: steps };
+  const previous = newest;
+  const commits = countedCommits(root, previous);
+  if (commits.length === 0) {
+    out(`release: nothing to release since ${previous}`);
+    if (output) appendFileSync(output, "release=false\n");
+    return { release: false as const, previous };
+  }
+  const sha = git(root, ["rev-parse", "HEAD"]).trim();
+  requireCurrentRelease(sha);
+  const breaking = commits.some(({ subject, body }) => classifyCommit(subject, body)?.group === "breaking");
+  if (bump === "patch" && breaking) throw new ReleaseError("release: a breaking change requires a minor bump");
+  const minor =
+    bump === "minor" ||
+    (bump === "auto" && (breaking || commits.some(({ subject }) => /^feat(?:\([^)]*\))?!?:/.test(subject))));
+  const [major, oldMinor, patch] = previous.slice(1).split(".").map(BigInt);
+  const version = minor ? `${major}.${oldMinor + 1n}.0` : `${major}.${oldMinor}.${patch + 1n}`;
+  if (git(root, ["tag", "--list", `v${version}`]).trim()) {
+    throw new ReleaseError(`release: the tag v${version} already exists`);
+  }
+  if (await checkPublished(version)) throw new ReleaseError(`release: npm already has ${version}`);
+  const contract = readFileSync(join(root, "packages/contract/src/api.ts"), "utf8");
+  const minimum = /^export const MIN_CLIENT_VERSION = "([^"]+)";/m.exec(contract)?.[1];
+  if (!minimum || !VERSION_PATTERN.test(minimum)) {
+    throw new ReleaseError("release: MIN_CLIENT_VERSION must be a plain version");
+  }
+  if (compareVersions(minimum, version) > 0) {
+    throw new ReleaseError(`release: MIN_CLIENT_VERSION ${minimum} is greater than ${version}`);
+  }
+  if (!git(root, ["tag", "--merged", "HEAD", "--list", `v${minimum}`]).trim()) {
+    throw new ReleaseError(`release: MIN_CLIENT_VERSION ${minimum} must name an already-released version`);
+  }
+  const section = changelogSection(version, date, commits);
+  if (notes) writeFileSync(notes, section);
+  if (output)
+    appendFileSync(output, `release=true\nresume=false\nversion=${version}\nprevious=${previous}\nsha=${sha}\n`);
+  out(
+    `release: ${version} (${minor ? "minor" : "patch"}), ${commits.length} shipped commit(s) since ${previous} at ${sha}`,
+  );
+  return { release: true as const, resume: false, version, previous, sha, section };
 }
 
-export const runGate: GateRunner = (root) => {
-  execFileSync("pnpm", ["verify"], { cwd: root, stdio: "inherit" });
-};
+type Command = { command: "plan"; bump: Bump; notes?: string } | { command: "stamp"; version: string };
+const USAGE = "Usage: node scripts/release.ts plan [--bump auto|patch|minor] [--notes <file>] | stamp <x.y.z>";
+
+export function parseArgs(args: string[]): Command {
+  if (args[0] === "stamp" && args.length === 2 && !args[1].startsWith("-")) {
+    return { command: "stamp", version: args[1] };
+  }
+  if (args[0] !== "plan") throw new UsageError(USAGE);
+  let bump: Bump = "auto";
+  let notes: string | undefined;
+  const seen = new Set<string>();
+  for (let i = 1; i < args.length; i += 2) {
+    const flag = args[i];
+    const value = args[i + 1];
+    if (!value || value.startsWith("-") || seen.has(flag)) throw new UsageError(USAGE);
+    seen.add(flag);
+    if (flag === "--bump" && (value === "auto" || value === "patch" || value === "minor")) bump = value;
+    else if (flag === "--notes") notes = value;
+    else throw new UsageError(USAGE);
+  }
+  return { command: "plan", bump, notes };
+}
 
 if (import.meta.main) {
   const root = fileURLToPath(new URL("..", import.meta.url));
   try {
-    const { version, skipGate } = parseArgs(process.argv.slice(2));
-    release({
-      root,
-      version,
-      date: localDate(),
-      gate: runGate,
-      skipGate,
-      stdout: (line) => console.log(line),
-    });
+    const args = parseArgs(process.argv.slice(2));
+    if (args.command === "stamp") stampVersion(root, args.version);
+    else await plan({ root, ...args, output: process.env.GITHUB_OUTPUT, stdout: console.log });
   } catch (error) {
-    console.error(error instanceof Error ? error.message.split("\n")[0] : String(error));
-    process.exitCode = 1;
+    const message = error instanceof Error ? error.message.split(/\r?\n/)[0] : String(error);
+    console.error(error instanceof UsageError || message.startsWith("release:") ? message : `release: ${message}`);
+    process.exitCode = error instanceof UsageError ? 2 : 1;
   }
 }

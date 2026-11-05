@@ -68,7 +68,8 @@ Each line prevents a real failure. "Before you touch" names the rule file with t
 - **Until the first release, all work lands directly on `main`.** No feature branches, no PRs.
 - Commit only when the owner asks. One logical change per commit; the body names the plan task.
 - Agents never push. The owner pushes `main`. Never push tags, never force-push, never run
-  `gh pr merge`. Publishing to npm is the owner's step.
+  `gh pr merge`. The Release workflow publishes to npm from `main`; agents never start or
+  re-run it.
 - Tests never touch emend's real state directory, which holds client diffs: the Vitest setup
   sets a temporary `EMEND_HOME`, and every test that needs state uses its own.
 - Changing `.claude/settings.json`, `.claude/hooks/` or `.codex/` needs the owner's approval

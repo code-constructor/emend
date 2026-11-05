@@ -1,107 +1,213 @@
 # Releasing emend
 
-This page is for maintainers. It covers the versioning policy, the one-time setup and the release
-checklist for `@shllg/emend` and the Claude Code plugin.
+This page is for maintainers. GitHub Actions releases `@shllg/emend` and moves the Claude Code
+marketplace branch. Nothing is committed back to the repository.
 
 ## Versioning
 
-emend follows semantic versioning, read this way before 1.0:
+Releases use plain `x.y.z` versions, without prerelease or build metadata. The server accepts only
+that form in the CLI client header.
 
-- **Patch** (`0.1.1`): fixes only.
-- **Minor** (`0.2.0`): new features, and any change that needs the hub updated before the machines
-  attached to it.
-- **`MIN_CLIENT_VERSION`** in `packages/contract` rises only when a server stops serving an older
-  client. Raise it in the same release that drops the old behavior, never earlier.
-- **Breaking API change**: it goes to `/api/v2`. `/api/v1` keeps its shape (additive fields only).
+The previous release is the highest plain `v<x.y.z>` tag merged into the selected main commit.
+Non-merge commits since that tag count only when they touch a shipped path and their Conventional
+Commit type is neither `test` nor `ci`. Merge wrappers never count. `SHIPPED_PATHS` in
+`scripts/release.ts` is the source of truth: it covers the apps, packages, plugin and marketplace,
+user setup and usage docs, README, license, and root package, lockfile, workspace, TypeScript config
+and packing-hook files.
 
-Three files carry the version: `apps/emend/package.json`, `plugin/.claude-plugin/plugin.json` and
-the `VERSION` constant in `apps/emend/src/version.ts`. `pnpm release` writes all three. The plugin
-file matters because Claude Code caches a plugin by that value: a release that does not change it
-never reaches plugin users. `version.test.ts` fails when `version.ts` differs from `package.json`.
-`pnpm check:package` fails when `plugin.json` differs, and it checks the packed `emend --version`.
-Nobody edits the three files by hand.
+- **Patch** (`0.1.1`): fixes, performance work and other counted changes without a feature or
+  breaking change.
+- **Minor** (`0.2.0`): any counted `feat` commit or breaking change. A `!` after the type/scope or
+  a `BREAKING CHANGE:` footer marks a breaking change. Before 1.0, breaking changes are minor bumps.
+- Manual `patch` or `minor` overrides the automatic choice, but `patch` refuses a counted breaking
+  change. A new version needs a counted commit. When resuming an unfinished release, the existing
+  tag fixes the version and any manual `--bump` is ignored.
+- **`MIN_CLIENT_VERSION`** in `packages/contract/src/api.ts` may name only an already-released
+  version. `plan` refuses a value without a reachable release tag, or one greater than the planned
+  version. Release support for a new client version before raising this floor.
+- **Breaking API change**: it goes to `/api/v2`. `/api/v1` stays additive.
 
-## One-time setup
+Before planning a new version, the planner checks whether the newest tag's version is on npm and
+whether `origin/release` contains its commit. If either is incomplete, it attempts to resume that
+tag, using the highest plain tag below it merged into HEAD as the previous release. Notes cover
+only the counted commits between that previous tag and the resumed tag. An unpublished tag can
+resume only from a run at its own commit, to preserve npm provenance. A published tag can resume
+marking from a later HEAD. The planner refuses if `release` is ahead of or diverged from the
+planned commit, or already holds an unpublished tag's commit.
 
-Make the GitHub repository public before the first release: the release clone, the plugin
-marketplace and the setup prompts all read it anonymously.
+Once the newest tag is published and contained by `release`, no counted commits means nothing to
+release. An existing target tag or npm version refuses a new version. Release notes group counted
+breaking changes, features, fixes and performance work; other counted changes produce a maintenance
+note when no such groups exist.
 
-1. Create an npm account and make it the owner of the `@shllg` scope. Set two-factor authentication
-   to the "authorization and writes" level, so publishing asks for a code. In the package's
-   settings on npmjs.com, require two-factor authentication to publish.
-2. In the GitHub repository, add a ruleset: only the owner may update the `release` branch, with no
-   force pushes and no deletion; and tags matching `v*` cannot be moved or deleted. The Claude Code
-   marketplace follows `release`, so whoever can move it controls what plugin users receive.
-3. Publish the first release by hand (the checklist below). The `release` branch does not exist
-   until the first push to `refs/heads/release`; that push creates it.
-4. Later, a release workflow with npm trusted publishing will replace the hand publish; it is not
-   built yet. Until it exists, steps 4 and 5 of the checklist are yours.
+## How a release happens
 
-## Release checklist
+Once enabled, the **Release** workflow runs nightly at **02:00 UTC**, on the upstream repository's
+`main` branch. Until the owner completes setup and sets the repository variable `RELEASE_ENABLED`
+to `true`, neither nightly nor manual runs do anything. It plans new versions when shipped changes
+have landed and finishes interrupted releases. Publishing is fully automatic: a shipped change
+pushed to main reaches npm by the next nightly when the gate and publishing succeed. GitHub can
+delay scheduled runs and pauses scheduled workflows after 60 days without repository activity.
 
-Work in your own terminal, not in an agent session: other sessions may write to a shared checkout.
+To run it manually, choose **Actions > Release > Run workflow** on `main`, with a bump of `auto`,
+`patch` or `minor`. Or run:
 
-1. `pnpm release <x.y.z>` on `main` with a clean working tree. It refuses unless the version is
-   plain `x.y.z` without leading zeros and above the highest `v<x.y.z>` tag merged into `HEAD` (the
-   first release may equal the current package version), no tag `v<x.y.z>` exists locally, the
-   branch is `main`, the tree is clean and `CHANGELOG.md` has no section for the version. It bumps the three version files, drafts `CHANGELOG.md` from the
-   commits since that tag, runs `pnpm verify` (unless `--skip-gate`) and prints the steps below. It
-   never commits, tags, pushes or publishes.
-2. Review `CHANGELOG.md`, then stage the four files and look at the staged diff:
+```sh
+gh workflow run release.yml -f bump=auto
+```
+
+To rehearse, select `dry_run` in the UI or run:
+
+```sh
+gh workflow run release.yml -f bump=auto -f dry_run=true
+```
+
+A dry run plans, verifies, builds, checks and uploads the tarball. Its summary says which version
+would be released and shows the notes. It does not tag, publish or move the marketplace branch.
+Scheduled runs use `auto` with `dry_run=false`. Runs share one concurrency group and never cancel
+an in-progress release.
+
+1. **plan** reads full history, tags and `origin/release`. It checks npm and the release branch
+   before choosing a new version or resuming the newest tag's peeled commit. It records the
+   previous tag, full SHA and whether this is a resume, uploads the notes and writes the Actions
+   summary.
+2. **verify** checks that SHA with `pnpm verify` on Node 24 and 26. `SYNC_BASE` is the previous
+   release tag, so the sync check covers all commits being released.
+3. **build** installs from the frozen lockfile on Node 26, stamps the version into the build
+   checkout, builds and packs with pnpm. The root pnpmfile strips private development dependencies;
+   the prepack hook refuses npm packing. `check:package --tarball` checks that exact tarball. The
+   job uploads it with its SHA-512 integrity and file name.
+4. **tag** checks the live `release` branch is an ancestor of or equal to the planned SHA, including
+   on reruns that reuse old plan outputs. It then creates the lightweight `v<version>` tag. An
+   existing lightweight or annotated tag at that same commit is accepted; a different target fails.
+5. **publish** runs in the `npm` environment on a GitHub-hosted runner, with only `id-token: write`.
+   It checks out no repository code and runs no pnpm. It downloads the tarball, checks its integrity
+   and requires npm CLI >= 11.5.1. It publishes with
+   `npm publish --ignore-scripts --access public <tarball>` using trusted publishing (OIDC, no npm
+   token); npm generates provenance automatically. Publishing requires the workflow run's commit
+   to equal the planned SHA. An already-published version skips publishing when its integrity
+   matches. A mismatch is accepted only on a resume, whose rebuilt tarball may differ from the
+   earlier build; otherwise it fails. Empty registry output also fails. The downloaded artifact
+   must always match this run's build integrity. It then polls npm every 20 seconds, for up to
+   15 minutes, until the version is visible.
+6. **mark** first creates a GitHub Release with the saved notes and verified tag, unless that
+   release already exists. It then moves `release` to the SHA without force, creating the branch
+   if missing. A non-fast-forward fails, leaving the release notes available. Plugin users
+   therefore update only after npm is ready.
+
+## Version in the repository
+
+The committed version in `apps/emend/package.json` and `apps/emend/src/version.ts` stays as a floor.
+CI stamps the real release version into its build; it never commits the stamp or updates
+`CHANGELOG.md`. From 0.1.1 onward, release notes live in GitHub Releases.
+
+`pnpm install:local` resolves HEAD once to a full SHA, exports that commit into a temporary folder,
+and stamps the highest plain `v<x.y.z>` tag merged into that SHA when it is newer than the committed
+version. Non-plain tags are ignored. The installed version, source and printed commit stay together
+even if HEAD moves during the install. With no reachable plain tag, it keeps the committed version.
+It never stamps the source checkout. Fetch tags before installing if the checkout is missing
+recent releases.
+
+`plugin/.claude-plugin/plugin.json` has no `version` field on purpose: Claude Code then uses the git
+commit SHA as the plugin version, so every move of `release` is an update. A fixed version would
+stop plugin updates. `check:package` enforces the absence of that field and checks the installed
+CLI version; `version.test.ts` checks that the two CLI version literals agree.
+
+## One-time owner setup
+
+1. Keep the GitHub repository public and create the GitHub environment **npm**, limited to the
+   **main** branch, without required reviewers or an approval gate. The release workflow's publish
+   job names this environment.
+2. Create two rulesets: one for branch **release** and one for tags `v*`. Both block force pushes
+   and deletions. Enable **Require signed commits** on the `release` ruleset: the workflow only
+   moves it to main's commits, which are signed. Allow the workflow to create tags and advance
+   `release` normally; whoever can move that branch controls what marketplace users receive.
+3. On npmjs.com, add a GitHub Actions trusted publisher for user/organization **shllg**, repository
+   **emend**, workflow **release.yml**, environment **npm**. Its first publish must complete within
+   **2 days** of creating the trusted publisher. If that deadline passes, delete and recreate the
+   trusted publisher before trying again. Keep `apps/emend/package.json`'s `repository.url` as
+   `git+https://github.com/shllg/emend.git`, matching that repository. No npm token secret is needed.
+
+   In the trusted publisher's **Allowed actions**, also allow direct publishing with `npm publish`.
+   Trusted publishers created after **2026-09-03** allow only `npm stage publish` by default;
+   without direct publishing enabled, this workflow's publish job fails. emend uses direct trusted
+   publishing with no staged publish and no human approval step.
+
+4. After setup is complete, enable releases with the repository variable:
 
    ```sh
-   git add apps/emend/package.json plugin/.claude-plugin/plugin.json \
-     apps/emend/src/version.ts CHANGELOG.md
-   git diff --staged
+   gh variable set RELEASE_ENABLED --body true
    ```
 
-   The diff must show only the version lines and the new changelog section, because another
-   session could have edited the files while the gate ran.
-3. `git commit -S -m "chore: release <x.y.z>"`, then `git tag -s v<x.y.z> -m "emend <x.y.z>"`, then
-   `git push origin main v<x.y.z>`. Every commit is signed; the signed tag marks what is released;
-   the code and the tag must be public before the package that points at them. The release commit
-   touches no shared surface from `sync/manifest.json`, so it needs no `Sync:` trailer.
-4. Pack from a fresh clone of the pushed tag, so neither the packing script nor its inputs come
-   from a working tree that other sessions write to:
+   Until this variable is `true`, neither a nightly nor a manual run does anything. Unsetting it,
+   or setting it to anything else, stops new runs and also re-runs of `tag`, `publish` and `mark`.
 
-   ```sh
-   d="$(mktemp -d)"
-   git clone --depth 1 --branch v<x.y.z> https://github.com/shllg/emend.git "$d/emend"
-   node "$d/emend/scripts/release-pack.ts" <x.y.z>
-   ```
+Expect the first real release to stop at the tag or mark step: its range adds
+`.github/workflows/release.yml`, and GitHub may refuse that ref update with the workflow token.
+Use the owner fallback in Recovery below: push the tag or `release` by hand, then re-run the
+failed jobs.
 
-   Run it with plain `node`, not `pnpm run`, so nothing installs from the checkout first. The
-   script refuses in an agent session, unless the clone is clean and its `HEAD` is the tag's
-   commit, unless the tag is signed and valid, unless `origin` has the same commit, and unless the
-   tag's three version files all carry `<x.y.z>`. It extracts
-   exactly that commit, installs from the lockfile without running dependency scripts, builds,
-   packs once, runs `check:package` on that exact tarball, refuses if the tarball changed during
-   the check and keeps the folder. `git verify-tag` accepts any key in your keyring, so keep only
-   keys you trust there; the script does not pin a fingerprint.
-5. Run the `npm publish ...` command it prints, exactly as printed. It passes `--ignore-scripts`
-   because the packed manifest lists `prepack` and `postpack`, which need the repository, and it
-   names the public registry. Compare the `shasum` it printed with npm's `shasum:` line, and the
-   start and end of the `integrity` it printed with npm's shortened `integrity:` line, before you
-   enter the two-factor code; npm asks for the code here.
-6. Check that the package is live:
-   `npm view @shllg/emend@<x.y.z> version --registry=https://registry.npmjs.org/`. Continue only
-   when it prints `<x.y.z>`. The marketplace follows `release`, so plugin users would otherwise
-   get skills for a CLI version that is not on npm yet.
-7. `git push origin 'v<x.y.z>^{commit}:refs/heads/release'` (quoted for zsh). This moves the
-   `release` branch to the tagged commit.
-8. Remove the two temporary folders: `"$d"` and the one `release-pack` kept.
+After the first CI publish succeeds, set the package's publishing access on npmjs.com to
+**Require two-factor authentication and disallow tokens**. Trusted publishing continues through
+OIDC.
 
-Steps 4 and 5 go away once a release workflow exists.
+Version 0.1.0 is already on npm and tagged `v0.1.0`; the workflow plans subsequent versions from it.
 
-### If the gate fails
+## Recovery
 
-`pnpm release` leaves the bumped files in place. On a first release `CHANGELOG.md` is untracked:
-restore the three version files with `git checkout -- apps/emend/package.json
-plugin/.claude-plugin/plugin.json apps/emend/src/version.ts` and delete `CHANGELOG.md`. On later
-releases restore `CHANGELOG.md` too, with `git checkout --`. Fix the cause and run `pnpm release` again; it refuses to run twice
-for a version once `CHANGELOG.md` has its section.
+The planner attempts to resume the newest tag while npm lacks that version or `release` lacks its
+commit. It rebuilds the tagged commit, ignores a manual bump, and regenerates notes from the
+previous tag through the resumed tag. New commits after that tag wait for a later release.
+Marking accepts an existing GitHub Release and branch position.
 
-`--skip-gate` skips `pnpm verify`. The script says so; the gate must pass before you tag.
+A tag that never reached npm can be published only from a run at its own commit, because npm
+provenance names the publishing run's commit. Use **Re-run failed jobs** on the run that tagged it;
+GitHub allows re-runs for **30 days**. The next nightly or manual run can also resume it if main
+still points at that commit. If npm already has the version and only marking remains, the next
+nightly or manual run can finish it even after main has moved.
+
+If the original run cannot be re-run, the owner pushes a higher lightweight
+tag at main's current commit and starts the workflow immediately, before main moves again. Replace
+`<x.y.z>` with a plain version higher than the newest tag and absent from npm:
+
+```sh
+git fetch origin
+git push origin "$(git rev-parse origin/main):refs/tags/v<x.y.z>"
+gh workflow run release.yml
+```
+
+The stuck tag becomes `previous` for the higher tag. That higher tag's GitHub Release notes list
+only commits after the stuck tag, leaving the stuck version's changes out of all release notes.
+Edit the higher tag's release notes by hand to include those changes if they matter.
+
+Fix a failure in a resumed run by re-running it, not by adding new commits: the tag pins its source
+commit. If a source change is needed, publish it under a higher tag using the procedure above.
+
+Registry HTTP 200 means published and HTTP 404 means missing. Other statuses and network errors
+refuse planning; they never trigger a resume. A missing or invalid `origin/release` also refuses:
+restore the expected release ref before retrying. The first tag cannot be resumed without an
+earlier plain tag for its release boundary.
+
+Never delete or move a pushed release tag. If npm takes longer than 15 minutes to expose a version,
+wait and re-run the failed jobs. If the planner or tag job refuses a stale release, or a branch
+update is not a fast-forward, investigate the branch history; do not force it. If `release` already
+holds a tag's commit but npm lacks its version, investigate that inconsistent state before retrying.
+
+GitHub can refuse a `GITHUB_TOKEN` ref update whose range adds a workflow file. If it refuses the
+workflow's token when creating the tag or moving `release`, the owner makes the failed update
+with the planned SHA and version, then uses **Re-run failed jobs** on that same run.
+
+If tag creation was refused:
+
+```sh
+git push origin '<sha>:refs/tags/v<x.y.z>'
+```
+
+If moving the marketplace branch was refused:
+
+```sh
+git push origin 'v<x.y.z>^{commit}:refs/heads/release'
+```
 
 ## What users see
 
@@ -120,3 +226,17 @@ npm install -g --registry=https://registry.npmjs.org/ --prefix "$prefix" @shllg/
 
 The versions must match the released one. Check that the `release` branch points at the tagged
 commit with `git ls-remote origin refs/heads/release`.
+
+Check npm signatures and provenance from a temporary folder, using the released version:
+
+```sh
+verification="$(mktemp -d)"
+(
+  cd "$verification"
+  npm init -y
+  npm install --registry=https://registry.npmjs.org/ @shllg/emend@<version>
+  npm audit signatures
+)
+```
+
+The audit must verify the package's registry signature and provenance attestation.

@@ -22,6 +22,10 @@ import { cleanPackageDocs, preparePackageDocs, requirePnpmPacking } from "./pack
 
 interface FixtureOptions {
   mise?: boolean;
+  tag?: string;
+  nearerTags?: string[];
+  moveHeadAfterRead?: boolean;
+  missingVersion?: boolean;
   env?: NodeJS.ProcessEnv;
   dirty?: string;
   service?: string;
@@ -58,6 +62,41 @@ function fixture(t: TestContext, options: FixtureOptions = {}) {
   }
   if (options.path === "shim") symlinkSync(join(bin, "mise"), join(bin, "emend"));
   if (options.path === "relative") env.PATH = "tools";
+  // Real temporary history exercises the planner's tag selector without installing anything.
+  const git = (...args: string[]) =>
+    childProcess
+      .execFileSync(
+        "git",
+        [
+          "-C",
+          root,
+          "-c",
+          "commit.gpgsign=false",
+          "-c",
+          "tag.gpgsign=false",
+          "-c",
+          "user.name=Test",
+          "-c",
+          "user.email=test@example.com",
+          "-c",
+          "core.hooksPath=/dev/null",
+          ...args,
+        ],
+        {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
+          env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
+        },
+      )
+      .trim();
+  git("init", "-q", "-b", "main");
+  git("commit", "--allow-empty", "-q", "-m", "chore: synthetic source");
+  if (options.tag) git("tag", options.tag);
+  if (options.nearerTags?.length) {
+    git("commit", "--allow-empty", "-q", "-m", "chore: newer source");
+    for (const tag of options.nearerTags) git("tag", tag);
+  }
+  const commit = git("rev-parse", "HEAD");
   // An uncommitted manifest must never supply the installed version.
   mkdirSync(join(root, "apps/emend"), { recursive: true });
   writeFileSync(join(root, "apps/emend/package.json"), '{"version":"uncommitted"}');
@@ -69,6 +108,8 @@ function fixture(t: TestContext, options: FixtureOptions = {}) {
   const forwarded: unknown[] = [];
   let folder = "";
   let work = "";
+  let installedVersion = "";
+  let builtSource = "";
   const run: Runner = async (program, args, command) => {
     assert.strictEqual(command.env, env, "every command gets the injected environment");
     const label =
@@ -100,7 +141,14 @@ function fixture(t: TestContext, options: FixtureOptions = {}) {
       signals.emit(options.signalDuringBuild);
       return interrupted;
     }
-    if (label === "git rev-parse") return "a1b2c3d\n";
+    if (label === "git rev-parse") {
+      const resolved = git(...args);
+      if (options.moveHeadAfterRead) {
+        git("commit", "--allow-empty", "-q", "-m", "chore: concurrent change");
+        git("tag", "v9.0.0");
+      }
+      return `${resolved}\n`;
+    }
     if (label === "git status") return options.dirty ?? "";
     if (label === "git archive") {
       const archive = args[2].slice("--output=".length);
@@ -109,10 +157,18 @@ function fixture(t: TestContext, options: FixtureOptions = {}) {
     }
     if (label === "tar") {
       const source = args[3];
-      mkdirSync(join(source, "apps/emend"), { recursive: true });
+      mkdirSync(join(source, "apps/emend/src"), { recursive: true });
       writeFileSync(join(source, "apps/emend/package.json"), '{"version":"1.2.3"}');
+      writeFileSync(
+        join(source, "apps/emend/src/version.ts"),
+        options.missingVersion ? "// missing\n" : 'export const VERSION = "1.2.3";\n',
+      );
     }
-    if (label === "pnpm pack") writeFileSync(join(args[2], "shllg-emend-1.2.3.tgz"), "synthetic tarball");
+    if (label === "pnpm install") {
+      installedVersion = JSON.parse(readFileSync(join(command.cwd, "apps/emend/package.json"), "utf8")).version;
+      builtSource = readFileSync(join(command.cwd, "apps/emend/src/version.ts"), "utf8");
+    }
+    if (label === "pnpm pack") writeFileSync(join(args[2], `shllg-emend-${installedVersion}.tgz`), "synthetic tarball");
     if (label === "npm install") {
       folder = args[2] === "--prefix" ? args[3] : prefix;
       assert.equal(readFileSync(args[args.length - 1], "utf8"), "synthetic tarball");
@@ -135,6 +191,8 @@ function fixture(t: TestContext, options: FixtureOptions = {}) {
   return {
     base,
     root,
+    commit,
+    git,
     temporaryRoot,
     bin,
     env,
@@ -146,6 +204,12 @@ function fixture(t: TestContext, options: FixtureOptions = {}) {
     forwarded,
     get folder() {
       return folder;
+    },
+    get installedVersion() {
+      return installedVersion;
+    },
+    get builtSource() {
+      return builtSource;
     },
     get work() {
       return work;
@@ -217,11 +281,11 @@ test("npm layout exports HEAD, builds outside the checkout, installs the tarball
   assert.deepEqual(
     f.calls.map(({ program, args, cwd, capture }) => ({ program, args, cwd, capture })),
     [
-      { program: "git", args: ["rev-parse", "--short", "HEAD"], cwd: f.root, capture: true },
+      { program: "git", args: ["rev-parse", "--verify", "HEAD"], cwd: f.root, capture: true },
       { program: "git", args: ["status", "--porcelain", "--untracked-files=all"], cwd: f.root, capture: true },
       {
         program: "git",
-        args: ["archive", "--format=tar", `--output=${join(f.work, "src.tar")}`, "HEAD"],
+        args: ["archive", "--format=tar", `--output=${join(f.work, "src.tar")}`, f.commit],
         cwd: f.root,
         capture: false,
       },
@@ -235,7 +299,7 @@ test("npm layout exports HEAD, builds outside the checkout, installs the tarball
     ],
   );
   assert.deepEqual(f.stdout, [
-    "install:local: installed emend 1.2.3 (a1b2c3d).",
+    `install:local: installed emend 1.2.3 (${f.commit}).`,
     `install:local: emend is not on your PATH; add ${join(f.prefix, "bin")} to it.`,
     "Next: emend service install, then emend skills install.",
   ]);
@@ -249,8 +313,8 @@ for (const dirty of [" M tracked.ts\n", "?? untracked.ts\n"]) {
     const f = fixture(t, { dirty });
     assert.equal(await f.run(), 0);
     assert.deepEqual(f.stdout, [
-      "install:local: uncommitted changes are not included; installing a1b2c3d.",
-      "install:local: installed emend 1.2.3 (a1b2c3d).",
+      `install:local: uncommitted changes are not included; installing ${f.commit}.`,
+      `install:local: installed emend 1.2.3 (${f.commit}).`,
       `install:local: emend is not on your PATH; add ${join(f.prefix, "bin")} to it.`,
       "Next: emend service install, then emend skills install.",
     ]);
@@ -281,17 +345,22 @@ for (const choice of ["mise", "xdg", "home", "empty"] as const) {
       f.calls.map((call) => call.label),
       [...buildSteps, "npm install", "mise link", "service status"],
     );
-    assert.deepEqual(f.calls[7].args, [
+    assert.deepEqual(f.calls.find((call) => call.label === "npm install")?.args, [
       "install",
       "-g",
       "--prefix",
       expected,
       join(f.work, "pack/shllg-emend-1.2.3.tgz"),
     ]);
-    assert.deepEqual(f.calls[8].args, ["link", "--force", "npm:@shllg/emend@local", expected]);
-    assert.equal(f.calls[9].program, join(expected, "bin/emend"));
+    assert.deepEqual(f.calls.find((call) => call.label === "mise link")?.args, [
+      "link",
+      "--force",
+      "npm:@shllg/emend@local",
+      expected,
+    ]);
+    assert.equal(f.calls.find((call) => call.label === "service status")?.program, join(expected, "bin/emend"));
     assert.deepEqual(f.stdout, [
-      "install:local: installed emend 1.2.3 (a1b2c3d).",
+      `install:local: installed emend 1.2.3 (${f.commit}).`,
       "Next: emend service install, then emend skills install.",
     ]);
     assert.deepEqual(f.stderr, []);
@@ -406,7 +475,7 @@ for (const [signal, code] of [
     assert.equal(await f.run(), code);
     assert.deepEqual(
       f.calls.map((call) => call.label),
-      buildSteps.slice(0, 6),
+      buildSteps.slice(0, buildSteps.indexOf("pnpm build") + 1),
     );
     assert.deepEqual(f.forwarded, [signal]);
     assert.deepEqual(f.stderr, ["install:local: pnpm build failed"]);
@@ -555,3 +624,62 @@ for (const differing of ["README.md", "LICENSE"]) {
     assert(!existsSync(join(f.root, "apps/emend", other)));
   });
 }
+
+for (const [tag, expected] of [
+  ["v1.3.0", "1.3.0"],
+  ["v1.2.3", "1.2.3"],
+  ["v1.1.9", "1.2.3"],
+  [undefined, "1.2.3"],
+]) {
+  test(`local install stamps only a newer reachable release (${tag ?? "no tag"})`, async (t) => {
+    const f = fixture(t, { tag });
+    assert.equal(await f.run(), 0);
+    assert.equal(f.installedVersion, expected, "stamped before pnpm install");
+    assert.equal(f.builtSource, `export const VERSION = "${expected}";\n`);
+    assert(f.stdout.includes(`install:local: installed emend ${expected} (${f.commit}).`));
+    assert.equal(readFileSync(join(f.root, "apps/emend/package.json"), "utf8"), '{"version":"uncommitted"}');
+    f.clean();
+  });
+}
+
+for (const tag of ["v1.3.0-beta", "v1.3.0+build", "v01.3.0"]) {
+  test(`local install ignores a non-plain tag (${tag})`, async (t) => {
+    const f = fixture(t, { tag });
+    assert.equal(await f.run(), 0);
+    assert.equal(f.installedVersion, "1.2.3");
+    assert.deepEqual(f.stderr, []);
+    f.clean();
+  });
+}
+
+test("local install refuses a missing VERSION line before installing dependencies", async (t) => {
+  const f = fixture(t, { tag: "v1.3.0", missingVersion: true });
+  assert.equal(await f.run(), 1);
+  assert.deepEqual(f.stderr, ["install:local: stamp release version failed"]);
+  assert(!f.calls.some((call) => call.label === "pnpm install"));
+  f.clean();
+});
+
+test("local install skips a nearer prerelease and chooses the highest reachable plain version", async (t) => {
+  const f = fixture(t, { tag: "v1.5.0", nearerTags: ["v1.6.0-rc.1", "v1.6.0+build", "v1.4.0"] });
+  assert.equal(await f.run(), 0);
+  assert.equal(f.installedVersion, "1.5.0");
+  assert.equal(f.builtSource, 'export const VERSION = "1.5.0";\n');
+  assert.deepEqual(f.stderr, []);
+  f.clean();
+});
+
+test("local install resolves HEAD once and keeps the archive, tag and printed SHA on that commit", async (t) => {
+  const f = fixture(t, { tag: "v1.3.0", moveHeadAfterRead: true });
+  assert.equal(await f.run(), 0);
+  assert.notEqual(f.git("rev-parse", "HEAD"), f.commit, "HEAD moved during the install");
+  assert.match(f.commit, /^[0-9a-f]{40}$/);
+  assert.deepEqual(
+    f.calls.filter((call) => call.label === "git rev-parse").map((call) => call.args),
+    [["rev-parse", "--verify", "HEAD"]],
+  );
+  assert.equal(f.calls.find((call) => call.label === "git archive")?.args.at(-1), f.commit);
+  assert.equal(f.installedVersion, "1.3.0", "the newer HEAD's v9.0.0 tag must not be used");
+  assert(f.stdout.includes(`install:local: installed emend 1.3.0 (${f.commit}).`));
+  f.clean();
+});

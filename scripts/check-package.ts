@@ -109,9 +109,9 @@ try {
 
   check = "read version";
   const version = JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")).version;
-  const pluginVersion = JSON.parse(readFileSync(join(root, "plugin/.claude-plugin/plugin.json"), "utf8")).version;
-  check = `plugin/.claude-plugin/plugin.json version ${JSON.stringify(pluginVersion)} matches apps/emend/package.json version ${JSON.stringify(version)}`;
-  assert.equal(pluginVersion, version);
+  const plugin = JSON.parse(readFileSync(join(root, "plugin/.claude-plugin/plugin.json"), "utf8"));
+  check = "plugin.json has no version field: a fixed version stops plugin updates";
+  assert(!Object.hasOwn(plugin, "version"));
   const userconfig = join(work, "userconfig");
   const globalconfig = join(work, "globalconfig");
   writeFileSync(userconfig, "");

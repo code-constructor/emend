@@ -12,11 +12,10 @@
     "test": "vitest run && EMEND_TIMING_STRICT=1 vitest run --project apps/emend apps/emend/src/server/publish/commit.test.ts && EMEND_TIMING_STRICT=1 vitest run --project apps/emend apps/emend/src/server/routes/import.test.ts -t \"event loop\" --silent=false",
     "build": "pnpm --dir apps/web build && pnpm --dir apps/emend build",
     "install:local": "node scripts/install-local.ts",
-    "release": "node scripts/release.ts",
     "check:package": "node scripts/check-package.ts",
     "check:budget": "node scripts/check-budget.ts",
     "check:sync": "node scripts/check-sync.ts",
-    "test:harness": "node --test scripts/check-budget.test.ts scripts/check-sync.test.ts scripts/enforce-subagent-model.test.ts scripts/install-local.test.ts scripts/release.test.ts scripts/release-pack.test.ts",
+    "test:harness": "node --test scripts/check-budget.test.ts scripts/check-sync.test.ts scripts/enforce-subagent-model.test.ts scripts/install-local.test.ts scripts/release.test.ts scripts/release-workflow.test.ts",
     "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm check:package && pnpm check:budget && pnpm check:sync && pnpm test:harness"
   },
   "devDependencies": {

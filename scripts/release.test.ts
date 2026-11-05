@@ -1,346 +1,688 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import childProcess, { execFileSync, spawnSync } from "node:child_process";
+import {
+  closeSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { type TestContext, test } from "node:test";
-import { type GateRunner, localDate, nextSteps, parseArgs, release } from "./release.ts";
+import {
+  classifyCommit,
+  compareVersions,
+  lastTag,
+  localDate,
+  plan,
+  ReleaseError,
+  SHIPPED_PATHS,
+  stampVersion,
+} from "./release.ts";
 
-// Throwaway fixtures only: no user git config applies, so their commits and tags are unsigned.
-const base = mkdtempSync(join(tmpdir(), "emend-release-test-"));
-const emptyConfig = join(base, "gitconfig");
-writeFileSync(emptyConfig, "");
-process.env.GIT_CONFIG_GLOBAL = emptyConfig;
-process.env.GIT_CONFIG_NOSYSTEM = "1";
-test.after(() => rmSync(base, { recursive: true, force: true }));
-
-const CLI_JSON = `{
-    "name": "@shllg/emend",
-    "version": "0.1.0",
-    "scripts": { "build": "x" }
-}
-`;
-const PLUGIN_JSON = `{
-  "name": "emend",
-  "version": "9.9.9",
-  "keywords": ["review"]
-}
-`;
-
-const VERSION_TS = `// The CLI version.
-export const VERSION = "0.1.0";
-export const OTHER = "0.1.0";
-`;
-
+const CLI_JSON = '{\r\n    "name": "@shllg/emend",\r\n    "version" : "0.1.0",\r\n    "other": "0.1.0"\r\n}\r\n';
+const VERSION_TS = '// Version.\r\nexport const VERSION = "0.1.0";\r\nexport const OTHER = "0.1.0";\r\n';
 let counter = 0;
 
 function git(root: string, ...args: string[]): string {
   return execFileSync(
     "git",
-    ["-C", root, "-c", "user.name=Test", "-c", "user.email=test@example.com", ...args],
-    { encoding: "utf8" },
+    [
+      "-C",
+      root,
+      "-c",
+      "commit.gpgsign=false",
+      "-c",
+      "tag.gpgsign=false",
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "core.hooksPath=/dev/null",
+      ...args,
+    ],
+    {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
+    },
   );
 }
 
-function commit(root: string, subject: string, body?: string): void {
-  writeFileSync(join(root, "note.txt"), `${++counter}\n`);
+function write(root: string, file: string, text: string): void {
+  mkdirSync(dirname(join(root, file)), { recursive: true });
+  writeFileSync(join(root, file), text);
+}
+
+function commit(root: string, subject: string, file = "apps/emend/change.ts", body?: string): void {
+  write(root, file, `${++counter}\n`);
   git(root, "add", "-A");
   git(root, "commit", "-q", "-m", subject, ...(body ? ["-m", body] : []));
 }
 
-function fixture(t: TestContext) {
-  const root = join(base, `repo-${++counter}`);
-  mkdirSync(join(root, "apps/emend/src"), { recursive: true });
-  mkdirSync(join(root, "plugin/.claude-plugin"), { recursive: true });
-  git(root, "init", "-q", "-b", "main");
-  writeFileSync(join(root, "apps/emend/package.json"), CLI_JSON);
-  writeFileSync(join(root, "plugin/.claude-plugin/plugin.json"), PLUGIN_JSON);
-  writeFileSync(join(root, "apps/emend/src/version.ts"), VERSION_TS);
-  commit(root, "chore: start");
+function fixture(t: TestContext, tagged = true): string {
+  const root = mkdtempSync(join(tmpdir(), "emend-release-test-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
+  git(root, "init", "-q", "-b", "main");
+  write(root, "apps/emend/package.json", CLI_JSON);
+  write(root, "apps/emend/src/version.ts", VERSION_TS);
+  write(root, "packages/contract/src/api.ts", 'export const MIN_CLIENT_VERSION = "0.1.0";\n');
+  write(root, "plugin/.claude-plugin/plugin.json", '{"name":"emend"}\n');
+  mkdirSync(join(root, "scripts"));
+  copyFileSync(new URL("./release.ts", import.meta.url), join(root, "scripts/release.ts"));
+  commit(root, "chore: start");
+  if (tagged) git(root, "tag", "v0.1.0");
+  git(root, "update-ref", "refs/remotes/origin/release", "HEAD");
   return root;
 }
 
-const passGate: GateRunner = () => {};
-const run = (root: string, version: string, gate = passGate, lines: string[] = []) =>
-  release({ root, version, date: "2026-11-05", gate, stdout: (line) => lines.push(line) });
-
-function unchanged(root: string) {
-  assert.equal(readFileSync(join(root, "apps/emend/package.json"), "utf8"), CLI_JSON);
-  assert.equal(readFileSync(join(root, "plugin/.claude-plugin/plugin.json"), "utf8"), PLUGIN_JSON);
-  assert.equal(readFileSync(join(root, "apps/emend/src/version.ts"), "utf8"), VERSION_TS);
-  assert.equal(git(root, "status", "--porcelain"), "");
+function cli(root: string, args: string[], env: NodeJS.ProcessEnv = {}) {
+  // Files also capture child output on runners where Node's pipe handles are unavailable.
+  const capture = mkdtempSync(join(tmpdir(), "emend-release-output-"));
+  const stdout = openSync(join(capture, "stdout"), "w");
+  const stderr = openSync(join(capture, "stderr"), "w");
+  try {
+    const registry = join(capture, "registry.mjs");
+    writeFileSync(
+      registry,
+      `const published = ${JSON.stringify(lastTag(root)?.slice(1))};
+globalThis.fetch = async (url) => new Response(null, { status: String(url).endsWith("/" + published) ? 200 : 404 });
+`,
+    );
+    const result = spawnSync(process.execPath, ["--import", registry, join(root, "scripts/release.ts"), ...args], {
+      cwd: root,
+      encoding: "utf8",
+      stdio: ["ignore", stdout, stderr],
+      env: { ...process.env, GITHUB_OUTPUT: "", ...env },
+    });
+    assert.ifError(result.error);
+    return {
+      status: result.status,
+      stdout: readFileSync(join(capture, "stdout"), "utf8"),
+      stderr: readFileSync(join(capture, "stderr"), "utf8"),
+    };
+  } finally {
+    closeSync(stdout);
+    closeSync(stderr);
+    rmSync(capture, { recursive: true, force: true });
+  }
 }
 
-test("refuses a version that is not plain x.y.z", (t) => {
+function run(root: string, bump: "auto" | "patch" | "minor" = "auto") {
+  return plan({ root, bump, date: "2026-11-05", isPublished: async (version) => version === lastTag(root)?.slice(1) });
+}
+
+test("nothing to release writes only release=false, leaving the checkout alone", (t) => {
   const root = fixture(t);
-  for (const version of ["1.0", "v1.0.0", "1.0.0-rc.1", "1.0.0+x", ""]) {
-    assert.throws(() => run(root, version), /plain x\.y\.z/);
+  const before = git(root, "status", "--porcelain");
+  const result = cli(root, ["plan", "--bump", "auto"]);
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, "release: nothing to release since v0.1.0\n");
+  assert.equal(git(root, "status", "--porcelain"), before);
+  const output = join(root, "output");
+  const notes = join(root, "notes.md");
+  assert.equal(cli(root, ["plan", "--notes", notes], { GITHUB_OUTPUT: output }).status, 0);
+  assert.equal(readFileSync(output, "utf8"), "release=false\n");
+  assert(!existsSync(notes));
+});
+
+test("test/ci commits, even breaking ones, and non-shipped paths do not count", async (t) => {
+  const root = fixture(t);
+  commit(root, "test(cli)!: test only");
+  commit(root, "ci: pipeline only", "package.json", "BREAKING CHANGE: test footer");
+  for (const path of [
+    "scripts/tool.ts",
+    "docs/releasing.md",
+    "tasks/example.md",
+    "README.md.backup",
+    "apps/web-old/x",
+  ]) {
+    commit(root, "feat: internal work", path);
   }
-  unchanged(root);
+  assert.equal((await run(root)).release, false);
 });
 
-test("refuses off main", (t) => {
+for (const [subject, body, expected] of [
+  ["fix(cli): repair launch", "", "0.1.1"],
+  ["perf: reduce work", "", "0.1.1"],
+  ["chore: maintenance", "", "0.1.1"],
+  ["feat(cli): add option", "", "0.2.0"],
+  ["fix!: change behavior", "", "0.2.0"],
+  ["refactor(core)!: change shape", "", "0.2.0"],
+  ["fix: change behavior", "BREAKING CHANGE: new behavior", "0.2.0"],
+  ["Change behavior", "BREAKING CHANGE: new behavior", "0.2.0"],
+]) {
+  test(`${subject} selects ${expected}`, async (t) => {
+    const root = fixture(t);
+    commit(root, subject, undefined, body);
+    assert.equal((await run(root)).version, expected);
+    assert.equal(git(root, "status", "--porcelain"), "");
+  });
+}
+
+test("manual overrides choose minor or patch, except patch refuses breaking changes", async (t) => {
   const root = fixture(t);
-  git(root, "switch", "-q", "-c", "topic");
-  assert.throws(() => run(root, "0.1.0"), /run on main, not "topic"/);
-  unchanged(root);
+  commit(root, "feat: new option");
+  assert.equal((await run(root, "patch")).version, "0.1.1");
+  assert.equal((await run(root, "minor")).version, "0.2.0");
+  commit(root, "fix: breaking", undefined, "BREAKING CHANGE: changed option");
+  const result = cli(root, ["plan", "--bump", "patch"]);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /^release: a breaking change requires a minor bump\n$/);
 });
 
-test("refuses a dirty working tree", (t) => {
-  const root = fixture(t);
-  writeFileSync(join(root, "stray.txt"), "x");
-  assert.throws(() => run(root, "0.1.0"), /not clean/);
-  assert.equal(readFileSync(join(root, "apps/emend/package.json"), "utf8"), CLI_JSON);
-});
-
-test("refuses a version that is not above the last tag", (t) => {
-  const root = fixture(t);
-  git(root, "tag", "v0.2.0");
-  commit(root, "feat: more");
-  assert.throws(() => run(root, "0.2.0"), /tag v0\.2\.0 already exists/);
-  assert.throws(() => run(root, "0.1.9"), /not greater than v0\.2\.0/);
-  unchanged(root);
-});
-
-test("refuses when the tag exists even if it is not merged into HEAD", (t) => {
-  const root = fixture(t);
-  git(root, "switch", "-q", "-c", "other");
-  commit(root, "feat: elsewhere");
-  git(root, "tag", "v0.5.0");
-  git(root, "switch", "-q", "main");
-  assert.throws(() => run(root, "0.5.0"), /tag v0\.5\.0 already exists/);
-  unchanged(root);
-});
-
-test("refuses versions with leading zeros", (t) => {
-  const root = fixture(t);
-  for (const version of ["0.02.0", "1.00.0", "01.0.0", "1.0.00"]) {
-    assert.throws(() => run(root, version), /plain x\.y\.z/);
+test("each shipped path counts, including the root packing hook", async (t) => {
+  for (const path of SHIPPED_PATHS) {
+    const root = fixture(t);
+    commit(root, "fix: shipped", path.endsWith("/") ? `${path}change.txt` : path);
+    assert.equal((await run(root)).version, "0.1.1", path);
   }
-  unchanged(root);
 });
 
-test("refuses a first release below the current package version", (t) => {
+test("renaming a shipped file outside the shipped paths still counts", async (t) => {
   const root = fixture(t);
-  assert.throws(() => run(root, "0.0.9"), /lower than the current version 0\.1\.0/);
-  unchanged(root);
+  git(root, "mv", "apps/emend/change.ts", "internal.txt");
+  git(root, "commit", "-q", "-m", "fix: remove shipped file");
+  assert.equal((await run(root)).version, "0.1.1");
 });
 
-test("first release with an equal version says First release.", (t) => {
+test("a merge retains shipped commits and their feature classification", async (t) => {
   const root = fixture(t);
-  commit(root, "feat(cli): something");
-  const lines: string[] = [];
-  const result = run(root, "0.1.0", passGate, lines);
-  assert.equal(result.previousTag, undefined);
-  const changelog = readFileSync(join(root, "CHANGELOG.md"), "utf8");
-  assert.match(changelog, /^# Changelog\n\nNewest first\./);
-  assert.match(changelog, /\n## 0\.1\.0 \(2026-11-05\)\n\nFirst release\.\n$/);
-  assert.doesNotMatch(changelog, /something/);
-  assert.deepEqual(lines.slice(1), [
-    "Next steps, in this order:",
-    ...nextSteps("0.1.0").map((step, index) => `${index + 1}. ${step}`),
-  ]);
-  const steps = nextSteps("0.1.0");
-  assert.equal(steps.length, 13);
-  assert.equal(
-    steps[1],
-    "git add apps/emend/package.json plugin/.claude-plugin/plugin.json apps/emend/src/version.ts CHANGELOG.md",
-  );
-  assert.equal(steps[2], "git diff --staged");
-  assert.equal(steps[4], 'git commit -S -m "chore: release 0.1.0"');
-  assert.equal(steps[5], 'git tag -s v0.1.0 -m "emend 0.1.0"');
-  assert.equal(steps[6], "git push origin main v0.1.0");
-  assert.match(
-    steps[7] as string,
-    /git clone --depth 1 --branch v0\.1\.0 https:\/\/github\.com\/shllg\/emend\.git .*node .*release-pack\.ts" 0\.1\.0$/,
-  );
-  assert.equal(steps[9], "npm view @shllg/emend@0.1.0 version --registry=https://registry.npmjs.org/");
-  assert.match(steps[10] as string, /^Continue only when it prints 0\.1\.0/);
-  assert.equal(steps[11], "git push origin 'v0.1.0^{commit}:refs/heads/release'");
-  // No printed command carries a trailing comment: zsh without interactive comments breaks on it.
-  for (const step of steps) assert.doesNotMatch(step, /\s#\s/);
+  git(root, "checkout", "-q", "-b", "feature");
+  commit(root, "feat: merged feature");
+  git(root, "checkout", "-q", "main");
+  commit(root, "ci: workflow", "internal.txt");
+  git(root, "merge", "--no-ff", "-m", "Merge feature", "feature");
+  assert.equal((await run(root)).version, "0.2.0");
 });
 
-test("--skip-gate prints that the gate did not run", (t) => {
+test("a merge wrapper cannot turn shipped test/ci changes into a release", async (t) => {
   const root = fixture(t);
-  const lines: string[] = [];
-  release({ root, version: "0.1.0", date: "2026-11-05", skipGate: true, gate: passGate, stdout: (l) => lines.push(l) });
-  const note = lines.findIndex((line) => /gate did not run/.test(line));
-  assert.ok(note > 0 && note < lines.findIndex((line) => line.startsWith("Next steps")));
+  git(root, "checkout", "-q", "-b", "tests");
+  commit(root, "test(cli)!: cover changed behavior");
+  commit(root, "ci: adjust shipped metadata", "package.json");
+  git(root, "checkout", "-q", "main");
+  git(root, "merge", "--no-ff", "-m", "feat!: merge testing changes", "tests");
+  assert.equal((await run(root)).release, false);
+  assert.equal((await run(root, "patch")).release, false);
 });
 
-test("a prerelease or odd tag does not hide the real last tag", (t) => {
+test("a feature merge wrapper does not upgrade a shipped fix to minor", async (t) => {
   const root = fixture(t);
-  git(root, "tag", "v0.2.0");
-  commit(root, "feat: a");
-  git(root, "tag", "v0.3.0-rc.1");
-  git(root, "tag", "vfoo");
-  assert.throws(() => run(root, "0.2.0"), /tag v0\.2\.0 already exists/);
-  assert.equal(run(root, "0.2.1").previousTag, "v0.2.0");
+  git(root, "checkout", "-q", "-b", "fix");
+  commit(root, "fix: repair launch");
+  git(root, "checkout", "-q", "main");
+  git(root, "merge", "--no-ff", "-m", "feat!: merge repair", "fix");
+  const result = await run(root);
+  assert.equal(result.version, "0.1.1");
+  assert(!result.section?.includes("merge repair"));
 });
 
-test("newest means the highest tag merged into HEAD", (t) => {
+test("previous is the highest merged plain tag, regardless of tag creation order", async (t) => {
   const root = fixture(t);
-  git(root, "tag", "v0.1.0");
-  git(root, "switch", "-q", "-c", "other");
-  commit(root, "feat: elsewhere");
   git(root, "tag", "v0.9.0");
-  git(root, "switch", "-q", "main");
-  commit(root, "fix: here");
-  assert.equal(run(root, "0.1.1").previousTag, "v0.1.0");
+  git(root, "tag", "v0.2.0");
+  git(root, "tag", "v9.0.0-rc.1");
+  git(root, "tag", "v9.0.0+build");
+  git(root, "tag", "v01.0.0");
+  git(root, "checkout", "-q", "-b", "other");
+  commit(root, "feat: unrelated");
+  git(root, "tag", "v3.0.0");
+  git(root, "checkout", "-q", "main");
+  commit(root, "fix: shipped");
+  assert.equal(lastTag(root), "v0.9.0");
+  assert.equal((await run(root)).version, "0.9.1");
 });
 
-test("refuses when a nested version key comes before the top-level one", (t) => {
+test("no previous tag refuses with exit 1 and a single release line", (t) => {
+  const root = fixture(t, false);
+  const result = cli(root, ["plan"]);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /^release: no plain v<x.y.z> tag is merged into HEAD\n$/);
+});
+
+test("an existing target tag on another branch refuses", async (t) => {
   const root = fixture(t);
-  const nested = '{\n  "meta": { "version": "1" },\n  "name": "x",\n  "version": "0.1.0"\n}\n';
-  writeFileSync(join(root, "apps/emend/package.json"), nested);
-  git(root, "add", "-A");
-  git(root, "commit", "-q", "-m", "chore: nested");
-  assert.throws(() => run(root, "0.2.0"), /could not set the top-level version/);
-  assert.equal(readFileSync(join(root, "apps/emend/package.json"), "utf8"), nested);
-  assert.equal(readFileSync(join(root, "plugin/.claude-plugin/plugin.json"), "utf8"), PLUGIN_JSON);
+  git(root, "checkout", "-q", "-b", "other");
+  commit(root, "fix: unrelated");
+  git(root, "tag", "v0.1.1");
+  git(root, "checkout", "-q", "main");
+  commit(root, "fix: shipped");
+  await assert.rejects(() => run(root), /release: the tag v0.1.1 already exists/);
 });
 
-test("localDate uses local time", () => {
-  assert.equal(localDate(new Date(2026, 0, 5, 23, 59)), "2026-01-05");
-});
+for (const [minimum, reason] of [
+  ["0.3.0", "is greater than 0.1.1"],
+  ["0.1.1", "already-released"],
+  ["0.1.0-beta", "plain version"],
+]) {
+  test(`MIN_CLIENT_VERSION guard: ${minimum}`, async (t) => {
+    const root = fixture(t);
+    write(root, "packages/contract/src/api.ts", `export const MIN_CLIENT_VERSION = "${minimum}";\n`);
+    commit(root, "fix: change minimum");
+    await assert.rejects(() => run(root), new RegExp(`release: MIN_CLIENT_VERSION.*${reason}`));
+  });
+}
 
-test("parseArgs", () => {
-  assert.deepEqual(parseArgs(["1.2.3"]), { version: "1.2.3", skipGate: false });
-  assert.deepEqual(parseArgs(["--skip-gate", "1.2.3"]), { version: "1.2.3", skipGate: true });
-  assert.deepEqual(parseArgs(["1.2.3", "--skip-gate"]), { version: "1.2.3", skipGate: true });
-  for (const bad of [[], ["--skip-gate"], ["1.2.3", "4.5.6"], ["-x"], ["--other", "1.2.3"]]) {
-    assert.throws(() => parseArgs(bad), /Usage: pnpm release/);
-  }
-});
-
-test("inserts into a CHANGELOG without a header", (t) => {
+test("notes contain only counted commits; GITHUB_OUTPUT appends the four values", (t) => {
   const root = fixture(t);
-  writeFileSync(join(root, "CHANGELOG.md"), "old notes\n");
-  git(root, "add", "-A");
-  git(root, "commit", "-q", "-m", "chore: notes");
-  run(root, "0.1.0");
-  const changelog = readFileSync(join(root, "CHANGELOG.md"), "utf8");
-  assert.match(changelog, /^# Changelog\n\nNewest first\.[^\n]*\n\n## 0\.1\.0 \(2026-11-05\)\n\nFirst release\.\n\nold notes\n$/);
-});
-
-test("a later release groups commits and skips other types", (t) => {
-  const root = fixture(t);
-  run(root, "0.1.0");
-  git(root, "add", "-A");
-  git(root, "commit", "-q", "-m", "chore: release 0.1.0");
-  git(root, "tag", "v0.1.0");
-  commit(root, "feat(cli): add stop");
-  commit(root, "fix(api): handle empty body");
-  commit(root, "perf(core): faster ids");
-  commit(root, "docs: words");
-  commit(root, "test: more");
-  commit(root, "chore(deps): bump");
-  commit(root, "refactor(db)!: drop a column");
-  commit(root, "feat: new flag", "BREAKING CHANGE: the flag changes meaning");
-  commit(root, "not conventional at all");
-  const result = run(root, "0.2.0");
-  assert.equal(result.previousTag, "v0.1.0");
-  const changelog = readFileSync(join(root, "CHANGELOG.md"), "utf8");
+  commit(root, "feat(ui): a new view");
+  commit(root, "fix(cli): launch safely");
+  commit(root, "feat: internal only", "scripts/internal.ts");
+  commit(root, "test!: tests only");
+  const notes = join(root, "notes.md");
+  const output = join(root, "output");
+  writeFileSync(output, "existing=value\n");
+  const result = cli(root, ["plan", "--notes", notes], { GITHUB_OUTPUT: output });
+  assert.equal(result.status, 0, result.stderr);
   assert.equal(
-    result.changelogSection,
-    `## 0.2.0 (2026-11-05)
-
-### Breaking changes
-
-- new flag
-- drop a column (db)
-
-### Features
-
-- add stop (cli)
-
-### Fixes
-
-- handle empty body (api)
-
-### Performance
-
-- faster ids (core)
-`,
+    readFileSync(output, "utf8"),
+    `existing=value\nrelease=true\nresume=false\nversion=0.2.0\nprevious=v0.1.0\nsha=${git(root, "rev-parse", "HEAD").trim()}\n`,
   );
-  assert.ok(changelog.indexOf("## 0.2.0") < changelog.indexOf("## 0.1.0"));
-  assert.equal(changelog.match(/^# Changelog/gm)?.length, 1);
-  assert.doesNotMatch(changelog, /words|more\n|bump/);
+  assert.match(
+    readFileSync(notes, "utf8"),
+    /^## 0\.2\.0 \(\d{4}-\d{2}-\d{2}\)\n\n### Features\n\n- a new view \(ui\)\n\n### Fixes\n\n- launch safely \(cli\)\n$/,
+  );
 });
 
-test("omits empty groups and falls back to Maintenance release.", (t) => {
+test("stamp preserves every byte outside the two version literals", (t) => {
   const root = fixture(t);
-  git(root, "tag", "v0.1.0");
-  commit(root, "fix: one thing");
-  assert.doesNotMatch(run(root, "0.1.1").changelogSection, /Features|Breaking|Performance/);
-  const other = fixture(t);
-  git(other, "tag", "v0.1.0");
-  commit(other, "docs: only docs");
-  assert.match(run(other, "0.1.1").changelogSection, /\n\nMaintenance release\.\n$/);
-});
-
-test("changes only the version values, byte for byte", (t) => {
-  const root = fixture(t);
-  run(root, "0.3.0");
-  assert.equal(
-    readFileSync(join(root, "apps/emend/package.json"), "utf8"),
-    CLI_JSON.replace('"0.1.0"', '"0.3.0"'),
-  );
-  assert.equal(
-    readFileSync(join(root, "plugin/.claude-plugin/plugin.json"), "utf8"),
-    PLUGIN_JSON.replace('"9.9.9"', '"0.3.0"'),
-  );
+  stampVersion(root, "0.12.3");
+  assert.equal(readFileSync(join(root, "apps/emend/package.json"), "utf8"), CLI_JSON.replace('"0.1.0"', '"0.12.3"'));
   assert.equal(
     readFileSync(join(root, "apps/emend/src/version.ts"), "utf8"),
-    VERSION_TS.replace('VERSION = "0.1.0"', 'VERSION = "0.3.0"'),
+    VERSION_TS.replace('"0.1.0"', '"0.12.3"'),
   );
+  assert.equal(readFileSync(join(root, "plugin/.claude-plugin/plugin.json"), "utf8"), '{"name":"emend"}\n');
 });
 
-test("refuses when version.ts lacks the VERSION line or has it twice", (t) => {
-  for (const content of ['export const OTHER = "0.1.0";\n', VERSION_TS + VERSION_TS, 'export const VERSION: string = X;\n']) {
+for (const version of [
+  "1.2",
+  "v1.2.3",
+  "1.2.3-beta.1",
+  "1.2.3+build",
+  "01.2.3",
+  "1.02.3",
+  "1.2.03",
+  "1.2.3\n",
+  "1.2.3\r",
+]) {
+  test(`stamp refuses ${JSON.stringify(version)} before writing`, (t) => {
     const root = fixture(t);
-    writeFileSync(join(root, "apps/emend/src/version.ts"), content);
-    git(root, "add", "-A");
-    git(root, "commit", "-q", "-m", "chore: odd");
-    assert.throws(() => run(root, "0.2.0"), /exactly one 'export const VERSION = "...";' line/);
+    const result = cli(root, ["stamp", version]);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /^release: version must be plain x.y.z\n$/);
+    assert.equal(git(root, "status", "--porcelain"), "");
+  });
+}
+
+for (const source of ["// missing\n", 'export const VERSION = "0.1.0";\nexport const VERSION = "0.1.0";\n']) {
+  test(`stamp refuses missing/duplicate VERSION lines without changing the manifest`, (t) => {
+    const root = fixture(t);
+    write(root, "apps/emend/src/version.ts", source);
+    assert.throws(() => stampVersion(root, "0.2.0"), /exactly one/);
     assert.equal(readFileSync(join(root, "apps/emend/package.json"), "utf8"), CLI_JSON);
-    assert.equal(readFileSync(join(root, "apps/emend/src/version.ts"), "utf8"), content);
+    assert.equal(readFileSync(join(root, "apps/emend/src/version.ts"), "utf8"), source);
+  });
+}
+
+test("stamp refuses a nested first version instead of modifying the wrong key", (t) => {
+  const root = fixture(t);
+  const manifest = '{"nested":{"version":"0.1.0"},"version":"0.1.0"}';
+  write(root, "apps/emend/package.json", manifest);
+  assert.throws(() => stampVersion(root, "0.2.0"), /top-level version/);
+  assert.equal(readFileSync(join(root, "apps/emend/package.json"), "utf8"), manifest);
+});
+
+test("usage errors exit 2", (t) => {
+  const root = fixture(t);
+  for (const args of [
+    [],
+    ["unknown"],
+    ["stamp"],
+    ["stamp", "0.1.1", "extra"],
+    ["plan", "--bump"],
+    ["plan", "--bump", "major"],
+    ["plan", "--notes"],
+    ["plan", "--unknown", "x"],
+    ["plan", "--bump", "auto", "--bump", "minor"],
+  ]) {
+    const result = cli(root, args);
+    assert.equal(result.status, 2, args.join(" "));
+    assert.match(result.stderr, /^Usage: node scripts\/release.ts /);
   }
 });
 
-test("a second run for the same version is refused", (t) => {
-  const root = fixture(t);
-  run(root, "0.1.0");
-  git(root, "add", "-A");
-  git(root, "commit", "-q", "-m", "chore: release 0.1.0");
-  assert.throws(() => run(root, "0.1.0"), /already has a section for 0\.1\.0/);
+test("helpers preserve date, classification and numeric ordering", () => {
+  assert.equal(localDate(new Date(2026, 0, 2, 12)), "2026-01-02");
+  assert.equal(compareVersions("0.10.0", "0.9.9"), 1);
+  assert.equal(compareVersions("1.0.0", "1.0.0"), 0);
+  assert.equal(compareVersions("0.9.0", "1.0.0"), -1);
+  assert.equal(classifyCommit("fix(cli): launch", "")?.line, "- launch (cli)");
 });
 
-test("the gate runs after the files are written and its failure is reported", (t) => {
+function pendingRelease(t: TestContext) {
   const root = fixture(t);
-  let seen = "";
-  const failing: GateRunner = (gateRoot) => {
-    seen = readFileSync(join(gateRoot, "apps/emend/package.json"), "utf8");
-    assert.match(readFileSync(join(gateRoot, "CHANGELOG.md"), "utf8"), /## 0\.1\.0/);
-    throw new Error("lint failed");
-  };
-  const lines: string[] = [];
-  assert.throws(() => run(root, "0.1.0", failing, lines), /gate failed \(lint failed\).*left in place/);
-  assert.match(seen, /"version": "0\.1\.0"/);
-  assert.ok(!lines.some((line) => line.startsWith("Next steps")));
+  git(root, "tag", "v0.0.9");
+  commit(root, "fix(cli): recover this release");
+  git(root, "checkout", "-q", "-b", "tests");
+  commit(root, "test!: excluded tests", "apps/emend/recovery.test.ts");
+  commit(root, "ci: excluded pipeline", "packages/pipeline.txt");
+  git(root, "checkout", "-q", "main");
+  git(root, "merge", "--no-ff", "-m", "feat!: excluded merge wrapper", "tests");
+  commit(root, "feat: excluded internal tooling", "scripts/internal.ts");
+  git(root, "tag", "-a", "v0.1.1", "-m", "Synthetic release");
+  const sha = git(root, "rev-parse", "HEAD").trim();
+  git(root, "tag", "v0.2.0-rc.1");
+  return { root, sha };
+}
 
-  const skipped = fixture(t);
-  let called = false;
-  release({
-    root: skipped,
-    version: "0.1.0",
-    date: "2026-11-05",
-    skipGate: true,
-    gate: () => {
-      called = true;
+test("a published tag contained by release plans new shipped commits normally", async (t) => {
+  const { root, sha } = pendingRelease(t);
+  commit(root, "chore: later release branch commit", "internal.txt");
+  git(root, "update-ref", "refs/remotes/origin/release", "HEAD");
+  commit(root, "feat: a later feature");
+  const checked: string[] = [];
+  const result = await plan({
+    root,
+    isPublished: async (version) => {
+      checked.push(version);
+      return version === "0.1.1";
     },
   });
-  assert.equal(called, false);
+  assert.deepEqual(checked, ["0.1.1", "0.2.0"]);
+  assert.equal(result.resume, false);
+  assert.equal(result.version, "0.2.0");
+  assert.equal(result.previous, "v0.1.1");
+  assert.notEqual(result.sha, sha);
+  assert.equal(result.sha, git(root, "rev-parse", "HEAD").trim());
+  assert.match(result.section ?? "", /a later feature/);
+  assert(!result.section?.includes("recover this release"));
 });
+
+for (const bump of ["auto", "patch", "minor"] as const) {
+  test(`an unpublished tag resumes its peeled commit and ignores --bump ${bump}`, async (t) => {
+    const { root, sha } = pendingRelease(t);
+    const output = join(root, "output");
+    const notes = join(root, "notes.md");
+    const lines: string[] = [];
+    const result = await plan({
+      root,
+      bump,
+      notes,
+      output,
+      date: "2026-11-05",
+      stdout: (line) => lines.push(line),
+      isPublished: async (version) => {
+        assert.equal(version, "0.1.1");
+        return false;
+      },
+    });
+    assert.deepEqual(result, {
+      release: true,
+      resume: true,
+      version: "0.1.1",
+      previous: "v0.1.0",
+      sha,
+      section: "## 0.1.1 (2026-11-05)\n\n### Fixes\n\n- recover this release (cli)\n",
+    });
+    assert.notEqual(result.sha, git(root, "rev-parse", "refs/tags/v0.1.1").trim(), "peel the annotated tag");
+    assert.equal(readFileSync(notes, "utf8"), result.section);
+    assert.equal(
+      readFileSync(output, "utf8"),
+      `release=true\nresume=true\nversion=0.1.1\nprevious=v0.1.0\nsha=${sha}\n`,
+    );
+    const ignored = bump === "auto" ? "" : `; --bump ${bump} ignored when resuming`;
+    assert.deepEqual(lines, [`release: resumes v0.1.1 at ${sha} since v0.1.0${ignored}`]);
+  });
+}
+
+test("a published tag resumes when release is behind, with no new commits", async (t) => {
+  const { root, sha } = pendingRelease(t);
+  const result = await plan({ root, isPublished: async () => true });
+  assert.equal(result.release, true);
+  assert.equal(result.version, "0.1.1");
+  assert.equal(result.previous, "v0.1.0");
+  assert.equal(result.sha, sha);
+});
+
+test("CLI awaits the registry check and emits a resume for a published tag with release behind", (t) => {
+  const { root, sha } = pendingRelease(t);
+  const result = cli(root, ["plan", "--bump", "minor"]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^release: resumes v0\.1\.1 /);
+  assert(result.stdout.includes(sha));
+  assert(result.stdout.includes("--bump minor ignored"));
+});
+
+test("a custom release ref is used instead of origin/release", async (t) => {
+  const { root } = pendingRelease(t);
+  git(root, "update-ref", "refs/heads/published", "HEAD");
+  const result = await plan({ root, releaseRef: "refs/heads/published", isPublished: async () => true });
+  assert.equal(result.release, false);
+});
+
+for (const published of [true, false]) {
+  test(`a missing release ref refuses instead of resuming (published=${published})`, async (t) => {
+    const { root } = pendingRelease(t);
+    git(root, "update-ref", "-d", "refs/remotes/origin/release");
+    await assert.rejects(plan({ root, isPublished: async () => published }), {
+      name: "Error",
+      message: "release: release ref refs/remotes/origin/release is missing or invalid",
+    });
+  });
+}
+
+test("a registry callback error refuses without writing outputs or notes", async (t) => {
+  const { root } = pendingRelease(t);
+  const output = join(root, "output");
+  const notes = join(root, "notes.md");
+  await assert.rejects(
+    plan({
+      root,
+      notes,
+      output,
+      isPublished: async () => {
+        throw new Error("network unavailable");
+      },
+    }),
+    (error) => error instanceof ReleaseError && /^release: could not check npm/.test(error.message),
+  );
+  assert(!existsSync(output));
+  assert(!existsSync(notes));
+});
+
+test("the first tag refuses to resume without an earlier plain tag", async (t) => {
+  const root = fixture(t, false);
+  commit(root, "fix: first release");
+  git(root, "tag", "v0.1.0");
+  await assert.rejects(
+    plan({ root, isPublished: async () => false }),
+    (error) => error instanceof ReleaseError && /cannot resume v0\.1\.0: no earlier plain tag/.test(error.message),
+  );
+});
+
+for (const status of [200, 404, 302, 403, 429, 503]) {
+  test(`the default npm query treats HTTP ${status} explicitly`, async (t) => {
+    const { root, sha } = pendingRelease(t);
+    if (status !== 404) git(root, "update-ref", "refs/remotes/origin/release", sha);
+    const query = t.mock.method(globalThis, "fetch", async (url, options) => {
+      assert.equal(url, "https://registry.npmjs.org/@shllg%2Femend/0.1.1");
+      assert.equal(options.redirect, "manual");
+      assert(options.signal instanceof AbortSignal);
+      return new Response(null, { status });
+    });
+    if (status === 200 || status === 404) {
+      assert.equal((await plan({ root })).release, status === 404);
+    } else {
+      await assert.rejects(
+        plan({ root }),
+        (error) => error instanceof ReleaseError && error.message.includes(`npm returned HTTP ${status}`),
+      );
+    }
+    assert.equal(query.mock.callCount(), 1);
+  });
+}
+
+test("a default npm query network error is a refusal", async (t) => {
+  const { root } = pendingRelease(t);
+  t.mock.method(globalThis, "fetch", async () => {
+    throw new TypeError("fetch failed");
+  });
+  await assert.rejects(
+    plan({ root }),
+    (error) => error instanceof ReleaseError && /^release: could not check npm/.test(error.message),
+  );
+});
+
+test("merge-base errors are refusals, never interpreted as release lag", async (t) => {
+  const { root } = pendingRelease(t);
+  const spawn = t.mock.method(childProcess, "spawnSync", () => ({ status: 128 }));
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(
+      plan({ root, isPublished: async () => false }),
+      (error) => error instanceof ReleaseError && /^release: could not check whether/.test(error.message),
+    );
+  } finally {
+    spawn.mock.restore();
+    syncBuiltinESMExports();
+  }
+});
+
+for (const mode of ["new", "resume"] as const) {
+  for (const relation of ["ahead", "diverged"] as const) {
+    test(`${mode} planning refuses a release ref ${relation} from its planned commit`, async (t) => {
+      const root = mode === "resume" ? pendingRelease(t).root : fixture(t);
+      if (mode === "new") commit(root, "fix: new release candidate");
+      const sha = git(root, "rev-parse", "HEAD").trim();
+      git(root, "checkout", "-q", "-b", "release-work", relation === "ahead" ? sha : "v0.1.0");
+      commit(root, "fix: code already released", "apps/emend/released.ts");
+      const releaseRef = "refs/heads/released";
+      git(root, "update-ref", releaseRef, "HEAD");
+      git(root, "checkout", "-q", "main");
+      const output = join(root, "output");
+      const notes = join(root, "notes.md");
+      await assert.rejects(
+        plan({ root, releaseRef, output, notes, isPublished: async () => mode === "new" }),
+        (error) =>
+          error instanceof ReleaseError &&
+          error.message === `release: ${releaseRef} is ahead of or diverged from ${sha}; refusing a stale release`,
+      );
+      assert(!existsSync(output));
+      assert(!existsSync(notes));
+    });
+  }
+}
+
+test("a new version can advance from a release ref equal to the planned commit", async (t) => {
+  const root = fixture(t);
+  commit(root, "fix: current release branch");
+  git(root, "update-ref", "refs/remotes/origin/release", "HEAD");
+  const result = await run(root);
+  assert.equal(result.resume, false);
+  assert.equal(result.version, "0.1.1");
+  assert.equal(result.sha, git(root, "rev-parse", "HEAD").trim());
+});
+
+test("an unpublished tag already held by release is refused", async (t) => {
+  const { root, sha } = pendingRelease(t);
+  git(root, "update-ref", "refs/remotes/origin/release", sha);
+  await assert.rejects(
+    plan({ root, isPublished: async () => false }),
+    (error) =>
+      error instanceof ReleaseError &&
+      error.message === "release: release already holds v0.1.1's commit but npm lacks 0.1.1",
+  );
+});
+
+test("an unpublished tag cannot be published from a later HEAD because of provenance", async (t) => {
+  const { root } = pendingRelease(t);
+  commit(root, "feat: later work");
+  await assert.rejects(
+    plan({ root, isPublished: async () => false }),
+    (error) =>
+      error instanceof ReleaseError &&
+      error.message ===
+        "release: v0.1.1 is tagged but not on npm; publish it from a run at its commit (re-run the failed jobs of the run that tagged it) or push a higher lightweight tag at main's HEAD and start the workflow",
+  );
+});
+
+test("a published tag can resume marking from a later HEAD", async (t) => {
+  const { root, sha } = pendingRelease(t);
+  commit(root, "feat!: later work must wait");
+  const result = await plan({ root, isPublished: async () => true });
+  assert.equal(result.resume, true);
+  assert.equal(result.sha, sha);
+  assert.equal(result.version, "0.1.1");
+  assert(!result.section?.includes("later work"));
+});
+
+test("a new version already present on npm refuses before writing outputs", async (t) => {
+  const root = fixture(t);
+  commit(root, "fix: new work");
+  const checked: string[] = [];
+  const output = join(root, "output");
+  await assert.rejects(
+    plan({
+      root,
+      output,
+      isPublished: async (version) => {
+        checked.push(version);
+        return true;
+      },
+    }),
+    (error) => error instanceof ReleaseError && error.message === "release: npm already has 0.1.1",
+  );
+  assert.deepEqual(checked, ["0.1.0", "0.1.1"]);
+  assert(!existsSync(output));
+});
+
+test("a registry error when checking a new version is a refusal", async (t) => {
+  const root = fixture(t);
+  commit(root, "fix: new work");
+  await assert.rejects(
+    plan({
+      root,
+      isPublished: async (version) => {
+        if (version === "0.1.0") return true;
+        throw new Error("registry unavailable");
+      },
+    }),
+    (error) => error instanceof ReleaseError && error.message === "release: could not check npm for @shllg/emend@0.1.1",
+  );
+});
+
+for (const mode of ["new", "resume"] as const) {
+  test(`${mode} planning refuses errors in the reverse ancestry check`, async (t) => {
+    const root = mode === "new" ? fixture(t) : pendingRelease(t).root;
+    if (mode === "new") commit(root, "fix: new work");
+    const planned = git(root, "rev-parse", "HEAD").trim();
+    const released = git(root, "rev-parse", "refs/remotes/origin/release").trim();
+    const original = childProcess.spawnSync;
+    const calls: string[][] = [];
+    const spawn = t.mock.method(childProcess, "spawnSync", (program, args, options) => {
+      calls.push(args);
+      if (calls.length === 2) return { status: 128 };
+      return original(program, args, options);
+    });
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(
+        plan({ root, isPublished: async () => mode === "new" }),
+        (error) => error instanceof ReleaseError && /^release: could not check whether/.test(error.message),
+      );
+      assert.deepEqual(calls[1], ["-C", root, "merge-base", "--is-ancestor", released, planned]);
+    } finally {
+      spawn.mock.restore();
+      syncBuiltinESMExports();
+    }
+  });
+}

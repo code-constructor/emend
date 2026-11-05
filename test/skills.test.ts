@@ -416,18 +416,9 @@ test("the synthetic hand-off is a Go with a comment and no invented fields", () 
 test("the marketplace selects the plugin folder and its manifest matches the package", () => {
   const plugin = json("plugin/.claude-plugin/plugin.json");
   const marketplace = json(".claude-plugin/marketplace.json");
-  expect(Object.keys(plugin).sort()).toEqual([
-    "author",
-    "description",
-    "keywords",
-    "license",
-    "name",
-    "repository",
-    "version",
-  ]);
+  expect(Object.keys(plugin).sort()).toEqual(["author", "description", "keywords", "license", "name", "repository"]);
   expect(plugin).toMatchObject({
     name: "emend",
-    version: json("apps/emend/package.json").version,
     author: { name: "shllg" },
     repository: "https://github.com/shllg/emend",
     license: "MIT",

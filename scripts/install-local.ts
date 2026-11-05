@@ -13,6 +13,7 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { compareVersions, lastTag, stampVersion, VERSION_PATTERN } from "./release.ts";
 
 interface CommandOptions {
   cwd: string;
@@ -110,7 +111,7 @@ export async function installLocal(args: string[], options: InstallOptions = {})
   signals.on("SIGINT", onInterrupt);
   signals.on("SIGTERM", onTerminate);
   try {
-    const commit = (await command("read HEAD", "git", ["rev-parse", "--short", "HEAD"], root, true)).trim();
+    const commit = (await command("read HEAD", "git", ["rev-parse", "--verify", "HEAD"], root, true)).trim();
     const dirty = await command("git status", "git", ["status", "--porcelain", "--untracked-files=all"], root, true);
     if (dirty.trim()) stdout(`install:local: uncommitted changes are not included; installing ${commit}.`);
 
@@ -120,8 +121,19 @@ export async function installLocal(args: string[], options: InstallOptions = {})
     const pack = join(temporary, "pack");
     mkdirSync(source);
     mkdirSync(pack);
-    await command("git archive", "git", ["archive", "--format=tar", `--output=${join(temporary, "src.tar")}`, "HEAD"]);
+    await command("git archive", "git", ["archive", "--format=tar", `--output=${join(temporary, "src.tar")}`, commit]);
     await command("tar extract", "tar", ["-xf", join(temporary, "src.tar"), "-C", source]);
+    step = "read release tag";
+    const tag = lastTag(root, commit);
+    if (tag) {
+      step = "stamp release version";
+      const version = tag.slice(1);
+      const committed = JSON.parse(readFileSync(join(source, "apps/emend/package.json"), "utf8")).version;
+      if (typeof committed !== "string" || !VERSION_PATTERN.test(committed)) {
+        throw new Error("Expected a plain release version");
+      }
+      if (compareVersions(version, committed) > 0) stampVersion(source, version);
+    }
     await command("pnpm install", "pnpm", ["install", "--frozen-lockfile"], source);
     await command("pnpm build", "pnpm", ["build"], source);
     const pkg = join(source, "apps/emend");
