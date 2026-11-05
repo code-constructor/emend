@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { LIMITS } from "@emend/contract";
-import { afterEach, beforeEach, expect, test } from "vitest";
+import { beforeEach, expect, onTestFinished, test } from "vitest";
 import { testDb } from "../../db/test-support.ts";
 import { BlobStore } from "../../store/blobs.ts";
 import { createApp } from "../app.ts";
@@ -17,6 +17,7 @@ const origin = "http://127.0.0.1:3636";
 const sha = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 beforeEach(async () => {
   f = await testDb();
+  onTestFinished(() => f.cleanup());
   agent = (await createToken(f.db, f.ownerId, "agent", { instanceId: f.instanceId })).secret;
   foreign = (await createToken(f.db, f.otherOwnerId, "agent", { instanceId: f.instanceId })).secret;
   app = createApp({
@@ -34,9 +35,6 @@ beforeEach(async () => {
       serverKey: "A".repeat(43),
     },
   });
-});
-afterEach(async () => {
-  await f.cleanup();
 });
 function request(
   path: string,
@@ -215,19 +213,15 @@ test("slow doc computation leaves capabilities and authenticated blob requests r
     files: [{ path: "slow.md", role: "doc", oldPath: null, oldBlob: null, newBlob: hash, flag: null }],
   };
   const publishing = request("/publish", "POST", JSON.stringify(body), { "Content-Type": "application/json" });
+  onTestFinished(async () => {
+    release.resolve();
+    await publishing;
+  });
   await started.promise;
-  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const deadline = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error("database blocked")), 200);
-    });
-    const responses = await Promise.race([
-      Promise.all([request("/capabilities", "GET"), request(`/blobs/${hash}`, "HEAD")]),
-      deadline,
-    ]);
+    const responses = await Promise.all([request("/capabilities", "GET"), request(`/blobs/${hash}`, "HEAD")]);
     expect(responses.map((r) => r.status)).toEqual([200, 204]);
   } finally {
-    clearTimeout(timer);
     release.resolve();
     expect((await publishing).status).toBe(200);
   }

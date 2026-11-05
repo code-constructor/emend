@@ -2,14 +2,16 @@ import { randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { sql } from "drizzle-orm";
-import { expect, test, vi } from "vitest";
+import { beforeEach, expect, onTestFinished, test, vi } from "vitest";
 import * as client from "../db/client.ts";
 import * as waiters from "../db/repo/waiters.ts";
 import { run } from "../main.ts";
 import { verifyBearer } from "../server/auth/tokens.ts";
+import * as executors from "../server/publish/executor.ts";
 import { startServer } from "../server/serve.ts";
 import { initializeServerState } from "../server/state.ts";
 import * as tokenFiles from "../state/token-file.ts";
+import { workInThread } from "../test/in-thread-worker.ts";
 import { takeFeedback } from "./commands/wait.ts";
 import { directFixture } from "./direct-test-support.ts";
 import { sandboxHint } from "./http.ts";
@@ -22,7 +24,14 @@ vi.mock("../db/repo/waiters.ts", async (original) => ({
 vi.mock("../state/token-file.ts", async (original) => ({
   ...(await original<typeof import("../state/token-file.ts")>()),
 }));
+vi.mock("../server/publish/executor.ts", async (original) => ({
+  ...(await original<typeof import("../server/publish/executor.ts")>()),
+}));
 vi.mock("./pause.ts", async (original) => ({ ...(await original<typeof import("./pause.ts")>()) }));
+
+beforeEach(() => {
+  workInThread(executors);
+});
 
 test("direct publish leaves missing tokens absent; the next server bootstrap creates both", async () => {
   const f = await directFixture();
@@ -75,6 +84,10 @@ test("concurrent bootstraps leave both token files authenticating as their kind"
     };
   });
   const initial = initializeServerState(f.stateDir);
+  onTestFinished(async () => {
+    release.resolve();
+    await (await initial).db.close();
+  });
   await committed.promise;
   try {
     const others = await Promise.all(Array.from({ length: 3 }, () => initializeServerState(f.stateDir)));
@@ -83,7 +96,6 @@ test("concurrent bootstraps leave both token files authenticating as their kind"
     release.resolve();
   }
   const state = await initial;
-  f.cleanup.push(() => state.db.close());
   for (const kind of ["agent", "admin"]) {
     const secret = await readFile(join(f.stateDir, `${kind}.token`), "utf8");
     expect((await verifyBearer(state.db, `Bearer ${secret}`, Date.now()))?.kind).toBe(kind);
@@ -231,10 +243,18 @@ test.each([
   const server = await f.reviewer();
   const out = f.output();
   const before = process.listenerCount(signal);
+  const started = Promise.withResolvers<void>();
+  const beginWait = waiters.beginWait;
+  vi.spyOn(waiters, "beginWait").mockImplementation(async (...args) => {
+    const id = await beginWait(...args);
+    started.resolve();
+    return id;
+  });
   const command = run(["wait", result.reviewId], out.io);
   const rows = () =>
     server.db.read((q) => q.values(sql`select id from agent_waiters where owner_id = ${server.ownerId}`));
-  await vi.waitFor(async () => expect(await rows()).toHaveLength(1));
+  await started.promise;
+  expect(await rows()).toHaveLength(1);
   process.emit(signal);
   expect(await command).toBe(code);
   expect(out.stdout).toEqual([]);
@@ -311,6 +331,11 @@ test.each(["wait", "feedback"])(
         await flush.promise;
       };
       const pending = run([command, result.reviewId], out.io);
+      onTestFinished(async () => {
+        process.emit(signal);
+        flush.resolve();
+        await pending;
+      });
       await writing.promise;
       process.emit(signal);
       try {

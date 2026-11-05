@@ -1,24 +1,88 @@
+import * as childProcess from "node:child_process";
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { once } from "node:events";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { beforeEach, expect, onTestFinished, test, vi } from "vitest";
 import { testDb } from "../db/test-support.ts";
 import { startServer } from "../server/serve.ts";
 import { writeSecretFile } from "../state/files.ts";
 import { discover, ensureServer } from "./server-client.ts";
 
+const launchEnvs = new Map<string, { confinedEnv: NodeJS.ProcessEnv; suppliedEnvs: NodeJS.ProcessEnv[] }>();
+vi.mock("node:child_process", async (original) => {
+  const actual = await original<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    // ensureServer has no env option. Keep fixture confinement after spies are restored too.
+    spawn(node: string, args: string[], options: childProcess.SpawnOptions) {
+      const launch = launchEnvs.get(args[0] ?? "");
+      if (node !== process.execPath || !launch) throw new Error("unregistered test child");
+      launch.suppliedEnvs.push({ ...options.env });
+      return actual.spawn(node, args, {
+        ...options,
+        env: {
+          ...launch.confinedEnv,
+          EMEND_HOME: options.env?.EMEND_HOME,
+        },
+      });
+    },
+  };
+});
+
+function observeChildExit(entry: string, stateDir: string, nodeOptions = "--no-warnings") {
+  // Observe production forwarding caller options; the child's allowlist must still exclude them.
+  vi.stubEnv("NODE_OPTIONS", nodeOptions);
+  onTestFinished(() => {
+    vi.unstubAllEnvs();
+  });
+  const expectedEnv = { ...process.env, EMEND_HOME: stateDir };
+  const suppliedEnvs: NodeJS.ProcessEnv[] = [];
+  launchEnvs.set(entry, { confinedEnv: { PATH: stateDir, HOME: stateDir, LC_ALL: "C" }, suppliedEnvs });
+  onTestFinished(() => {
+    launchEnvs.delete(entry);
+    expect(suppliedEnvs.length).toBe(1);
+    const [suppliedEnv] = suppliedEnvs;
+    expect(suppliedEnv?.EMEND_HOME).toBe(stateDir);
+    expect(suppliedEnv?.NODE_OPTIONS).toBe(nodeOptions);
+    // Production inherits every other variable unchanged; never print caller names or values on failure.
+    expect(Object.keys(suppliedEnv ?? {}).length).toBe(Object.keys(expectedEnv).length);
+    expect(
+      Object.entries(expectedEnv).every(
+        ([key, value]) => Object.hasOwn(suppliedEnv ?? {}, key) && suppliedEnv?.[key] === value,
+      ),
+    ).toBe(true);
+  });
+  const spawn = childProcess.spawn;
+  const exited = Promise.withResolvers<unknown[]>();
+  void exited.promise.catch(() => {});
+  vi.spyOn(childProcess, "spawn").mockImplementationOnce((...args) => {
+    const child = spawn(...args);
+    void once(child, "exit").then(exited.resolve, exited.reject);
+    onTestFinished(async () => {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      await exited.promise;
+    });
+    return child;
+  });
+  return exited.promise;
+}
+
 beforeEach(() => {
+  onTestFinished(() => {
+    try {
+      expect(vi.mocked(process.kill).mock.calls.every(([, signal]) => signal === 0)).toBe(true);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
   const kill = process.kill;
   vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
     if (signal !== 0) throw new Error("Only process existence probes are allowed.");
     return kill(pid, signal);
   });
-});
-afterEach(() => {
-  expect(vi.mocked(process.kill).mock.calls.every(([, signal]) => signal === 0)).toBe(true);
-  vi.restoreAllMocks();
 });
 
 test.each([
@@ -49,6 +113,7 @@ test.each([
 
 test("a wrong proof never reads an endless capabilities body", async () => {
   const stateDir = await mkdtemp(join(process.env.EMEND_HOME as string, "discovery-proof-"));
+  onTestFinished(() => rm(stateDir, { recursive: true, force: true }));
   try {
     await writeFile(
       join(stateDir, "server.json"),
@@ -72,42 +137,26 @@ test("a wrong proof never reads an endless capabilities body", async () => {
 
 test("ensureServer reuses a live server with valid capabilities", async () => {
   const fixture = await testDb();
+  onTestFinished(() => fixture.cleanup());
   let server: Awaited<ReturnType<typeof startServer>> | undefined;
   try {
     const stateDir = join(fixture.dir, "state-server");
     server = await startServer({ stateDir, port: 0 });
+    const running = server;
+    onTestFinished(() => running.close());
     expect(await ensureServer(stateDir)).toEqual({ url: server.url });
   } finally {
     await server?.close();
-    await fixture.cleanup();
   }
 });
 
-async function withLaunchEnv<T>(dir: string, launch: () => Promise<T>): Promise<T> {
-  const home = join(dir, "home");
-  await mkdir(home, { mode: 0o700 });
-  const previous = { ...process.env };
-  const env = {
-    ...(previous.PATH !== undefined ? { PATH: previous.PATH } : {}),
-    ...(previous.TMPDIR !== undefined ? { TMPDIR: previous.TMPDIR } : {}),
-    HOME: home,
-    LC_ALL: "C",
-  };
-  try {
-    for (const key of Object.keys(process.env)) delete process.env[key];
-    Object.assign(process.env, env);
-    return await launch();
-  } finally {
-    for (const key of Object.keys(process.env)) delete process.env[key];
-    Object.assign(process.env, previous);
-  }
-}
-
 test("ensureServer starts a detached server after a dead discovery pid", async () => {
   const fixture = await testDb();
+  onTestFinished(() => fixture.cleanup());
   const stateDir = join(fixture.dir, "spawned");
   let pid: number | undefined;
   let url: string | undefined;
+  let exited: Promise<unknown[]> | undefined;
   try {
     await mkdir(stateDir, { mode: 0o700 });
     writeSecretFile(
@@ -120,13 +169,15 @@ test("ensureServer starts a detached server after a dead discovery pid", async (
       entry,
       `import { createServer } from 'node:http';\nimport { randomBytes, createHmac } from 'node:crypto';\nconst key = randomBytes(32).toString('base64url');\nimport { writeFileSync, unlinkSync } from 'node:fs';\nimport { join } from 'node:path';\nif (process.argv[2] !== 'serve') process.exit(2);\nconst path = join(process.env.EMEND_HOME, 'server.json');\nconst server = createServer((req,res) => { if (req.url === '/stop') { res.once('finish', () => { server.closeAllConnections(); server.close(() => { unlinkSync(path); process.exit(0); }); }); res.end(); return; } const challenge = req.headers['x-emend-challenge']; if (typeof challenge === 'string') res.setHeader('X-Emend-Proof',createHmac('sha256',Buffer.from(key,'base64url')).update(challenge).digest('base64url')); res.setHeader('Content-Type','application/json'); res.end(JSON.stringify({api:1,version:'0.1.0',features:[]})); });\nserver.on('error', (error) => { writeFileSync(join(process.env.EMEND_HOME, 'listen-error'), error.code); process.exit(1); });\nserver.listen(0,'127.0.0.1', () => { const port = server.address().port; writeFileSync(path, JSON.stringify({key,pid:process.pid,url:'http://127.0.0.1:'+port,port,startedAt:new Date().toISOString()}), {mode:0o600}); });\nprocess.on('SIGTERM', () => { server.closeAllConnections(); server.close(() => { unlinkSync(path); process.exit(0); }); });\nsetTimeout(() => process.exit(0), 10000).unref();\n`,
     );
-    const result = await withLaunchEnv(fixture.dir, () => ensureServer(stateDir, { entry, timeoutMs: 4000 })).catch(
-      async (error) => {
-        const code = await readFile(join(stateDir, "listen-error"), "utf8").catch(() => "");
-        if (["EPERM", "EACCES"].includes(code)) throw new Error(`Synthetic child listen ${code}`);
-        throw error;
-      },
-    );
+    exited = observeChildExit(entry, stateDir);
+    const result = await Promise.race([
+      ensureServer(stateDir, { entry, timeoutMs: 60_000 }),
+      exited.then(async ([code, signal]) => {
+        const listenError = await readFile(join(stateDir, "listen-error"), "utf8").catch(() => "");
+        if (listenError) throw new Error(`Synthetic child listen ${listenError}`);
+        throw new Error(`Synthetic child exited before discovery (${code ?? signal})`);
+      }),
+    ]);
     pid = JSON.parse(await readFile(join(stateDir, "server.json"), "utf8")).pid;
     url = result.url;
     expect(result.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
@@ -134,36 +185,28 @@ test("ensureServer starts a detached server after a dead discovery pid", async (
   } finally {
     if (url) {
       await fetch(`${url}/stop`, { method: "POST" });
-      await vi.waitFor(async () => {
-        await expect(readFile(join(stateDir, "server.json"))).rejects.toMatchObject({ code: "ENOENT" });
-      });
+      expect(await exited).toEqual([0, null]);
+      await expect(readFile(join(stateDir, "server.json"))).rejects.toMatchObject({ code: "ENOENT" });
     }
-    await fixture.cleanup();
   }
 });
 
-test("a detached child that exits before discovery ignores the caller's NODE_OPTIONS preload", async () => {
+test("the confined test child of a detached launch never runs the caller's NODE_OPTIONS preload", async () => {
   const fixture = await testDb();
-  const previous = process.env.NODE_OPTIONS;
-  try {
-    const entry = join(fixture.dir, "exit.mjs");
-    const started = join(fixture.dir, "entry-ran");
-    const marker = join(fixture.dir, "preload-ran");
-    const preload = join(fixture.dir, "preload.cjs");
-    await writeFile(
-      entry,
-      `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(started)}, "ran"); process.exit(1);\n`,
-    );
-    await writeFile(preload, `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "ran");\n`);
-    process.env.NODE_OPTIONS = `--require ${JSON.stringify(preload)}`;
-    await expect(
-      withLaunchEnv(fixture.dir, () => ensureServer(join(fixture.dir, "failed"), { entry, timeoutMs: 150 })),
-    ).rejects.toThrow("Could not start the emend server.");
-    await vi.waitFor(() => access(started));
-    await expect(access(marker)).rejects.toMatchObject({ code: "ENOENT" });
-  } finally {
-    if (previous === undefined) delete process.env.NODE_OPTIONS;
-    else process.env.NODE_OPTIONS = previous;
-    await fixture.cleanup();
-  }
+  onTestFinished(() => fixture.cleanup());
+  const stateDir = join(fixture.dir, "failed");
+  const entry = join(fixture.dir, "exit.mjs");
+  const started = join(stateDir, "entry-ran");
+  const marker = join(fixture.dir, "preload-ran");
+  const preload = join(fixture.dir, "preload.cjs");
+  await writeFile(
+    entry,
+    `import { writeFileSync } from "node:fs"; import { join } from "node:path"; writeFileSync(join(process.env.EMEND_HOME, "entry-ran"), "ran"); process.exit(1);\n`,
+  );
+  await writeFile(preload, `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "ran");\n`);
+  const exited = observeChildExit(entry, stateDir, `--require ${JSON.stringify(preload)}`);
+  await expect(ensureServer(stateDir, { entry, timeoutMs: 150 })).rejects.toThrow("Could not start the emend server.");
+  expect(await exited).toEqual([1, null]);
+  await access(started);
+  await expect(access(marker)).rejects.toMatchObject({ code: "ENOENT" });
 });

@@ -11,6 +11,7 @@ import { DiffView, DiffWorkers } from "./FileDiff.tsx";
 import { parsePair } from "./parse.worker.ts";
 import { diffTheme } from "./theme.ts";
 
+// A real Vite build, cold workers and highlighting two languages are the integration workload.
 test("built JS worker highlights TypeScript and a language loaded late without its own registries", async () => {
   const dir = await mkdtemp(join(tmpdir(), "emend-diff-worker-"));
   const workers: NodeWorker[] = [];
@@ -108,10 +109,8 @@ test("built JS worker highlights TypeScript and a language loaded late without i
         <DiffView fileDiff={ts} diffStyle="split" annotations={[]} selected={null} onSelect={() => {}} />
       </DiffWorkers>,
     );
-    await waitFor(
-      () =>
-        expect(responses.some((response) => response.type === "success" && response.requestType === "diff")).toBe(true),
-      { timeout: 10000 },
+    await waitFor(() =>
+      expect(responses.some((response) => response.type === "success" && response.requestType === "diff")).toBe(true),
     );
     await waitFor(() =>
       expect(
@@ -128,14 +127,12 @@ test("built JS worker highlights TypeScript and a language loaded late without i
         <DiffView fileDiff={late} diffStyle="unified" annotations={[]} selected={null} onSelect={() => {}} />
       </DiffWorkers>,
     );
-    await waitFor(
-      () =>
-        expect(
-          responses
-            .slice(initialResponses)
-            .some((response) => response.type === "success" && response.requestType === "diff"),
-        ).toBe(true),
-      { timeout: 10000 },
+    await waitFor(() =>
+      expect(
+        responses
+          .slice(initialResponses)
+          .some((response) => response.type === "success" && response.requestType === "diff"),
+      ).toBe(true),
     );
     await waitFor(() => {
       const shadow = view.container.querySelector("diffs-container")?.shadowRoot;

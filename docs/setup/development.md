@@ -31,6 +31,24 @@ Claude Code reads the skills from the checkout's `plugin/` folder, uncommitted c
 pulled change takes effect at the next session start or after `/reload-plugins`. For other agents,
 run `emend skills install` once; its links point into the installed package.
 
-`pnpm verify` runs every check. [AGENTS.md](https://github.com/shllg/emend/blob/main/AGENTS.md)
-holds the working rules. Maintainers: [releasing.md](../releasing.md)
-holds the release policy and checklist.
+`pnpm verify` is the single local gate. It runs `verify:static`, `verify:test`,
+`verify:build` and `verify:harness` in order. CI runs those same checks in parallel on Node 24
+and 26, with 4 Vitest shards per Node version. `pnpm bench` runs non-gating measurements with
+temporary state and prints JSON lines; it has no timing assertions and does not run in CI.
+[AGENTS.md](https://github.com/shllg/emend/blob/main/AGENTS.md)
+holds the working rules. Maintainers: [releasing.md](../releasing.md) holds the release policy
+and checklist.
+
+The tests never touch your own emend state or your Tailscale setup. Vitest's global setup gives
+each run a temporary `EMEND_HOME`, home folder and XDG folders. Only `emend serve --tailscale`
+runs `tailscale`, and its tests reach a fake one only:
+
+- Every call under test gets an environment the test owns, never the live `PATH`. A test that
+  times out therefore cannot hand a later call your real `PATH`.
+- The serve, serve-lifecycle and tailscale tests replace the executable lookup. A lookup outside
+  the test's own folder throws, also after the test ended and also for the macOS app fallback.
+- The tailscale-process tests stub both the lookup and the process spawn. Their one real child
+  runs a fake from the test's folder, with a fixed platform and a missing app path.
+- The serve-signals tests run emend in a child whose `PATH` holds only the test's folder and its
+  fake `tailscale`. Their cleanup first kills the child's process group if the child still runs.
+  Only then can it remove that folder; normally it also waits for the child to close first.

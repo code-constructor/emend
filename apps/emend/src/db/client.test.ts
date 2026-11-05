@@ -3,7 +3,7 @@ import { chmod, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { and, eq, sql } from "drizzle-orm";
-import { expect, test } from "vitest";
+import { expect, onTestFinished, test } from "vitest";
 import { StateDirModeError } from "../state/files.ts";
 import { NestedDbCallError, openDb, type Queries } from "./client.ts";
 import { owners, reviews, revisions, threads } from "./schema.ts";
@@ -11,6 +11,7 @@ import { testDb } from "./test-support.ts";
 
 test("the connection applies and reads back pragmas and creates private database files", async () => {
   const ctx = await testDb();
+  onTestFinished(() => ctx.cleanup());
   try {
     for (const [name, expected] of [
       ["journal_mode", "wal"],
@@ -30,6 +31,7 @@ test("the connection applies and reads back pragmas and creates private database
 
 test("positional rows preserve duplicate column names, JSON, returning and missing get", async () => {
   const ctx = await testDb();
+  onTestFinished(() => ctx.cleanup());
   try {
     await ctx.db.query(async (q) => {
       const [review] = await q
@@ -89,42 +91,43 @@ test("positional rows preserve duplicate column names, JSON, returning and missi
 
 test("a failing transaction rolls back and unrelated statements wait outside it", async () => {
   const ctx = await testDb();
+  onTestFinished(() => ctx.cleanup());
   const insertedId = randomUUID();
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
-  try {
-    const transaction = ctx.db.transaction(async (q) => {
-      await q.insert(owners).values({ id: insertedId });
-      entered.resolve();
-      await release.promise;
-      throw new Error("synthetic rollback");
-    });
-    const rejection = expect(transaction).rejects.toThrow("synthetic rollback");
-    await entered.promise;
-    let ran = false;
-    const unrelated = ctx.db.query(async (q) => {
-      ran = true;
-      return q.select().from(owners).where(eq(owners.id, insertedId)).get();
-    });
-    await Promise.resolve();
-    expect(ran).toBe(false);
+  const transaction = ctx.db.transaction(async (q) => {
+    await q.insert(owners).values({ id: insertedId });
+    entered.resolve();
+    await release.promise;
+    throw new Error("synthetic rollback");
+  });
+  const rejection = expect(transaction).rejects.toThrow("synthetic rollback");
+  onTestFinished(async () => {
     release.resolve();
     await rejection;
-    expect(await unrelated).toBeUndefined();
-    await ctx.db.transaction(async (q) => {
-      await q.insert(owners).values({ id: insertedId });
-    });
-    expect(await ctx.db.query((q) => q.select().from(owners).where(eq(owners.id, insertedId)).get())).toEqual({
-      id: insertedId,
-    });
-  } finally {
-    release.resolve();
-    await ctx.cleanup();
-  }
+  });
+  await entered.promise;
+  let ran = false;
+  const unrelated = ctx.db.query(async (q) => {
+    ran = true;
+    return q.select().from(owners).where(eq(owners.id, insertedId)).get();
+  });
+  await Promise.resolve();
+  expect(ran).toBe(false);
+  release.resolve();
+  await rejection;
+  expect(await unrelated).toBeUndefined();
+  await ctx.db.transaction(async (q) => {
+    await q.insert(owners).values({ id: insertedId });
+  });
+  expect(await ctx.db.query((q) => q.select().from(owners).where(eq(owners.id, insertedId)).get())).toEqual({
+    id: insertedId,
+  });
 });
 
 test("read-only WAL queries stay responsive, hide uncommitted rows and reject writes", async () => {
   const ctx = await testDb();
+  onTestFinished(() => ctx.cleanup());
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   const id = randomUUID();
@@ -133,22 +136,21 @@ test("read-only WAL queries stay responsive, hide uncommitted rows and reject wr
     entered.resolve();
     await release.promise;
   });
-  try {
-    await entered.promise;
-    expect(await ctx.db.read((q) => q.select().from(owners).where(eq(owners.id, id)).get())).toBeUndefined();
-    await expect(ctx.db.read((q) => q.insert(owners).values({ id: randomUUID() }).run())).rejects.toThrow();
+  onTestFinished(async () => {
     release.resolve();
     await transaction;
-    expect(await ctx.db.read((q) => q.select().from(owners).where(eq(owners.id, id)).get())).toEqual({ id });
-  } finally {
-    release.resolve();
-    await transaction;
-    await ctx.cleanup();
-  }
+  });
+  await entered.promise;
+  expect(await ctx.db.read((q) => q.select().from(owners).where(eq(owners.id, id)).get())).toBeUndefined();
+  await expect(ctx.db.read((q) => q.insert(owners).values({ id: randomUUID() }).run())).rejects.toThrow();
+  release.resolve();
+  await transaction;
+  expect(await ctx.db.read((q) => q.select().from(owners).where(eq(owners.id, id)).get())).toEqual({ id });
 });
 
 test("query scopes cannot escape the queue and close drains pending work", async () => {
   const ctx = await testDb();
+  onTestFinished(() => ctx.cleanup());
   let escaped: Queries | undefined;
   try {
     await ctx.db.query(async (q) => {
@@ -168,9 +170,11 @@ test("query scopes cannot escape the queue and close drains pending work", async
 
 test("reopening tightens the database and existing WAL/SHM sidecars", async () => {
   const ctx = await testDb();
+  onTestFinished(() => ctx.cleanup());
   try {
     for (const file of [ctx.file, `${ctx.file}-wal`, `${ctx.file}-shm`]) await chmod(file, 0o644);
     const reopened = openDb(ctx.file);
+    onTestFinished(() => reopened.close());
     try {
       for (const file of [ctx.file, `${ctx.file}-wal`, `${ctx.file}-shm`])
         expect((await stat(file)).mode & 0o777).toBe(0o600);
@@ -184,6 +188,7 @@ test("reopening tightens the database and existing WAL/SHM sidecars", async () =
 
 test("opening a public state directory refuses it without changing its permissions", async () => {
   const dir = await mkdtemp(join(tmpdir(), "emend-db-mode-"));
+  onTestFinished(() => rm(dir, { recursive: true, force: true }));
   try {
     await chmod(dir, 0o755);
     expect(() => openDb(join(dir, "emend.db"))).toThrow(StateDirModeError);
@@ -195,22 +200,31 @@ test("opening a public state directory refuses it without changing its permissio
 
 test("nested query and transaction calls reject immediately instead of deadlocking", async () => {
   const ctx = await testDb();
+  onTestFinished(() => ctx.cleanup());
   try {
     for (const outer of ["query", "transaction"] as const) {
       for (const inner of ["query", "transaction"] as const) {
-        await ctx.db[outer](async () => {
-          let timeout: ReturnType<typeof setTimeout> | undefined;
-          const deadline = new Promise<never>((_, reject) => {
-            timeout = setTimeout(() => reject(new Error("Nested call deadlocked")), 100);
-          });
-          try {
-            await expect(
-              Promise.race([ctx.db[inner]((q) => q.values(sql`select 1`)), deadline]),
-            ).rejects.toBeInstanceOf(NestedDbCallError);
-          } finally {
-            clearTimeout(timeout);
-          }
+        const interrupted = Promise.withResolvers<Error>();
+        const stopped = new Error("test finished during a nested database call");
+        const nested: Promise<unknown>[] = [];
+        const operation = ctx.db[outer](async () => {
+          const result = ctx.db[inner]((q) => q.values(sql`select 1`)).then(
+            () => undefined,
+            (error: unknown) => error,
+          );
+          nested.push(result);
+          // Teardown can release the outer queue slot even if the nested guard regresses.
+          const error = await Promise.race([result, interrupted.promise]);
+          if (error === stopped) throw stopped;
+          expect(error).toBeInstanceOf(NestedDbCallError);
         });
+        const settled = Promise.allSettled([operation]);
+        onTestFinished(async () => {
+          interrupted.resolve(stopped);
+          await settled;
+          await Promise.allSettled(nested);
+        });
+        await operation;
       }
     }
     expect(await ctx.db.query((q) => q.values(sql`select 2`))).toEqual([[2]]);
