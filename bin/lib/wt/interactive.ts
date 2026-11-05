@@ -5,6 +5,7 @@ import { run } from "./proc.ts";
 import { readRegistry } from "./registry.ts";
 import { gitTry, type Repo } from "./repo.ts";
 import { commands as taskCommands } from "./tasks.ts";
+import { branchName } from "./validate.ts";
 import { terminal, commands as worktreeCommands } from "./worktree.ts";
 
 export type MenuAction = "setup" | "list" | "cleanup" | "tasks" | "gc";
@@ -83,18 +84,31 @@ export function branchChoices(repo: Repo, includeMain: boolean): string[] {
   const remote = gitTry(repo, ["for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/"]).stdout.split("\n");
   const localSet = new Set(local);
   const out: string[] = [];
-  // A branch name is agent-written; one with a control character (C0, DEL or C1) never reaches the terminal.
-  const plain = (b: string) => !/\p{Cc}/u.test(b);
-  for (const b of local) if (b !== "" && !skip.has(b) && plain(b)) out.push(b);
+  // A branch name is agent-written. One with a control character (C0, DEL or C1) never reaches the terminal, and
+  // one that bin/wt would refuse (a leading dash, for instance) never reaches the preview's git call. `main` and
+  // `origin/main` stay when the wizard offers them as sources.
+  const plain = (b: string, name: string) => {
+    if (/\p{Cc}/u.test(b)) return false;
+    if (b === "main" || b === "origin/main") return true;
+    try {
+      branchName(name);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  for (const b of local) if (b !== "" && !skip.has(b) && plain(b, b)) out.push(b);
   for (const b of remote) {
-    if (b === "" || b === "origin" || b === "origin/HEAD" || skip.has(b) || !plain(b)) continue;
+    if (b === "" || b === "origin" || b === "origin/HEAD" || skip.has(b) || !plain(b, b.slice("origin/".length)))
+      continue;
     if (localSet.has(b.slice("origin/".length))) continue;
     out.push(b);
   }
   return out;
 }
 
-const PREVIEW = "git -c core.fsmonitor=false -c submodule.recurse=false log --oneline --graph --decorate -n 40 {} --";
+export const PREVIEW =
+  "git -c core.fsmonitor=false -c submodule.recurse=false log --oneline --graph --decorate -n 40 --end-of-options {} --";
 
 /**
  * Asks for a branch (pick an existing one or type a new name) and, for a new name, a source ref.

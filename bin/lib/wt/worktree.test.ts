@@ -13,10 +13,11 @@ import {
 import { join } from "node:path";
 import { test } from "node:test";
 import { PORT_MAX, PORT_MIN, readRegistry, withRegistry } from "./registry.ts";
-import { type Repo, resolveRepo } from "./repo.ts";
+import { gitTry, type Repo, resolveRepo } from "./repo.ts";
 import {
   commitFile,
   type Fixture,
+  fakeCalls,
   gitIn,
   installFake,
   listenOn,
@@ -32,6 +33,7 @@ import {
   cleanup,
   formatGc,
   formatList,
+  gc,
   list,
   safetyGuard,
   setBeforeWorktreeAddHookForTests,
@@ -755,4 +757,56 @@ test("an anchored pattern copies the root file and not one in a subfolder", () =
     const { result: r } = setupCapturing(repo, "feat-anchored");
     assert.equal(readFileSync(join(r.path, "local.json"), "utf8"), "root\n");
     assert.equal(existsSync(join(r.path, "sub", "local.json")), false);
+  }));
+
+// ---------------------------------------------------------------------------------------------
+// Names that start with a dash never reach git or gh as options
+
+/** A worktree whose registry key and branch are `name`, a name bin/wt would refuse. */
+function dashWorktree(repo: Repo, fx: Fixture, name: string, extraCommit: boolean) {
+  const w = newWorktree(repo, "plain-one");
+  gitIn(fx.main, "update-ref", `refs/heads/${name}`, gitIn(w.path, "rev-parse", "HEAD"));
+  gitIn(w.path, "symbolic-ref", "HEAD", `refs/heads/${name}`);
+  if (extraCommit) commitFile(w.path, "own.txt", "own\n");
+  withRegistry(repo, (r) => {
+    const entry = r.worktrees["plain-one"];
+    if (entry) r.worktrees[name] = entry;
+    delete r.worktrees["plain-one"];
+  });
+  return w;
+}
+
+test("list and the guard never pass a dash-named registry branch to gh", () =>
+  scenario({}, ({ repo, fx, env }) => {
+    installFake(env, "gh", [{ stdout: '{"number":1,"state":"OPEN"}' }]);
+    dashWorktree(repo, fx, "--web", true);
+    list(repo);
+    assert.deepEqual(safetyGuard(repo, "--web"), { ok: false, failed: "unmerged" });
+    assert.deepEqual(
+      fakeCalls(env, "gh").filter((c) => c.some((a) => a.startsWith("-") && a !== "--json")),
+      [],
+    );
+  }));
+
+test("cleanup removes the worktree of a dash-named branch but never gives the name to git branch -D", () =>
+  scenario({}, ({ repo, fx }) => {
+    const w = dashWorktree(repo, fx, "--output=x", false);
+    cleanup(repo, { target: "--output=x", closeWorkspace: false, discard: false });
+    assert.equal(existsSync(w.path), false);
+    assert.equal(gitTry(repo, ["rev-parse", "--verify", "--quiet", "refs/heads/--output=x"]).code, 0, "the ref stays");
+    assert.equal(existsSync(join(fx.main, "x")), false);
+  }));
+
+test("gc reports a merged branch with a dash name and never deletes it", () =>
+  scenario({}, ({ repo, fx }) => {
+    gitIn(fx.main, "update-ref", "refs/heads/-f", gitIn(fx.main, "rev-parse", "origin/main"));
+    gitIn(fx.main, "update-ref", "refs/heads/--output=x", gitIn(fx.main, "rev-parse", "origin/main"));
+    const report = gc(repo, true);
+    for (const name of ["-f", "--output=x"]) {
+      const item = report.items.find((i) => i.kind === "merged-branch" && i.name === name);
+      assert.equal(item?.state, "kept", name);
+      assert.equal(item?.why, "invalid-name", name);
+      assert.equal(gitTry(repo, ["rev-parse", "--verify", "--quiet", `refs/heads/${name}`]).code, 0, name);
+    }
+    assert.equal(existsSync(join(fx.main, "x")), false);
   }));

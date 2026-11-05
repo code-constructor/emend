@@ -342,7 +342,7 @@ export function setup(repo: Repo, o: SetupOptions): SetupResult {
       // The branch is checked out by name: it must still be the commit that was checked.
       const head = gitTry(repo, ["rev-parse", "HEAD"], { cwd: path });
       if (head.code !== 0 || head.stdout !== sha) {
-        gitTry(repo, ["worktree", "remove", "--force", path]);
+        gitTry(repo, ["worktree", "remove", "--force", "--", path]);
         throw new WtError(
           1,
           "The branch moved while the worktree was being created, so it was removed. Nothing was created.",
@@ -402,7 +402,18 @@ function isInside(dir: string, p: string): boolean {
   return real === dir || real.startsWith(dir.endsWith(sep) ? dir : dir + sep);
 }
 
+/** True when `branch` is a name bin/wt itself could have created. Names from the registry or git output pass through this before git or gh sees them. */
+function plainBranch(branch: string): boolean {
+  try {
+    branchName(branch);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function lookupPr(repo: Repo, branch: string): { number: number; state: string } | null {
+  if (!plainBranch(branch)) return null;
   const r = run("gh", ["pr", "view", branch, "--json", "number,state"], { cwd: repo.mainRoot, timeoutMs: 15_000 });
   if (r.code !== 0) return null;
   try {
@@ -514,6 +525,7 @@ function portListening(port: number): boolean {
 }
 
 function containedInMergedPr(repo: Repo, branch: string, path: string): boolean {
+  if (!plainBranch(branch)) return false;
   const gh = run("gh", ["pr", "view", branch, "--json", "number,state,headRefOid"], {
     cwd: repo.mainRoot,
     timeoutMs: 30_000,
@@ -704,7 +716,7 @@ export function cleanup(repo: Repo, o: { target: string; closeWorkspace: boolean
     throw new WtError(1, "Not confirmed. Nothing was removed.");
   }
 
-  git(repo, ["worktree", "remove", ...(o.discard ? ["--force"] : []), entry.path]);
+  git(repo, ["worktree", "remove", ...(o.discard ? ["--force"] : []), "--", entry.path]);
   try {
     withRegistry(repo, (r) => {
       delete r.worktrees[branch];
@@ -712,7 +724,7 @@ export function cleanup(repo: Repo, o: { target: string; closeWorkspace: boolean
   } catch {
     throw new WtError(1, `The worktree was removed; run ${join(repo.mainRoot, "bin", "wt")} gc --prune.`);
   }
-  const deleted = gitTry(repo, ["branch", "-D", branch]).code === 0;
+  const deleted = plainBranch(branch) && gitTry(repo, ["branch", "-D", "--", branch]).code === 0;
   say(`Removed ${entry.path}; port ${entry.port} is free.`);
   say(deleted ? `Deleted local branch ${branch}.` : `The local branch ${branch} was not deleted.`);
   // Last: closing the workspace can end the caller's own session.
@@ -833,6 +845,12 @@ export function gc(repo: Repo, prune: boolean): GcReport {
       if (b === "" || inUse.has(b) || b.startsWith("worktree-")) continue;
       const item: GcItem = { kind: "merged-branch", name: b, state: "found" };
       items.push(item);
+      if (!plainBranch(b)) {
+        // Not a name bin/wt creates: report it, never hand it to git.
+        item.state = "kept";
+        item.why = "invalid-name";
+        continue;
+      }
       if (!prune) continue;
       beforeBranchDelete?.(b);
       // The lists above are a moment old. Under the registry lock, look again before deleting: a setup or
@@ -849,7 +867,7 @@ export function gc(repo: Repo, prune: boolean): GcReport {
           "refs/remotes/origin/main",
         ]);
         if (stillMerged.code !== 0) return "in-use";
-        return gitTry(repo, ["branch", "-D", b]).code === 0 ? "removed" : "delete-failed";
+        return gitTry(repo, ["branch", "-D", "--", b]).code === 0 ? "removed" : "delete-failed";
       });
       if (outcome === "removed") {
         item.state = "removed";

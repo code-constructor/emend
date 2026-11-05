@@ -807,3 +807,60 @@ test("HERDR_BIN_PATH is used when absolute, otherwise herdr comes from PATH", ()
       }
     }),
   ));
+
+// ---------------------------------------------------------------------------------------------
+// Values that go into herdr's argv
+
+test("notify titles with 'session' when the branch name is one bin/wt refuses", () =>
+  scenario({}, ({ env, repo }) =>
+    inHerdr(() => {
+      installFake(env, "herdr", [{ match: ["notification", "show"], stdout: "{}" }]);
+      notify(repo, "question", "--body=x");
+      const call = fakeCalls(env, "herdr")[0];
+      assert.ok(call?.[2]?.startsWith("session: "), call?.[2] ?? "");
+    }),
+  ));
+
+test("a workspace id that reads as an option is never passed to workspace close", () =>
+  scenario({}, ({ env, repo }) =>
+    inHerdr(() => {
+      const path = join(repo.worktreesDir, "feat-a");
+      installFake(env, "herdr", [
+        {
+          match: ["workspace", "list"],
+          stdout: json({
+            type: "workspace_list",
+            workspaces: [
+              { workspace_id: "--force", label: "bad", worktree: { is_linked_worktree: true, checkout_path: path } },
+            ],
+          }),
+        },
+      ]);
+      const out = captureStdout(() => closeWorkspace(repo, path, "feat-a"));
+      assert.match(out, /none was closed/);
+      assert.deepEqual(fakeCalls(env, "herdr"), [["workspace", "list"]]);
+    }),
+  ));
+
+test("spawn treats a pane id that reads as an option as a malformed reply", () =>
+  scenario({ withBin: true }, async ({ fx, env }) => {
+    writeBrief(fx.main);
+    installFake(
+      env,
+      "herdr",
+      herdrRules("wt-001-add-thing", [
+        {
+          match: ["worktree", "open"],
+          stdout: json({
+            type: "worktree_opened",
+            already_open: false,
+            workspace: { workspace_id: "w9", label: "task-ws" },
+            root_pane: { pane_id: "--cwd" },
+          }),
+        },
+      ]),
+    );
+    const r = await runWt(join(fx.main, "bin", "wt"), spawnArgs(fx.main), { cwd: fx.main, env: { HERDR_ENV: "1" } });
+    assert.equal(r.code, 1);
+    assert.equal(fakeCalls(env, "herdr").filter((c) => c[1] === "start").length, 0);
+  }));

@@ -5,7 +5,7 @@ import { run } from "./proc.ts";
 import { allocatePort, busyPorts, readRegistry } from "./registry.ts";
 import { fetchOrigin, gitTry, listGitWorktrees, type Repo, refExists } from "./repo.ts";
 import { releaseReservation, reserveTask } from "./tasks.ts";
-import { slug as checkSlug, type Exit, parseFlags, textArg, WtError } from "./validate.ts";
+import { branchName, slug as checkSlug, type Exit, parseFlags, textArg, WtError } from "./validate.ts";
 import { type SetupResult, setup, worktreeDirName } from "./worktree.ts";
 
 // ---------------------------------------------------------------------------------------------
@@ -26,6 +26,14 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 
 function str(v: unknown): string | null {
   return typeof v === "string" && v !== "" ? v : null;
+}
+
+const HERDR_ID_RE = /^[A-Za-z0-9][A-Za-z0-9:_-]*$/;
+
+/** An id from a herdr reply that goes into argv: it must not be readable as an option. Null when it is not one. */
+function herdrId(v: unknown): string | null {
+  const s = str(v);
+  return s !== null && HERDR_ID_RE.test(s) ? s : null;
 }
 
 function first(...vals: unknown[]): string | null {
@@ -213,6 +221,15 @@ function isNotifyKind(s: string): s is NotifyKind {
   return Object.hasOwn(NOTIFY_TEXT, s);
 }
 
+function plainName(branch: string): boolean {
+  try {
+    branchName(branch);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Shows a herdr notification titled with the branch. Outside herdr (no HERDR_ENV=1, no herdr binary) and
  * when herdr refuses, it does nothing: a notification is a courtesy, never a failure. `branch` defaults to the
@@ -221,7 +238,9 @@ function isNotifyKind(s: string): s is NotifyKind {
 export function notify(repo: Repo, kind: NotifyKind, branch: string | null = repo.callerBranch): void {
   if (process.env.HERDR_ENV !== "1") return;
   const [title, body] = NOTIFY_TEXT[kind];
-  run(herdrBin(), ["notification", "show", `${tidy(branch ?? "session", 80)}: ${title}`, "--body", body], {
+  // The title is an argument of herdr: a branch name that bin/wt would refuse (a leading dash) is not used.
+  const name = branch !== null && (branch === "main" || plainName(branch)) ? branch : "session";
+  run(herdrBin(), ["notification", "show", `${tidy(name, 80)}: ${title}`, "--body", body], {
     cwd: "/",
     timeoutMs: 10_000,
   });
@@ -266,7 +285,7 @@ export function closeWorkspace(
   for (const w of workspaces) {
     if (!isRecord(w) || !isRecord(w.worktree)) continue;
     const checkout = str(w.worktree.checkout_path);
-    const id = first(w.workspace_id, w.id);
+    const id = herdrId(w.workspace_id) ?? herdrId(w.id);
     if (
       w.worktree.is_linked_worktree === true &&
       checkout !== null &&
@@ -582,9 +601,9 @@ export async function spawn(repo: Repo, o: SpawnOptions): Promise<SpawnResult> {
     );
     const ws = opened.workspace;
     const root = opened.root_pane;
-    const id = isRecord(ws) ? str(ws.workspace_id) : null;
+    const id = isRecord(ws) ? herdrId(ws.workspace_id) : null;
     const label = isRecord(ws) ? str(ws.label) : null;
-    const paneId = isRecord(root) ? str(root.pane_id) : null;
+    const paneId = isRecord(root) ? herdrId(root.pane_id) : null;
     if (typeof opened.already_open !== "boolean" || id === null || label === null || paneId === null) {
       throw new WtError(1, "Invalid herdr worktree response.");
     }

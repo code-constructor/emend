@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { existsSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
-import { branchChoices, cleanupPicker, menu, setupWizard } from "./interactive.ts";
+import { branchChoices, cleanupPicker, menu, PREVIEW, setupWizard } from "./interactive.ts";
 import { type Repo, resolveRepo } from "./repo.ts";
 import {
   type Fixture,
@@ -13,6 +16,10 @@ import {
   type TestEnv,
 } from "./test-support.ts";
 import { setup, terminal } from "./worktree.ts";
+
+function runShell(cwd: string, command: string): number | null {
+  return spawnSync("sh", ["-c", command], { cwd, encoding: "utf8" }).status;
+}
 
 async function scenario(
   o: { tty?: boolean; withBin?: boolean },
@@ -113,4 +120,27 @@ test("no TTY: bin/wt without arguments lists and never calls fzf", () =>
     assert.equal(r.code, 0, r.stderr);
     assert.match(r.stdout, /No worktrees\./);
     assert.equal(fakeCalls(env, "fzf").length, 0);
+  }));
+
+test("a branch named with a leading dash is not offered and cannot reach the preview's git call", () =>
+  scenario({}, ({ repo, fx, env }) => {
+    for (const name of ["--output=x", "-f"]) {
+      gitIn(fx.main, "update-ref", `refs/heads/${name}`, "HEAD");
+      gitIn(fx.main, "update-ref", `refs/remotes/origin/${name}`, "HEAD");
+    }
+    gitIn(fx.main, "branch", "fine-one");
+    const choices = branchChoices(repo, true);
+    assert.deepEqual(
+      choices.filter((c) => c.includes("-f") || c.includes("--output")),
+      [],
+    );
+    assert.ok(choices.includes("fine-one") && choices.includes("main"));
+    // Control: without --end-of-options the same command writes the file, so this test would catch a regression.
+    runShell(fx.main, PREVIEW.replace(" --end-of-options", "").replace("{}", "'--output=x'"));
+    assert.equal(existsSync(join(fx.main, "x")), true, "the control wrote a file");
+    rmSync(join(fx.main, "x"));
+    // Even if such a name did reach the preview, --end-of-options makes git read it as a revision.
+    for (const name of ["--output=x", "-f"]) runShell(fx.main, PREVIEW.replace("{}", `'${name}'`));
+    assert.equal(existsSync(join(fx.main, "x")), false, "no file was written");
+    assert.equal(existsSync(join(env.root, "x")), false);
   }));
