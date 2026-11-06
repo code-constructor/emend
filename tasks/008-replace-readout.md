@@ -12,8 +12,7 @@ done_on:
 Plan tasks 4.1–4.11 (slice 4). A readout page becomes an emend review without a diff: a docs-only
 review that usually nobody waits on. Prepare now, and switch only after task 007 passes. The plan's
 slice intro gives the order: 4.1 → 4.2 first; 4.3 and 4.5 share their contract work; 4.4 follows
-4.3; 4.6 builds on 1.12b; 4.7 and 4.8 any time; 4.9 and 4.11 after task 007; 4.10 runs inside
-task 007.
+4.3; 4.6 builds on 1.12b; 4.7 and 4.8 any time; 4.11 after task 007; 4.10 runs inside task 007.
 
 ## Steps
 
@@ -26,9 +25,8 @@ task 007.
 - [x] 4.5: agent commands `emend ls` and `emend status`. The question whether they join the
       sandbox exemptions fell away on 2026-11-05: the setup docs no longer list exemptions.
 - [ ] 4.6: built-in features for HTML docs. Waits for your go on plan task 1.12b.
-- [ ] 4.7: any text file as a doc, shown as source.
+- [x] 4.7: any text file as a doc, shown as source.
 - [ ] 4.8: larger size limits, measured first.
-- [ ] 4.9: the hosted service and its cost. Discussion, after task 007.
 - [ ] 4.10: sign-in per browser on the phone. You check it during task 007.
 - [ ] 4.11: the switch from readout. You switched on 2026-11-04, ahead of task 007 and 1.12b, and
       `emend-publish` now has readout's trigger. Left for you: republishing the readout pages you
@@ -54,3 +52,4 @@ You have switched from readout (plan task 4.11), or dropped the switch.
 - 2026-11-04: You retired readout and switched to emend alone, ahead of task 007. Your phone checks
   of 4.3 and 4.4 passed. Your call: hunk-review-skill stays publisher-neutral, and the agent's
   global config decides where a writeup is published.
+- 2026-11-06: 4.7 landed as 9d5da1b (task 017).
