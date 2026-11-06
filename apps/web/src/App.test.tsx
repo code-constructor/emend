@@ -318,7 +318,8 @@ test("revision picker keeps the visible opening tab even when no tab was in the 
   mount(`/r/${id}?rev=1`);
   await screen.findByRole("heading", { name: "old.md" });
   await chooseRevision(2);
-  await screen.findByRole("heading", { name: "next.md" });
+  await screen.findByText("Document not found. Showing all docs.");
+  expect(screen.getByRole("link", { name: "next.md next.md" })).toBeTruthy();
   expect(
     screen
       .getByRole(width < 768 ? "link" : "tab", { name: /^Docs(?: \d+)?$/ })
@@ -1454,6 +1455,7 @@ test.each([false, true])(
       await waitFor(() =>
         expect(scroll.mock.instances.some((node) => (node as HTMLElement).id === "html-doc-seed.html")).toBe(true),
       );
+      fireEvent.click(screen.getByRole("button", { name: "Comments (1)" }));
     }
     await waitFor(() => expect(document.getElementById(`thread-${id}`)).not.toBeNull());
   },
@@ -1475,9 +1477,12 @@ test("a consumed HTML navigation does not redirect or refocus when placement cha
   expect(document.activeElement).toBe(instructions);
 });
 
-test.each(["thread", "draft", "reply", "comment-link"])(
-  "HTML %s navigation opens docs and waits for the frame before scrolling",
-  async (kind) => {
+test.each(
+  [390, 1280].flatMap((pixels) => ["thread", "draft", "reply", "comment-link"].map((kind) => ({ pixels, kind }))),
+)(
+  "HTML $kind navigation opens docs and waits for the frame before scrolling at $pixels px",
+  async ({ kind, pixels }) => {
+    width = pixels;
     const target: Target = { kind: "html-span", path: "seed.html", quote: "seed", prefix: "", suffix: "" };
     const thread: ThreadView = {
       id,
@@ -1514,9 +1519,10 @@ test.each(["thread", "draft", "reply", "comment-link"])(
     });
     if (kind !== "draft") expect(post).toHaveBeenCalledWith({ type: "emend:scroll", threadId: id }, "*");
     if (kind === "draft" || kind === "reply")
-      expect((screen.getByLabelText(kind === "reply" ? "Reply" : "Comment") as HTMLTextAreaElement).value).toBe(
-        "HTML draft",
-      );
+      expect(
+        ((await screen.findByRole("textbox", { name: kind === "reply" ? "Reply" : "Comment" })) as HTMLTextAreaElement)
+          .value,
+      ).toBe("HTML draft");
   },
 );
 
@@ -2357,7 +2363,7 @@ test("one list timer refreshes relative times and is cleared on unmount", async 
 test("desktop frame has wordmark and Devices links, expands its rail and persists both choices", async () => {
   withInbox([item, { ...secondItem, movedTo: "https://hub.example/r/new" }]);
   const first = mount(`/r/${id}?tab=docs`);
-  await screen.findByText("plan.md");
+  await screen.findByRole("heading", { name: "plan.md" });
   expect(screen.getByRole("link", { name: "emend" }).getAttribute("href")).toBe("/");
   expect(screen.getByRole("link", { name: "Devices" }).getAttribute("href")).toBe("/devices");
   fireEvent.click(screen.getByRole("button", { name: "Collapse inbox" }));
