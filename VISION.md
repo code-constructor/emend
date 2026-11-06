@@ -94,8 +94,9 @@ since I looked, and what is its PR state?
   tokens (a phone gets review rights only), and capability flags between versions.
 - **The browser comes first,** installable as a web app on the desktop and the phone. A desktop
   app can follow later.
-- **The same software covers every step:** local on one machine, machines attached over a tailnet,
-  and later a paid sync service, a hosted hub, for people who don't want to run a tailnet.
+- **The same software covers every step:** local on one machine, and machines attached over a
+  tailnet. The goal is the most comfortable solution, and at some point that includes a commercial
+  product. It is not there yet.
 - Content is stored securely, and the server can read it, so that it renders well. There is no
   end-to-end encryption.
 - A device that is fully offline is out of scope.
