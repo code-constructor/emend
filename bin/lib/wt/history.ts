@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { CommandTable } from "./command.ts";
 import { withRegistry } from "./registry.ts";
-import { assertNoGitlinks, fetchOrigin, git, gitTry, listGitWorktrees, type Repo } from "./repo.ts";
+import { assertNoGitlinks, fetchOrigin, git, gitBytes, gitTry, listGitWorktrees, type Repo } from "./repo.ts";
 import { oneLine as checkOneLine, commitSha, parseFlags, refName, textArg, WtError } from "./validate.ts";
 
 export type Onto = "origin/main" | "main";
@@ -103,12 +103,12 @@ function isAncestor(repo: Repo, top: string, ancestor: string, of: string): bool
 // restack, rebase
 
 function unmergedPaths(repo: Repo, top: string): string[] {
-  const out = git(
-    repo,
-    ["diff", "--name-only", "--diff-filter=U", "-z", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all"],
-    { cwd: top },
-  );
-  return out.split("\0").filter((p) => p !== "");
+  const out = git(repo, ["ls-files", "--unmerged", "-z"], { cwd: top });
+  const paths = new Set<string>();
+  for (const entry of out.split("\0")) {
+    if (entry !== "") paths.add(entry.slice(entry.indexOf("\t") + 1));
+  }
+  return [...paths];
 }
 
 /**
@@ -133,45 +133,59 @@ function replay(repo: Repo, top: string, old: string, target: string, backup: st
     throw new WtError(1, `The branch and its target share no history. The branch is unchanged. backup: ${backup}`);
   }
 
-  mkdirSync(join(repo.commonDir, "emend-wt"), { recursive: true, mode: 0o700 });
-  const patch = join(repo.commonDir, "emend-wt", `restack-${process.pid}.patch`);
-  try {
-    git(
-      repo,
-      [
-        "diff",
-        "--binary",
-        "--full-index",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--ignore-submodules=all",
-        `--output=${patch}`,
-        mb.stdout,
-        old,
-      ],
-      { cwd: top },
+  // Use plumbing so the user's and the repo's diff settings do not shape the patch.
+  // The pins cover what plumbing still reads.
+  const patch = gitBytes(
+    repo,
+    [
+      "-c",
+      "diff.suppressBlankEmpty=false",
+      "diff-tree",
+      "-p",
+      "--binary",
+      "--no-color",
+      "--unified=3",
+      "--src-prefix=a/",
+      "--dst-prefix=b/",
+      "--find-renames",
+      "-l1000",
+      "--full-index",
+      "--no-ext-diff",
+      "--no-textconv",
+      "--ignore-submodules=all",
+      mb.stdout,
+      old,
+    ],
+    { cwd: top },
+  );
+  if (patch.code !== 0) {
+    throw new WtError(
+      1,
+      `The change could not be read: ${oneLine(patch.stderr)}. The branch is unchanged. backup: ${backup}`,
     );
-    hg(repo, top, ["reset", "--hard", "--quiet", target]);
-    const hasChange =
-      gitTry(repo, ["diff", "--quiet", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all", mb.stdout, old], {
-        cwd: top,
-      }).code !== 0;
-    if (!hasChange) return { conflicts: [] };
-    const applied = hgTry(repo, top, ["apply", "--3way", "--whitespace=nowarn", patch]);
-    const conflicts = unmergedPaths(repo, top);
-    if (applied.code !== 0 && conflicts.length === 0) {
-      // Nothing usable was written. Put the branch back exactly as it was.
-      hg(repo, top, ["reset", "--hard", "--quiet", old]);
-      throw new WtError(
-        1,
-        `The change could not be replayed: ${oneLine(applied.stderr)}. The branch is unchanged. backup: ${backup}`,
-      );
-    }
-    hg(repo, top, ["reset", "--quiet"]);
-    return { conflicts };
-  } finally {
-    rmSync(patch, { force: true });
   }
+  hg(repo, top, ["reset", "--hard", "--quiet", target]);
+  const hasChange =
+    gitTry(repo, ["diff", "--quiet", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all", mb.stdout, old], {
+      cwd: top,
+    }).code !== 0;
+  if (!hasChange) return { conflicts: [] };
+  const applied = gitBytes(
+    repo,
+    [...NO_HOOKS, "-c", "apply.ignoreWhitespace=no", "apply", "--3way", "--whitespace=nowarn"],
+    { cwd: top, input: patch.stdout },
+  );
+  const conflicts = unmergedPaths(repo, top);
+  if (applied.code !== 0 && conflicts.length === 0) {
+    // Nothing usable was written. Put the branch back exactly as it was.
+    hg(repo, top, ["reset", "--hard", "--quiet", old]);
+    throw new WtError(
+      1,
+      `The change could not be replayed: ${oneLine(applied.stderr)}. The branch is unchanged. backup: ${backup}`,
+    );
+  }
+  hg(repo, top, ["reset", "--quiet"]);
+  return { conflicts };
 }
 
 export function rebase(repo: Repo, top: string, onto: Onto): RebaseResult {
@@ -184,7 +198,8 @@ export function rebase(repo: Repo, top: string, onto: Onto): RebaseResult {
   if (isAncestor(repo, top, target, old)) return { result: "up-to-date", conflicts: [], backups: [] };
 
   const backup = writeBackup(repo, branch, old);
-  const r = hgTry(repo, top, ["rebase", "--no-autostash", "--no-update-refs", target]);
+  // Use the merge backend so rebase.backend=apply and its apply settings cannot turn a conflict into a silent change.
+  const r = hgTry(repo, top, ["rebase", "--merge", "--no-autostash", "--no-update-refs", target]);
   if (r.code === 0) return { result: "rebased", conflicts: [], backups: [backup] };
 
   // Only a content conflict leads to a restack. Read the index before the abort removes the evidence.

@@ -138,6 +138,106 @@ test("push sets upstream; lease adds force-if-includes", () =>
     assert.equal(gitIn(ctx.fx.origin, "rev-parse", BRANCH), gitIn(ctx.fx.main, "rev-parse", "HEAD"));
   }));
 
+test("a lease push names the local branch as its source", () =>
+  scenario((ctx) => {
+    const old = commitFile(ctx.fx.main, "a.txt", "a\n");
+    push(ctx.repo, ctx.fx.main, { forceWithLease: false });
+    gitIn(ctx.fx.main, "commit", "--quiet", "--amend", "-m", "rewritten");
+    const amended = gitIn(ctx.fx.main, "rev-parse", "HEAD");
+    const hook = join(ctx.fx.main, ".git", "hooks", "pre-push");
+    mkdirSync(join(ctx.fx.main, ".git", "hooks"), { recursive: true });
+    writeFileSync(
+      hook,
+      "#!/bin/sh\nwhile IFS= read -r line; do\n  printf '%s\\n' \"$line\"\ndone >> ../pre-push-input\n",
+    );
+    chmodSync(hook, 0o755);
+
+    push(ctx.repo, ctx.fx.main, { forceWithLease: true });
+    assert.equal(
+      readFileSync(join(ctx.env.root, "pre-push-input"), "utf8"),
+      `refs/heads/${BRANCH} ${amended} refs/heads/${BRANCH} ${old}\n`,
+    );
+    assert.equal(gitIn(ctx.fx.origin, "rev-parse", BRANCH), amended);
+  }));
+
+test("a lease push refuses a branch that moved after HEAD was resolved", () =>
+  scenario((ctx) => {
+    const pushed = commitFile(ctx.fx.main, "a.txt", "a\n");
+    push(ctx.repo, ctx.fx.main, { forceWithLease: false });
+    gitIn(ctx.fx.main, "commit", "--quiet", "--amend", "-m", "rewritten");
+
+    assert.throws(
+      () =>
+        push(ctx.repo, ctx.fx.main, {
+          forceWithLease: true,
+          beforePush: () => commitFile(ctx.fx.main, "late.txt", "late\n"),
+        }),
+      (e: unknown) => e instanceof WtError && e.code === 1 && /branch moved/.test(e.message),
+    );
+    assert.equal(gitIn(ctx.fx.origin, "rev-parse", BRANCH), pushed);
+  }));
+
+test("a lease push refuses a branch ref that holds a tag object", () =>
+  scenario((ctx) => {
+    const pushed = commitFile(ctx.fx.main, "a.txt", "a\n");
+    push(ctx.repo, ctx.fx.main, { forceWithLease: false });
+    gitIn(ctx.fx.main, "commit", "--quiet", "--amend", "-m", "rewritten");
+    gitIn(ctx.fx.main, "tag", "-a", "-m", "t", "t1", "HEAD");
+    const tagId = gitIn(ctx.fx.main, "rev-parse", "t1");
+
+    assert.throws(
+      () =>
+        push(ctx.repo, ctx.fx.main, {
+          forceWithLease: true,
+          beforePush: () => {
+            const refs = join(ctx.fx.main, ".git", "refs", "heads");
+            mkdirSync(refs, { recursive: true });
+            writeFileSync(join(refs, BRANCH), `${tagId}\n`);
+          },
+        }),
+      (e: unknown) => e instanceof WtError && e.code === 1 && /branch moved/.test(e.message),
+    );
+    assert.equal(gitIn(ctx.fx.origin, "rev-parse", BRANCH), pushed);
+  }));
+
+test("a lease push still refuses a remote change that was fetched but never integrated", () =>
+  scenario((ctx) => {
+    commitFile(ctx.fx.main, "a.txt", "a\n");
+    push(ctx.repo, ctx.fx.main, { forceWithLease: false });
+    const other = join(ctx.env.root, "other");
+    gitIn(ctx.env.root, "clone", "--quiet", ctx.fx.origin, other);
+    gitIn(other, "checkout", "--quiet", BRANCH);
+    const remote = commitFile(other, "remote.txt", "remote\n");
+    gitIn(other, "push", "--quiet", "origin", BRANCH);
+    gitIn(ctx.fx.main, "fetch", "--quiet", "origin");
+    gitIn(ctx.fx.main, "commit", "--quiet", "--amend", "-m", "rewritten");
+
+    expectCode(() => push(ctx.repo, ctx.fx.main, { forceWithLease: true }), 1);
+    assert.equal(gitIn(ctx.fx.origin, "rev-parse", BRANCH), remote);
+  }));
+
+test("a rejected push reports a plain error under a colored git config", () =>
+  scenario((ctx) => {
+    for (const key of ["color.ui", "color.push", "color.transport", "color.advice"]) {
+      gitIn(ctx.fx.main, "config", key, "always");
+    }
+    commitFile(ctx.fx.main, "a.txt", "a\n");
+    push(ctx.repo, ctx.fx.main, { forceWithLease: false });
+    gitIn(ctx.fx.main, "commit", "--quiet", "--amend", "-m", "rewritten");
+
+    assert.throws(
+      () => push(ctx.repo, ctx.fx.main, { forceWithLease: false }),
+      (e: unknown) => {
+        assert.ok(e instanceof WtError);
+        assert.equal(e.code, 1);
+        assert.ok(e.message.startsWith("git push failed: "));
+        assert.ok(!e.message.includes("\x1b"), "push failure must not contain ANSI escape codes");
+        assert.ok(e.message.slice("git push failed: ".length).trim().length > 0);
+        return true;
+      },
+    );
+  }));
+
 test("push refuses main and a detached HEAD with exit 2", () =>
   scenario(
     (ctx) => {
@@ -188,7 +288,26 @@ test("push sends exactly the commit it resolved, even when a commit lands during
     assert.equal(gitIn(ctx.fx.origin, "rev-parse", `refs/heads/${BRANCH}`), checked);
   }));
 
-test("push argv is the checked sha with a full target ref and --no-follow-tags", () => {
+test("a lease push sends exactly the commit it resolved, even when a commit lands during the push", () =>
+  scenario((ctx) => {
+    commitFile(ctx.fx.main, "a.txt", "a\n");
+    push(ctx.repo, ctx.fx.main, { forceWithLease: false });
+    gitIn(ctx.fx.main, "commit", "--quiet", "--amend", "-m", "rewritten");
+    const amended = gitIn(ctx.fx.main, "rev-parse", "HEAD");
+    const hook = join(ctx.fx.main, ".git", "hooks", "pre-push");
+    mkdirSync(join(ctx.fx.main, ".git", "hooks"), { recursive: true });
+    writeFileSync(
+      hook,
+      "#!/bin/sh\nunset GIT_DIR GIT_INDEX_FILE\necho late > late.txt\ngit add late.txt\ngit commit --quiet -m late\n",
+    );
+    chmodSync(hook, 0o755);
+
+    push(ctx.repo, ctx.fx.main, { forceWithLease: true });
+    assert.notEqual(gitIn(ctx.fx.main, "rev-parse", "HEAD"), amended, "a later commit exists locally");
+    assert.equal(gitIn(ctx.fx.origin, "rev-parse", `refs/heads/${BRANCH}`), amended);
+  }));
+
+test("push argv sends the checked sha; a lease push names the local branch", () => {
   const sha = "d".repeat(40);
   const spec = `${sha}:refs/heads/${BRANCH}`;
   assert.deepEqual(pushArgs(sha, BRANCH, false), ["push", "-u", "--no-follow-tags", "origin", spec]);
@@ -199,7 +318,7 @@ test("push argv is the checked sha with a full target ref and --no-follow-tags",
     "--force-with-lease",
     "--force-if-includes",
     "origin",
-    spec,
+    `refs/heads/${BRANCH}:refs/heads/${BRANCH}`,
   ]);
 });
 
@@ -518,6 +637,40 @@ test("pr merge still reports MERGED when the remote branch cannot be deleted", (
       process.stderr.write = write;
     }
     assert.equal(lines.filter((l) => l.startsWith("remote branch kept: ")).length, 1);
+    assert.ok(remoteHas(ctx));
+  }));
+
+test("pr merge reports a plain deletion failure under a colored git config", () =>
+  mscenario((ctx) => {
+    for (const key of ["color.ui", "color.push", "color.transport", "color.advice"]) {
+      gitIn(ctx.fx.main, "config", key, "always");
+    }
+    gitIn(ctx.fx.main, "push", "--quiet", "origin", `${headSha}:refs/heads/${BRANCH}`);
+    gitIn(ctx.fx.origin, "config", "receive.denyDeletes", "true");
+    installFake(
+      ctx.env,
+      "gh",
+      mergeRules({}, [
+        { match: ["pr", "merge", "7"], stdout: "merged\n" },
+        { match: READ_BACK_ARGS, stdout: MERGED_STATE },
+      ]),
+    );
+    const lines: string[] = [];
+    const write = process.stderr.write;
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      lines.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      assert.equal(prMerge(ctx.repo, MERGE_ARGS), `MERGED ${MERGE_SHA}`);
+    } finally {
+      process.stderr.write = write;
+    }
+    const kept = lines.filter((l) => l.startsWith("remote branch kept: "));
+    assert.equal(kept.length, 1);
+    const message = kept[0] as string;
+    assert.ok(!message.includes("\x1b"), "deletion failure must not contain ANSI escape codes");
+    assert.match(message, /failed to push|deletion prohibited|denying/);
     assert.ok(remoteHas(ctx));
   }));
 

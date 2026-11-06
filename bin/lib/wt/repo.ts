@@ -1,6 +1,6 @@
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import { type RunResult, run } from "./proc.ts";
+import { type RunBytesResult, type RunResult, run, runBytes } from "./proc.ts";
 import { WtError } from "./validate.ts";
 
 export interface Repo {
@@ -19,6 +19,7 @@ export interface Repo {
 /**
  * Settings on every git call: no filesystem monitor hook, and no work in submodules. The repository under
  * review is agent-written, so nothing configured there may run.
+ * Output bin/wt parses or applies never carries color from the user's config.
  */
 export const GIT_BASE = [
   "-c",
@@ -34,6 +35,28 @@ export const GIT_BASE = [
   // a configured diff.submodule=diff would run a child diff inside an agent-written nested repository
   "-c",
   "diff.submodule=short",
+  "-c",
+  "color.ui=never",
+  "-c",
+  "color.advice=never",
+  "-c",
+  "color.branch=never",
+  "-c",
+  "color.diff=never",
+  "-c",
+  "color.grep=never",
+  "-c",
+  "color.interactive=never",
+  "-c",
+  "color.push=never",
+  "-c",
+  "color.remote=never",
+  "-c",
+  "color.showBranch=never",
+  "-c",
+  "color.status=never",
+  "-c",
+  "color.transport=never",
 ];
 
 function rawGit(args: string[], cwd: string, input?: string, timeoutMs?: number): RunResult {
@@ -140,6 +163,11 @@ export function git(repo: Repo, args: string[], opts: { cwd?: string; input?: st
 export function gitTry(repo: Repo, args: string[], opts: { cwd?: string; input?: string } = {}): RunResult {
   const r = rawGit(args, opts.cwd ?? repo.mainRoot, opts.input);
   return { ...r, stdout: r.stdout.replace(/\n$/, "") };
+}
+
+/** Runs git with byte input and output, returning failures without throwing. */
+export function gitBytes(repo: Repo, args: string[], opts: { cwd?: string; input?: Buffer } = {}): RunBytesResult {
+  return runBytes("git", [...GIT_BASE, ...args], { cwd: opts.cwd ?? repo.mainRoot, input: opts.input });
 }
 
 const GITLINK_MESSAGE = "A gitlink (submodule) entry is in HEAD or the index; bin/wt refuses it.";

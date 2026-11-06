@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { changeDigest, commands, conflictLines, land, rebase, restack, syncMain } from "./history.ts";
@@ -119,6 +119,305 @@ test("conflict restacks with no operation in progress", () =>
     assert.equal(readFileSync(join(wt, "extra.txt"), "utf8"), "extra\n");
     const backups = gitIn(wt, "for-each-ref", "--format=%(refname) %(objectname)", "refs/wt-backup/feat-a/");
     assert.match(backups, new RegExp(`^refs/wt-backup/feat-a/\\d{8}T\\d{6}Z ${oldTip}$`));
+  }));
+
+test("a restack writes nothing through a symlinked restack folder", () =>
+  scenario(({ env, fx, repo }) => {
+    commitFile(fx.main, "c.txt", "one\n");
+    gitIn(fx.main, "push", "--quiet", "origin", "main");
+    const wt = worktree(repo, "feat-a");
+    commitFile(wt, "c.txt", "branch\n");
+    advanceOrigin(env, fx, "c.txt", "main\n");
+    const elsewhere = join(env.root, "elsewhere");
+    mkdirSync(elsewhere);
+    const dir = join(fx.main, ".git", "emend-wt");
+    rmSync(dir, { recursive: true, force: true });
+    symlinkSync(elsewhere, dir);
+
+    assert.deepEqual(restack(resolveRepo(wt), wt, "origin/main").conflicts, ["c.txt"]);
+    assert.equal(gitIn(wt, "rev-parse", "HEAD"), gitIn(wt, "rev-parse", "origin/main"));
+    assert.deepEqual(readdirSync(elsewhere), []);
+    idle(wt);
+  }));
+
+test("a restack ignores a planted file at the old patch path", () =>
+  scenario(({ env, fx, repo }) => {
+    const wt = worktree(repo, "feat-a");
+    commitFile(wt, "a.txt", "a\n");
+    advanceOrigin(env, fx, "other.txt", "other\n");
+    const dir = join(fx.main, ".git", "emend-wt");
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const target = join(env.root, "kept.txt");
+    writeFileSync(target, "keep\n");
+    symlinkSync(target, join(dir, `restack-${process.pid}.patch`));
+
+    assert.deepEqual(restack(resolveRepo(wt), wt, "origin/main").conflicts, []);
+    assert.equal(readFileSync(target, "utf8"), "keep\n");
+    idle(wt);
+  }));
+
+test("a restack keeps non-UTF-8 text and binary files byte for byte", () =>
+  scenario(({ env, fx, repo }) => {
+    writeFileSync(join(fx.main, "latin1.txt"), Buffer.from("caf\xe9\nna\xefve\n", "latin1"));
+    gitIn(fx.main, "add", "latin1.txt");
+    gitIn(fx.main, "commit", "--quiet", "-m", "add latin1 text");
+    gitIn(fx.main, "push", "--quiet", "origin", "main");
+    const wt = worktree(repo, "feat-a");
+    const latin1 = Buffer.from("caf\xe9 changed\nna\xefve\n", "latin1");
+    const binary = Buffer.from([0, 1, 2, 255, 254, 0, 10, 13, 200]);
+    writeFileSync(join(wt, "latin1.txt"), latin1);
+    writeFileSync(join(wt, "blob.bin"), binary);
+    gitIn(wt, "add", "latin1.txt", "blob.bin");
+    gitIn(wt, "commit", "--quiet", "-m", "change text and add binary");
+    advanceOrigin(env, fx, "other.txt", "other\n");
+
+    assert.deepEqual(restack(resolveRepo(wt), wt, "origin/main").conflicts, []);
+    assert.ok(readFileSync(join(wt, "latin1.txt")).equals(latin1));
+    assert.ok(readFileSync(join(wt, "blob.bin")).equals(binary));
+    idle(wt);
+  }));
+
+test("a failed apply after HEAD moved names the backup and restores the branch", () =>
+  scenario(({ env, fx, repo }) => {
+    commitFile(fx.main, "c.txt", "base\n");
+    gitIn(fx.main, "push", "--quiet", "origin", "main");
+    const wt = worktree(repo, "feat-a");
+    gitIn(wt, "rm", "c.txt");
+    gitIn(wt, "commit", "--quiet", "-m", "delete c");
+    const oldTip = gitIn(wt, "rev-parse", "HEAD");
+    advanceOrigin(env, fx, "c.txt", "main changed\n");
+
+    assert.throws(
+      () => restack(resolveRepo(wt), wt, "origin/main"),
+      (e: unknown) =>
+        e instanceof WtError &&
+        e.code === 1 &&
+        /could not be replayed/.test(e.message) &&
+        /backup: refs\/wt-backup\/feat-a\//.test(e.message),
+    );
+    assert.equal(gitIn(wt, "rev-parse", "HEAD"), oldTip);
+    idle(wt);
+  }));
+
+test("a restack that cannot read the change leaves the branch unchanged", () =>
+  scenario(({ env, fx, repo }) => {
+    commitFile(fx.main, "shared.txt", "a unique base blob for this replay\n");
+    gitIn(fx.main, "push", "--quiet", "origin", "main");
+    const oid = gitIn(fx.main, "rev-parse", "HEAD:shared.txt");
+    const wt = worktree(repo, "feat-a");
+    const oldTip = commitFile(wt, "shared.txt", "branch content\n");
+    rmSync(join(fx.main, ".git", "objects", oid.slice(0, 2), oid.slice(2)));
+    advanceOrigin(env, fx, "other.txt", "other\n");
+
+    assert.throws(
+      () => restack(resolveRepo(wt), wt, "origin/main"),
+      (e: unknown) =>
+        e instanceof WtError && e.code === 1 && /could not be read/.test(e.message) && /backup: /.test(e.message),
+    );
+    assert.equal(gitIn(wt, "rev-parse", "HEAD"), oldTip);
+    assert.equal(readFileSync(join(wt, "shared.txt"), "utf8"), "branch content\n");
+    idle(wt);
+  }));
+
+test("a conflict restacks under a colored git config", () =>
+  scenario(({ env, fx, repo }) => {
+    commitFile(fx.main, "c.txt", "one\n");
+    gitIn(fx.main, "push", "--quiet", "origin", "main");
+    const wt = worktree(repo, "feat-a");
+    const wtRepo = resolveRepo(wt);
+    commitFile(wt, "c.txt", "branch\n");
+    commitFile(wt, "extra.txt", "extra\n");
+    advanceOrigin(env, fx, "c.txt", "main\n");
+    gitIn(fx.main, "config", "color.ui", "always");
+    gitIn(fx.main, "config", "color.diff", "always");
+
+    const r = rebase(wtRepo, wt, "origin/main");
+    assert.equal(r.result, "restacked");
+    assert.deepEqual(r.conflicts, ["c.txt"]);
+    assert.match(readFileSync(join(wt, "c.txt"), "utf8"), /<<<<<<</);
+    assert.equal(readFileSync(join(wt, "extra.txt"), "utf8"), "extra\n");
+    assert.equal(gitIn(wt, "rev-parse", "HEAD"), gitIn(wt, "rev-parse", "origin/main"));
+    gitIn(wt, "diff", "--cached", "--quiet");
+    idle(wt);
+  }));
+
+test("restack directly reports conflicts under a colored git config", () =>
+  scenario(({ env, fx, repo }) => {
+    commitFile(fx.main, "c.txt", "one\n");
+    gitIn(fx.main, "push", "--quiet", "origin", "main");
+    const wt = worktree(repo, "feat-a");
+    commitFile(wt, "c.txt", "branch\n");
+    advanceOrigin(env, fx, "c.txt", "main\n");
+    gitIn(fx.main, "config", "color.ui", "always");
+    gitIn(fx.main, "config", "color.diff", "always");
+
+    assert.deepEqual(restack(resolveRepo(wt), wt, "origin/main").conflicts, ["c.txt"]);
+    idle(wt);
+  }));
+
+test("a restack ignores a zero diff context in the git config", () =>
+  scenario(({ env, fx, repo }) => {
+    const base = numbered(12);
+    commitFile(fx.main, "f.txt", base);
+    gitIn(fx.main, "push", "--quiet", "origin", "main");
+    const wt = worktree(repo, "feat-a");
+    commitFile(wt, "f.txt", base.replace("line 10\n", "branch\n"));
+    const main = base.replace("line 2\n", "main\n");
+    advanceOrigin(env, fx, "f.txt", main);
+    gitIn(fx.main, "config", "diff.context", "0");
+
+    assert.deepEqual(restack(resolveRepo(wt), wt, "origin/main").conflicts, []);
+    assert.equal(readFileSync(join(wt, "f.txt"), "utf8"), main.replace("line 10\n", "branch\n"));
+    idle(wt);
+  }));
+
+test("a restack keeps nested paths under diff.noprefix", () =>
+  scenario(({ env, fx, repo }) => {
+    const wt = worktree(repo, "feat-a");
+    commitFile(wt, "docs/deep/n.md", "nested\n");
+    advanceOrigin(env, fx, "other.txt", "other\n");
+    gitIn(fx.main, "config", "diff.noprefix", "true");
+
+    assert.deepEqual(restack(resolveRepo(wt), wt, "origin/main").conflicts, []);
+    assert.equal(readFileSync(join(wt, "docs/deep/n.md"), "utf8"), "nested\n");
+    assert.equal(existsSync(join(wt, "deep/n.md")), false);
+    idle(wt);
+  }));
+
+test("a restack keeps a rename under diff.renames=false", () =>
+  scenario(({ env, fx, repo }) => {
+    const base = numbered(12);
+    commitFile(fx.main, "a.txt", base);
+    gitIn(fx.main, "push", "--quiet", "origin", "main");
+    const wt = worktree(repo, "feat-a");
+    gitIn(wt, "mv", "a.txt", "b.txt");
+    gitIn(wt, "commit", "--quiet", "-m", "rename a to b");
+    const main = base.replace("line 6\n", "main\n");
+    advanceOrigin(env, fx, "a.txt", main);
+    gitIn(fx.main, "config", "diff.renames", "false");
+
+    assert.deepEqual(restack(resolveRepo(wt), wt, "origin/main").conflicts, []);
+    assert.equal(existsSync(join(wt, "a.txt")), false);
+    assert.equal(readFileSync(join(wt, "b.txt"), "utf8"), main);
+    idle(wt);
+  }));
+
+test("a restack keeps edited renames under diff.renameLimit=1", () =>
+  scenario(({ env, fx, repo }) => {
+    const one = numbered(30);
+    const two = numbered(30).replaceAll("line", "other");
+    commitFile(fx.main, "src/one.txt", one);
+    commitFile(fx.main, "src/two.txt", two);
+    gitIn(fx.main, "push", "--quiet", "origin", "main");
+    const wt = worktree(repo, "feat-a");
+    gitIn(wt, "mv", "src/one.txt", "lib-a.txt");
+    gitIn(wt, "mv", "src/two.txt", "lib-b.txt");
+    commitFile(wt, "lib-a.txt", one.replace("line 20\n", "branch one\n"));
+    const branchTwo = two.replace("other 20\n", "branch two\n");
+    commitFile(wt, "lib-b.txt", branchTwo);
+    const main = one.replace("line 6\n", "main\n");
+    advanceOrigin(env, fx, "src/one.txt", main);
+    gitIn(fx.main, "config", "diff.renameLimit", "1");
+
+    assert.deepEqual(restack(resolveRepo(wt), wt, "origin/main").conflicts, []);
+    assert.equal(existsSync(join(wt, "src/one.txt")), false);
+    assert.equal(readFileSync(join(wt, "lib-a.txt"), "utf8"), main.replace("line 20\n", "branch one\n"));
+    assert.equal(readFileSync(join(wt, "lib-b.txt"), "utf8"), branchTwo);
+    idle(wt);
+  }));
+
+test("a restack ignores a missing diff.orderFile", () =>
+  scenario(({ env, fx, repo }) => {
+    const wt = worktree(repo, "feat-a");
+    commitFile(wt, "a.txt", "a\n");
+    advanceOrigin(env, fx, "other.txt", "other\n");
+    gitIn(fx.main, "config", "diff.orderFile", "missing-order.txt");
+
+    assert.deepEqual(restack(resolveRepo(wt), wt, "origin/main").conflicts, []);
+    assert.equal(readFileSync(join(wt, "a.txt"), "utf8"), "a\n");
+    idle(wt);
+  }));
+
+test("a conflicting restack ignores a missing diff.orderFile", () =>
+  scenario(({ env, fx, repo }) => {
+    commitFile(fx.main, "c.txt", "one\n");
+    gitIn(fx.main, "push", "--quiet", "origin", "main");
+    const wt = worktree(repo, "feat-a");
+    commitFile(wt, "c.txt", "branch\n");
+    advanceOrigin(env, fx, "c.txt", "main\n");
+    gitIn(fx.main, "config", "diff.orderFile", "missing-order.txt");
+
+    assert.deepEqual(restack(resolveRepo(wt), wt, "origin/main").conflicts, ["c.txt"]);
+    assert.match(readFileSync(join(wt, "c.txt"), "utf8"), /<<<<<<</);
+    gitIn(wt, "diff", "--cached", "--quiet");
+    assert.equal(gitIn(wt, "rev-parse", "HEAD"), gitIn(wt, "rev-parse", "origin/main"));
+    idle(wt);
+  }));
+
+test("a restack refuses a deletion against an upstream re-indent under apply.ignoreWhitespace", () =>
+  scenario(({ env, fx, repo }) => {
+    commitFile(fx.main, "p.txt", "  one\n  two\n");
+    gitIn(fx.main, "push", "--quiet", "origin", "main");
+    const wt = worktree(repo, "feat-a");
+    gitIn(wt, "rm", "p.txt");
+    gitIn(wt, "commit", "--quiet", "-m", "delete p");
+    const oldTip = gitIn(wt, "rev-parse", "HEAD");
+    const main = "    one\n    two\n";
+    advanceOrigin(env, fx, "p.txt", main);
+    gitIn(fx.main, "config", "apply.ignoreWhitespace", "change");
+
+    assert.throws(
+      () => restack(resolveRepo(wt), wt, "origin/main"),
+      (e: unknown) => e instanceof WtError && e.code === 1 && /could not be replayed/.test(e.message),
+    );
+    assert.equal(gitIn(wt, "rev-parse", "HEAD"), oldTip);
+    assert.equal(existsSync(join(wt, "p.txt")), false);
+    assert.equal(gitIn(wt, "show", "origin/main:p.txt"), main.trimEnd());
+    idle(wt);
+  }));
+
+test("a rebase keeps a conflict under rebase.backend=apply and apply.ignoreWhitespace", () =>
+  scenario(({ env, fx, repo }) => {
+    commitFile(fx.main, "p.txt", "  one\n  two\n");
+    gitIn(fx.main, "push", "--quiet", "origin", "main");
+    const wt = worktree(repo, "feat-a");
+    const wtRepo = resolveRepo(wt);
+    gitIn(wt, "rm", "p.txt");
+    gitIn(wt, "commit", "--quiet", "-m", "delete p");
+    const oldTip = gitIn(wt, "rev-parse", "HEAD");
+    advanceOrigin(env, fx, "p.txt", "    one\n    two\n");
+    gitIn(fx.main, "config", "rebase.backend", "apply");
+    gitIn(fx.main, "config", "apply.ignoreWhitespace", "change");
+
+    assert.throws(
+      () => rebase(wtRepo, wt, "origin/main"),
+      (e: unknown) => e instanceof WtError && e.code === 1 && /could not be replayed/.test(e.message),
+    );
+    assert.equal(gitIn(wt, "rev-parse", "HEAD"), oldTip);
+    idle(wt);
+  }));
+
+test("a restack and the digest ignore GIT_DIFF_OPTS", () =>
+  scenario(({ env, fx, repo }) => {
+    const base = numbered(12);
+    commitFile(fx.main, "f.txt", base);
+    gitIn(fx.main, "push", "--quiet", "origin", "main");
+    const wt = worktree(repo, "feat-a");
+    commitFile(wt, "f.txt", base.replace("line 10\n", "branch\n"));
+    const main = base.replace("line 2\n", "main\n");
+    advanceOrigin(env, fx, "f.txt", main);
+    const wtRepo = resolveRepo(wt);
+    const before = changeDigest(wtRepo, "origin/main", "HEAD");
+
+    try {
+      process.env.GIT_DIFF_OPTS = "--unified=0";
+      assert.equal(changeDigest(wtRepo, "origin/main", "HEAD"), before);
+      assert.deepEqual(restack(wtRepo, wt, "origin/main").conflicts, []);
+      assert.equal(readFileSync(join(wt, "f.txt"), "utf8"), main.replace("line 10\n", "branch\n"));
+      idle(wt);
+    } finally {
+      delete process.env.GIT_DIFF_OPTS;
+    }
   }));
 
 test("restack works directly and reports no conflicts for a clean replay", () =>
