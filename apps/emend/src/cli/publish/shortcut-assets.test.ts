@@ -1,12 +1,13 @@
 import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import { join } from "node:path";
-import { LIMITS, type PublishManifest } from "@emend/contract";
+import { LIMITS, type PublishFile, type PublishManifest } from "@emend/contract";
 import { expect, test, vi } from "vitest";
 import { directFixture } from "../direct-test-support.ts";
 import * as reads from "./read.ts";
 import { publishContext, resolvePublish } from "./resolve.ts";
 import { shortcutManifest } from "./shortcut.ts";
+import { ShortcutAssets } from "./shortcut-assets.ts";
 import { readBlob } from "./upload.ts";
 
 vi.mock("node:fs/promises", async (original) => ({ ...(await original<typeof import("node:fs/promises")>()) }));
@@ -32,6 +33,11 @@ async function fixture() {
         {
           key: shortcut.key,
           docFolders: shortcut.docFolders,
+          excludedAssets: shortcut.excludedAssets,
+          retainedSources: shortcut.retainedSources,
+          folderRoots: shortcut.folderRoots,
+          namedFiles: shortcut.namedFiles,
+          docArguments: shortcut.docArguments,
           skipNodeModules: true,
         },
         f.stateDir,
@@ -44,7 +50,7 @@ async function fixture() {
   return { ...f, file, prepare };
 }
 
-test("64 docs read their shared 1 MiB asset once per phase", async () => {
+test("64 docs share one retained read of their 1 MiB asset", async () => {
   const f = await fixture();
   const image = Buffer.alloc(1024 * 1024, 65);
   const source = await f.file("bundle/logo.png", image);
@@ -60,8 +66,8 @@ test("64 docs read their shared 1 MiB asset once per phase", async () => {
   const upload = read.mock.calls.filter(([path]) => path === source).length;
   expect({ resolution, upload, bytes: (resolution + upload) * image.length, stats }).toEqual({
     resolution: 1,
-    upload: 1,
-    bytes: 2 * image.length,
+    upload: 0,
+    bytes: image.length,
     stats: 1,
   });
   expect(resolved.request.files.filter((file) => file.role === "asset")).toHaveLength(1);
@@ -85,8 +91,82 @@ test("distinct asset paths with equal bytes each read once but upload one blob",
   read.mockClear();
   const uploaded = [];
   for (const [id, blob] of resolved.blobs) uploaded.push((await readBlob(id, blob)).toString());
-  expect({ resolution, upload: counts() }).toEqual({ resolution: [1, 1], upload: [1, 1] });
+  expect({ resolution, upload: counts() }).toEqual({ resolution: [1, 1], upload: [0, 0] });
   expect(uploaded.filter((bytes) => bytes === "synthetic image")).toHaveLength(1);
+});
+
+test("read-time key skips leave every doc's references and uploaded blobs", async () => {
+  const f = await fixture();
+  const key = `-----BEGIN PRIVATE KEY-----\n${"A".repeat(64)}\n-----END PRIVATE KEY-----`;
+  await f.file("bundle/secrets.js", key.padEnd(LIMITS.assetBytes, " "));
+  const safeSize = 5 * 1024 * 1024;
+  await f.file("bundle/a.png", Buffer.alloc(safeSize, 65));
+  await f.file("bundle/b.png", Buffer.alloc(safeSize, 66));
+  const warn = vi.fn();
+  const assets = new ShortcutAssets([], warn, new Set(), [join(f.source, "bundle")]);
+  const docs: PublishFile[] = ["one.html", "two.html"].map((path) => ({
+    path,
+    oldPath: null,
+    role: "doc",
+    oldBlob: null,
+    newBlob: null,
+    flag: null,
+  }));
+  for (const doc of docs)
+    assets.add(
+      doc,
+      join(f.source, "bundle", doc.path),
+      Buffer.from('<script src="secrets.js"></script><img src="a.png"><img src="b.png">'),
+      [],
+    );
+  const added: number[] = [];
+  const result = await assets.resolve(LIMITS.filesPerRevision - 3, (bytes) => {
+    expect(bytes.includes(Buffer.from(key))).toBe(false);
+    added.push(bytes.length);
+    return hash(bytes);
+  });
+  expect(added).toEqual([safeSize, safeSize]);
+  expect([...result.values()].flat().map((file) => file.path)).toEqual(["a.png", "b.png"]);
+  expect(docs.map((doc) => doc.assets)).toEqual([
+    ["a.png", "b.png"],
+    ["a.png", "b.png"],
+  ]);
+  expect(warn.mock.calls).toEqual([
+    ["emend: skipped secrets.js: may hold a secret\n"],
+    ["emend: skipped secrets.js: may hold a secret\n"],
+  ]);
+});
+
+test("an excessive asset file count fails before reads, warnings or doc asset changes", async () => {
+  const f = await fixture();
+  const sources = await Promise.all([f.file("a.png", "synthetic a"), f.file("b.png", "synthetic b")]);
+  const warn = vi.fn();
+  const assets = new ShortcutAssets([], warn);
+  const docs: PublishFile[] = ["one.html", "two.html"].map((path) => ({
+    path,
+    oldPath: null,
+    role: "doc",
+    oldBlob: null,
+    newBlob: null,
+    flag: null,
+    assets: [],
+  }));
+  for (const doc of docs)
+    assets.add(
+      doc,
+      join(f.source, doc.path),
+      Buffer.from(
+        doc.path === "one.html" ? '<img src="missing.png"><img src="a.png">' : '<img src="a.png"><img src="b.png">',
+      ),
+      [],
+    );
+  const read = vi.spyOn(reads, "readRegular");
+  const add = vi.fn(hash);
+  await expect(assets.resolve(LIMITS.filesPerRevision - 1, add)).rejects.toThrow("too many files in the review");
+  expect(read.mock.calls.filter(([path]) => sources.includes(path))).toHaveLength(0);
+  expect(add).not.toHaveBeenCalled();
+  expect(warn).not.toHaveBeenCalled();
+  expect(docs.map((doc) => doc.assets)).toEqual([[], []]);
 });
 
 test.each([false, true])("different walked boundaries remain merged (inner first: %s)", async (innerFirst) => {
@@ -96,15 +176,28 @@ test.each([false, true])("different walked boundaries remain merged (inner first
   const source = await f.file("outer/inner/logo.png", "synthetic image");
   const target = await f.file("outer/other.png", "synthetic image");
   const collect = await f.prepare(innerFirst ? ["outer/inner", "outer"] : ["outer", "outer/inner"]);
+  await fs.rm(source);
+  await fs.symlink(target, source);
+  const read = vi.spyOn(reads, "readRegular");
+  await expect(collect()).rejects.toThrow("symlink leaves the published folder: outer/inner");
+  expect(read.mock.calls.some(([path]) => path === source || path === target)).toBe(false);
+});
+
+test("a resolved shared asset uploads its retained bytes after a symlink swap", async () => {
+  const f = await fixture();
+  await f.file("outer/a.html", '<img src="inner/logo.png">');
+  await f.file("outer/inner/b.html", '<img src="logo.png">');
+  const source = await f.file("outer/inner/logo.png", "synthetic image");
+  const target = await f.file("outer/other.png", "synthetic replacement image");
+  const collect = await f.prepare(["outer", "outer/inner"]);
   const resolved = await collect();
   await fs.rm(source);
   await fs.symlink(target, source);
+  const read = vi.spyOn(reads, "readRegular");
   const blob = resolved.blobs.get(hash("synthetic image"));
   if (!blob) throw new Error("missing shared image");
-  await expect(readBlob(hash("synthetic image"), blob)).rejects.toThrow(
-    "symlink leaves the published folder: outer/inner",
-  );
-  await expect(collect()).rejects.toThrow("symlink leaves the published folder: outer/inner");
+  expect((await readBlob(hash("synthetic image"), blob)).toString()).toBe("synthetic image");
+  expect(read).not.toHaveBeenCalled();
 });
 
 // Resolving the cap-sized HTML reference lists exercises the publish JSON budget.

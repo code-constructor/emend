@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, posix, resolve, sep } from "node:path";
+import { basename, dirname, extname, posix, resolve, sep } from "node:path";
 import {
+  docViewOf,
+  isRenderedHtmlDoc,
   LIMITS,
   MEDIA_EXTENSIONS,
   OTHER_TOPIC,
@@ -10,7 +12,7 @@ import {
   type PublishManifest,
   PublishRequest,
 } from "@emend/contract";
-import { UnchangedFilesError, withOtherChanges } from "@emend/core";
+import { decodeText, UnchangedFilesError, withOtherChanges } from "@emend/core";
 import { DocRootError, readDocRoots, rootRules, validateDocRoot } from "../config.ts";
 import { escapeReference } from "../escape.ts";
 import { createGitSession, GitFailed } from "../git.ts";
@@ -28,8 +30,10 @@ import {
   sourcePath,
 } from "./read.ts";
 import { remoteToRepoUrl } from "./repo-url.ts";
+import type { RetainedSources } from "./retained.ts";
 import { gitFolders, worktreeRoot } from "./root.ts";
 import { ShortcutAssets } from "./shortcut-assets.ts";
+import { readSkipReason } from "./shortcut-walk.ts";
 import { readSide } from "./sides.ts";
 
 import { type BlobSource, readBlob } from "./upload.ts";
@@ -41,6 +45,13 @@ export type PublishOptions = {
   skipNodeModules?: boolean;
   titleFromMain?: (bytes: Uint8Array) => string | Promise<string>;
   docFolders?: ReadonlyMap<string, readonly PublishedFolder[]>;
+  /** Absolute paths rejected by the walked-doc private-key content check. */
+  excludedAssets?: ReadonlySet<string>;
+  retainedSources?: RetainedSources;
+  /** Real paths of shortcut folder arguments and explicitly named files. */
+  folderRoots?: readonly string[];
+  namedFiles?: ReadonlySet<string>;
+  docArguments?: ReadonlyMap<string, string>;
 };
 const sha256 = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 export async function publishContext(cwd: string, stateDir: string) {
@@ -149,7 +160,16 @@ export async function resolvePublish(
   let title = manifest.title;
   let assetCount = 0;
   const assetPaths = new Set<string>();
-  const shortcutAssets = options.docFolders ? new ShortcutAssets(gitDirs, warn) : undefined;
+  const shortcutAssets = options.docFolders
+    ? new ShortcutAssets(
+        gitDirs,
+        warn,
+        options.excludedAssets,
+        options.folderRoots,
+        options.namedFiles,
+        options.retainedSources,
+      )
+    : undefined;
   const roots = [...(worktree ? [worktree] : []), ...(await readDocRoots(stateDir))];
   for (const file of grouped.files) {
     if (file.role === "diff") {
@@ -198,26 +218,36 @@ export async function resolvePublish(
     }
     const original = resolve(root, file.source ?? file.path);
     const publishedFolders = options.docFolders?.get(file.path) ?? [];
+    const argument = escapeReference(options.docArguments?.get(file.path) ?? file.source ?? file.path);
     const docError = (error: unknown): never => {
       if (
         error instanceof NotRegularFile ||
         ["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")
       )
-        throw new CliError(`doc not found: ${escapeReference(file.source ?? file.path)}`);
+        throw new CliError(`doc not found: ${argument}`);
+      const reason = readSkipReason(error);
+      if (reason) throw new CliError(`${error instanceof OversizedFile ? error.message : reason}: ${argument}`);
       throw error;
     };
     // Check the written alias here; sourcePath also checks its resolved target.
     outsideGitSegments(original, root);
-    const source = await sourcePath(original, roots, gitDirs, publishedFolders).catch(docError);
-    const html = /\.html?$/i.test(file.path);
-    if (!html && !/\.(md|markdown)$/i.test(file.path))
-      throw new CliError("doc path must end in .md, .markdown, .html or .htm");
+    const sourceView = docViewOf(file) === "source";
+    const walkedSource = sourceView && options.docFolders?.has(file.path) && !options.docArguments?.has(file.path);
+    const retained = walkedSource ? options.retainedSources?.get(original) : undefined;
+    if (walkedSource && !retained) throw new CliError("source changed before publish");
+    const source = retained ? original : await sourcePath(original, roots, gitDirs, publishedFolders).catch(docError);
+    const html = isRenderedHtmlDoc(file);
     const checkExtension = (path: string) => {
-      if (!(html ? /\.html?$/i : /\.(md|markdown)$/i).test(path))
+      if (sourceView) {
+        if (extname(path).toLowerCase() !== extname(file.path).toLowerCase())
+          throw new CliError("doc source must have the same extension as its path");
+      } else if (docViewOf({ path }) !== "rendered" || isRenderedHtmlDoc({ role: "doc", path }) !== html)
         throw new CliError("doc source must end in .md, .markdown, .html or .htm, like its path.");
     };
-    if (file.source !== undefined) checkExtension(file.source);
-    checkExtension(source);
+    if (!sourceView) {
+      if (file.source !== undefined) checkExtension(file.source);
+      checkExtension(source);
+    }
     const readResolvedDoc = (actual: string) =>
       readRegular(
         publishedFolders.length ? original : actual,
@@ -228,11 +258,21 @@ export async function resolvePublish(
         (_info, opened) => checkPublishedFolders(opened, publishedFolders),
       ).catch(docError);
     const readDoc = async () => {
+      if (retained) return retained;
       const actual = await sourcePath(original, roots, gitDirs, publishedFolders).catch(docError);
       checkExtension(actual);
       return readResolvedDoc(actual);
     };
-    const bytes = await readResolvedDoc(source);
+    const bytes = retained ?? (await readResolvedDoc(source));
+    if (sourceView) {
+      try {
+        decodeText(bytes);
+      } catch {
+        throw new CliError(`not a text file: ${argument}`);
+      }
+      if (file.source !== undefined) checkExtension(file.source);
+      checkExtension(source);
+    }
     if (file.path === manifest.main && options.titleFromMain) title = await options.titleFromMain(bytes);
     const resolvedDoc: PublishFile = {
       path: file.path,
@@ -240,6 +280,7 @@ export async function resolvePublish(
       role: "doc",
       topic: file.topic,
       title: file.title,
+      ...(sourceView ? { view: "source" } : file.view ? { view: file.view } : {}),
       oldBlob: null,
       newBlob: addRequired(bytes, readDoc),
       flag: null,
@@ -309,7 +350,7 @@ export async function resolvePublish(
   if (shortcutAssets) {
     // HTML docs already passed their checked reads; this phase checks their shared assets.
     const assets = await shortcutAssets.resolve(files.length, addRequired);
-    files = files.flatMap((file) => [file, ...(assets.get(file.path) ?? [])]);
+    files = files.flatMap((file) => [file, ...(isRenderedHtmlDoc(file) ? (assets.get(file.path) ?? []) : [])]);
   }
   for (const item of manifest.media ?? []) {
     const label = escapeReference(item.source ?? item.path);
