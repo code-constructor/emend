@@ -86,8 +86,8 @@ The inbox lists every review and published doc, with the ones that need you firs
 the same groups as a desktop.
 
 <p>
-  <img src="images/inbox-desktop.png" alt="The inbox on a desktop, with six reviews and docs" width="76%">
-  <img src="images/inbox-phone.png" alt="The inbox on a phone" width="22%">
+  <img src="images/inbox-desktop.png" alt="The inbox on a desktop, with six reviews and docs" width="73%"
+  >&emsp;<img src="images/inbox-phone.png" alt="The inbox on a phone" width="21%">
 </p>
 
 A plan or other doc that comes with a review opens next to its diff, with its diagrams drawn and
