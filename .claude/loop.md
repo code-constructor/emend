@@ -1,12 +1,10 @@
----
-name: e-loop
-description: Run the work loop over GitHub issues from the main checkout. It keeps one to three worker sessions busy on `ready` issues that do not collide, answers their questions, and watches each one through its PR and the owner's emend review to the merge. Use when the owner types /e-loop or /loop /e-loop, or asks to start, check or stop the work loop.
----
+# Work loop
 
-# /e-loop
-
-Arguments: $ARGUMENTS (`--max <1-3>` sets how many workers run at once; default 3. `status` reports
-and starts nothing. `stop` ends the loop.)
+Run one pass of the work loop over the GitHub issues, then pace the next pass as section 5 says. A
+bare `/loop` in the main checkout runs this file. The loop keeps up to three worker sessions busy on
+`ready` issues that do not collide, answers their questions, and watches each one through its PR and
+the owner's emend review to the merge. To stop it, the owner says stop or presses Esc while it
+waits.
 
 This session coordinates. Workers do the work: each one is a Claude session in its own worktree and
 herdr workspace, started with `bin/wt spawn --issue`, running `/e-work` through `/e-pr`,
@@ -19,7 +17,7 @@ code, never merges, and never edits an issue's text.
   every `bin/wt` call as `<main>/bin/wt`. Bash calls do not share shell variables, so write every
   captured value (path, number, branch, pane) literally into later commands.
 - Run only in the main checkout (`git rev-parse --show-toplevel` equals `<main>`), inside herdr
-  (`HERDR_ENV=1`). Otherwise say so and stop.
+  (`HERDR_ENV=1`). Otherwise say so, and end the loop with ScheduleWakeup `stop: true`.
 - Only `bin/wt issues` decides what is pickable: `ready` set by the repository owner after the
   issue's last edit and rename, by anyone, no open blocker, not taken. Never start an issue it does not list as
   `pickable`. Never add or remove a label.
@@ -47,15 +45,15 @@ code, never merges, and never edits an issue's text.
 ## 1. Survey
 
 First run `git -C '<main>' status --porcelain -- bin .claude scripts`. It must print nothing: the
-main checkout's `bin/wt` and skills are the gate every worker relies on. Anything else: start
-nothing this pass, journal `gate-changed`, and tell the owner once which paths changed. This is a
-tripwire, not a lock: running workers keep calling that `bin/wt`, and ignored files are not
+main checkout's `bin/wt`, skills and this file are the gate every worker relies on. Anything else:
+start nothing this pass, journal `gate-changed`, and tell the owner once which paths changed. This
+is a tripwire, not a lock: running workers keep calling that `bin/wt`, and ignored files are not
 checked.
 
 Then run these and read the results together:
 
 1. `<main>/bin/wt list --json`: the worktrees. A worker is a row with an `issue` field. Rows without
-   one (task-file branches, manual worktrees) are not this loop's and never count against `--max`.
+   one (task-file branches, manual worktrees) are not this loop's and never count against the three.
 2. `herdr agent list` and `herdr workspace list`: each agent's `agent_status` (`working`, `blocked`,
    `idle`, `done`). Match an agent to a worker through its `cwd`, or, when that is missing, through
    its workspace's `worktree.checkout_path`.
@@ -106,8 +104,8 @@ candidates for `/e-issue`. Never create issues from them yourself.
 
 ## 3. Fill the free slots
 
-Free slots: `--max` minus the workers (rows with an `issue` field). A worker waiting on the owner's
-review still holds its slot, so open reviews never pile up past `--max`.
+Free slots: three minus the workers (rows with an `issue` field). A worker waiting on the owner's
+review still holds its slot, so open reviews never pile up past three.
 
 For each free slot, take the next `pickable` issue from `bin/wt issues` in its order (bugs first,
 then `P0`, `P1`, `P2`, then the oldest). Skip an issue the journal still holds: a `started` line
@@ -145,19 +143,19 @@ Silence on a pass where nothing changed.
 
 ## 5. Pace
 
-Under `/loop /e-loop`, end each pass with ScheduleWakeup:
+End each pass with ScheduleWakeup:
 
 - A worker is working or blocked: about 270 seconds.
 - Only reviews are pending: about 1200 seconds.
 - No worker and nothing pickable: about 1800 seconds.
 
-`/e-loop stop`, or the owner saying stop: end the loop with ScheduleWakeup `stop: true`. Running
-workers go on; tell the owner which ones.
+When the owner says stop, end the loop with ScheduleWakeup `stop: true`. Running workers go on;
+tell the owner which ones.
 
 ## Never
 
 - Never merge, approve, or run `/e-pr-merge` for a worker.
 - Never close, reopen, edit, comment on or relabel an issue. The merge closes it.
-- Never run more workers than `--max`.
+- Never run more than three workers.
 - Never start an issue `bin/wt issues` does not list as `pickable`.
 - Never remove a worktree or close a workspace; workers clean up after their merge.

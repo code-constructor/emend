@@ -6,17 +6,7 @@ import { test } from "node:test";
 
 const root = resolve(import.meta.dirname, "..", "..", "..");
 
-const SKILLS = [
-  "e-spawn",
-  "e-work",
-  "e-pr",
-  "e-pr-finalize",
-  "e-pr-merge",
-  "e-rebase",
-  "e-merge-local",
-  "e-issue",
-  "e-loop",
-];
+const SKILLS = ["e-spawn", "e-work", "e-pr", "e-pr-finalize", "e-pr-merge", "e-rebase", "e-merge-local", "e-issue"];
 
 // Built from parts so this file does not match its own patterns.
 const FORBIDDEN: { label: string; pattern: RegExp }[] = [
@@ -38,6 +28,7 @@ function walk(dir: string, out: string[] = []): string[] {
 
 function lifecycleFiles(): string[] {
   const files = walk(join(root, "bin"));
+  files.push(join(root, ".claude", "loop.md"));
   const skillsDir = join(root, ".claude", "skills");
   for (const name of readdirSync(skillsDir)) {
     if (name.startsWith("e-")) walk(join(skillsDir, name), files);

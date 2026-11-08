@@ -1,7 +1,7 @@
 # Tasks
 
 The older work queue for this repo. New work comes as GitHub issues (`bin/wt issues`, `/e-issue`,
-`/e-loop`); the task files below stay until their work is done or dropped. One file per task,
+`/loop`); the task files below stay until their work is done or dropped. One file per task,
 numbered in the order they were opened. The design and the plan of record live outside this repo,
 with the owner. Task content comes from the plan, and each task names the plan's task numbers.
 
