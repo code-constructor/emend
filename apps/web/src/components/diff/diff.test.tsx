@@ -7,17 +7,25 @@ import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } fr
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import type { NavigateDiff } from "../../lib/diff-navigation.ts";
 import { draftKey } from "../../lib/drafts.ts";
 import { layoutStore } from "../../lib/layout-store.ts";
 import { Panes } from "../layout/Panes.tsx";
 import { DiffPane, type DiffPaneProps } from "./DiffPane.tsx";
+import type { DiffPostRender, ParsedDiff } from "./FileDiff.tsx";
 import { parsePair } from "./parse.worker.ts";
 import type { DiffParser } from "./parse-client.ts";
 
 type Selection = { side?: "additions" | "deletions"; endSide?: "additions" | "deletions"; start: number; end: number };
 type Annotation = { side: string; lineNumber: number; metadata: ReactNode };
 type RenderProps = {
-  options: { diffStyle: string; overflow: string; onLineSelectionEnd: (range: Selection | null) => void };
+  fileDiff: ParsedDiff;
+  options: {
+    diffStyle: string;
+    overflow: string;
+    onLineSelectionEnd: (range: Selection | null) => void;
+    onPostRender: DiffPostRender;
+  };
   lineAnnotations: Annotation[];
   renderAnnotation: (annotation: Annotation) => ReactNode;
   renderGutterUtility: (getHoveredLine: () => GetHoveredLineResult<"diff">) => ReactNode;
@@ -53,6 +61,25 @@ vi.mock("@pierre/diffs/react", () => ({
     );
   },
 }));
+function postRender(rendered: boolean, failed = false) {
+  const host = screen.getByTestId("rendered-diff");
+  const phase = host.shadowRoot ? "update" : "mount";
+  const shadow = host.shadowRoot ?? host.attachShadow({ mode: "open" });
+  if (rendered) {
+    const line = document.createElement("div");
+    line.dataset.line = "1";
+    shadow.append(line);
+  }
+  if (failed) {
+    const error = document.createElement("div");
+    error.dataset.errorWrapper = "";
+    shadow.append(error);
+  }
+  const props = renderer.props.at(-1);
+  if (!props) throw new Error("Missing renderer props");
+  const instance = { expandHunk: vi.fn(), getLineIndex: vi.fn() } as unknown as Parameters<DiffPostRender>[1];
+  act(() => props.options.onPostRender(host, instance, phase));
+}
 const reviewId = "11111111-1111-4111-8111-111111111111";
 const file = (path = "source.ts", values: Partial<FileView> = {}): FileView => ({
   id: crypto.randomUUID(),
@@ -200,6 +227,7 @@ afterEach(() => {
   if (boundsDescriptor) Object.defineProperty(HTMLElement.prototype, "getBoundingClientRect", boundsDescriptor);
   else Reflect.deleteProperty(HTMLElement.prototype, "getBoundingClientRect");
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 test("topics sort ascending stably, Other last, files by order, empty headers and metadata are text", async () => {
   const files = [
@@ -290,6 +318,60 @@ test("near sections alone load, immutable sides cache across remount and absent 
   near("added.ts");
   await screen.findByTestId("rendered-diff");
   expect(fetchMock).toHaveBeenCalledTimes(1);
+});
+test("a file marks its mounted body while fetching and parsing, then clears the loading mark", async () => {
+  const response = Promise.withResolvers<Response>();
+  const parsed = Promise.withResolvers<ReturnType<typeof parsePair>>();
+  fetchMock.mockReturnValue(response.promise);
+  parser.mockReturnValue(parsed.promise);
+  await mount(revision([file("loading.ts", { hasOld: false, status: "added" })]));
+  const section = screen.getByRole("region", { name: "File loading.ts" });
+  expect(section.hasAttribute("data-diff-loading")).toBe(false);
+  near("loading.ts");
+  expect(section.hasAttribute("data-diff-loading")).toBe(true);
+  response.resolve(new Response("one\ntwo\n"));
+  await waitFor(() => expect(parser).toHaveBeenCalledOnce());
+  expect(section.hasAttribute("data-diff-loading")).toBe(true);
+  parsed.resolve(parsePair({ oldFile: null, newFile: { name: "loading.ts", contents: "one\ntwo\n" } }));
+  await screen.findByTestId("rendered-diff");
+  postRender(true);
+  await waitFor(() => expect(section.hasAttribute("data-diff-loading")).toBe(false));
+});
+test("a parsed diff stays marked as loading until Pierre draws its first lines", async () => {
+  await mount(revision([file("delayed.ts", { hasOld: false, status: "added" })]));
+  near("delayed.ts");
+  const host = await screen.findByTestId("rendered-diff");
+  const section = screen.getByRole("region", { name: "File delayed.ts" });
+  expect(renderer.props.at(-1)?.fileDiff.hunks.length).toBeGreaterThan(0);
+  postRender(false);
+  expect(host.shadowRoot?.querySelector("[data-line]")).toBeNull();
+  expect(section.hasAttribute("data-diff-loading")).toBe(true);
+  postRender(true);
+  expect(host.shadowRoot?.querySelector("[data-line]")).toBeTruthy();
+  expect(section.hasAttribute("data-diff-loading")).toBe(false);
+});
+test("a parsed diff clears its loading marker when Pierre fails to render", async () => {
+  await mount(revision([file("failed.ts", { hasOld: false, status: "added" })]));
+  near("failed.ts");
+  const host = await screen.findByTestId("rendered-diff");
+  const section = screen.getByRole("region", { name: "File failed.ts" });
+  expect(renderer.props.at(-1)?.fileDiff.hunks.length).toBeGreaterThan(0);
+  postRender(false);
+  expect(section.hasAttribute("data-diff-loading")).toBe(true);
+  postRender(false, true);
+  expect(host.shadowRoot?.querySelector("[data-error-wrapper]")).toBeTruthy();
+  expect(host.shadowRoot?.querySelector("[data-line]")).toBeNull();
+  expect(section.hasAttribute("data-diff-loading")).toBe(false);
+});
+test("a parsed diff with no hunks clears its loading marker without drawing lines", async () => {
+  await mount(revision([file("identical.ts")]));
+  near("identical.ts");
+  const host = await screen.findByTestId("rendered-diff");
+  const section = screen.getByRole("region", { name: "File identical.ts" });
+  expect(renderer.props.at(-1)?.fileDiff.hunks).toHaveLength(0);
+  postRender(false);
+  expect(host.shadowRoot?.querySelector("[data-line]")).toBeNull();
+  expect(section.hasAttribute("data-diff-loading")).toBe(false);
 });
 test.each([
   "pnpm-lock.yaml",
@@ -493,10 +575,16 @@ test("toolbar counts exclude Other, pluralize, and jump menu reveals a collapsed
   const toolbar = document.querySelector("[data-diff-toolbar]");
   const topicHeader = topic.querySelector("[data-topic-header]");
   const pane = screen.getByTestId("diff-pane");
-  const offset = vi.spyOn(pane, "scrollTo").mockImplementation(() => {});
+  const offset = vi.spyOn(pane, "scrollTo").mockImplementation((options?: number | ScrollToOptions) => {
+    if (options && typeof options === "object") pane.scrollTop = options.top ?? 0;
+  });
   Object.defineProperties(pane, { scrollHeight: { value: 3000 }, clientHeight: { value: 600 } });
   if (!header) throw new Error("Missing file header");
-  vi.spyOn(header, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 1200, 400, 40));
+  const section = screen.getByRole("region", { name: "File src/nested/source.ts" });
+  vi.spyOn(section, "getBoundingClientRect").mockImplementation(() => new DOMRect(0, 1200 - pane.scrollTop, 400, 1000));
+  vi.spyOn(header, "getBoundingClientRect").mockImplementation(
+    () => new DOMRect(0, Math.max(151, section.getBoundingClientRect().top), 400, 40),
+  );
   if (!toolbar || !topicHeader) throw new Error("Missing toolbar/topic");
   vi.spyOn(toolbar, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 400, 41));
   vi.spyOn(topicHeader, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 41, 400, 110));
@@ -1176,4 +1264,60 @@ test("the phone leaves the topic height at zero because that header does not sti
   });
   await mount(detailed());
   expect(screen.getByRole("region", { name: /^Topic / }).style.getPropertyValue("--em-topic-height")).toBe("0px");
+});
+
+test.each(["toolbar", "navigator"])("a %s stuck file jump follows growth and cancels on unmount", async (via) => {
+  const above = file("above.ts");
+  const destination = file("destination.ts", { flag: "binary", order: 1 });
+  let navigate: NavigateDiff | null = null;
+  const { unmount } = await mount(revision([above, destination]), {
+    onNavigator: (value) => {
+      navigate = value;
+    },
+  });
+  const pane = screen.getByTestId("diff-pane");
+  const header = document.getElementById(`diff-file-${destination.id}`);
+  const toolbar = pane.querySelector("[data-diff-toolbar]");
+  const topicHeader = pane.querySelector("[data-topic-header]");
+  if (!header || !toolbar || !topicHeader) throw new Error("Missing jump destination");
+  const section = screen.getByRole("region", { name: "File destination.ts" });
+  let targetTop = 1300;
+  Object.defineProperties(pane, { scrollHeight: { value: 10000 }, clientHeight: { value: 600 } });
+  vi.spyOn(pane, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 900, 600));
+  vi.spyOn(section, "getBoundingClientRect").mockImplementation(
+    () => new DOMRect(0, targetTop - pane.scrollTop, 900, 5000),
+  );
+  vi.spyOn(header, "getBoundingClientRect").mockImplementation(
+    () => new DOMRect(0, Math.max(141, section.getBoundingClientRect().top), 900, 40),
+  );
+  vi.spyOn(toolbar, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 900, 41));
+  vi.spyOn(topicHeader, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 41, 900, 100));
+  const scroll = vi.spyOn(pane, "scrollTo").mockImplementation((options?: number | ScrollToOptions) => {
+    if (options && typeof options === "object") pane.scrollTop = options.top ?? 0;
+  });
+  vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame", "performance"] });
+  pane.scrollTop = 4000;
+  expect(header.getBoundingClientRect().top).toBe(141);
+  if (via === "toolbar") {
+    fireEvent.keyDown(screen.getByRole("button", { name: "1 topic · 2 files" }), { key: "ArrowDown" });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "destination.ts" }));
+  } else {
+    act(() => expect(navigate?.({ elementId: header.id })).toBe(false));
+    act(() => expect(navigate?.({ elementId: header.id })).toBe(true));
+  }
+  expect(header.getBoundingClientRect().top).toBe(149);
+  expect(scroll).toHaveBeenCalledExactlyOnceWith({ top: 1151, behavior: "instant" });
+  act(() => vi.advanceTimersByTime(500));
+  expect(scroll).toHaveBeenCalledTimes(1);
+  near("above.ts");
+  await screen.findByTestId("rendered-diff");
+  targetTop += 1800;
+  act(() => vi.advanceTimersToNextFrame());
+  expect(header.getBoundingClientRect().top).toBe(149);
+  expect(scroll).toHaveBeenLastCalledWith({ top: 2951, behavior: "instant" });
+  unmount();
+  scroll.mockClear();
+  targetTop += 1800;
+  act(() => vi.advanceTimersToNextFrame());
+  expect(scroll).not.toHaveBeenCalled();
 });

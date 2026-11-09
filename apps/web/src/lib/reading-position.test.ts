@@ -102,9 +102,13 @@ test("the anchor is the first element whose bottom is below the top edge, with t
 test("no anchor at the top, and the last element when scrolled past everything", () => {
   expect(findAnchor(scene({ "block-a": 0 }, 0), '[id^="block-"]')).toBeNull();
   document.body.replaceChildren();
-  expect(findAnchor(scene({ "block-a": 0, "block-b": 100 }, 900), '[id^="block-"]')).toEqual({
+  const scroller = scene({ "block-a": 0, "block-b": 100 }, 900);
+  Object.defineProperty(scroller, "scrollHeight", { value: 1500 });
+  Object.defineProperty(scroller, "clientHeight", { value: 500 });
+  expect(findAnchor(scroller, '[id^="block-"]')).toEqual({
     id: "block-b",
     fraction: 1,
+    gap: 0.875,
   });
 });
 
@@ -130,7 +134,7 @@ test("a hidden element is never the anchor or the fallback", () => {
   const hide = (id: string) =>
     vi.spyOn(document.getElementById(id) as HTMLElement, "getBoundingClientRect").mockReturnValue(new DOMRect());
   hide("block-b");
-  expect(findAnchor(scroller, '[id^="block-"]')).toEqual({ id: "block-c", fraction: 0 });
+  expect(findAnchor(scroller, '[id^="block-"]')).toEqual({ id: "block-a", fraction: 1, gap: 0.2 });
   hide("block-c");
   expect(findAnchor(scroller, '[id^="block-"]')).toEqual({ id: "block-a", fraction: 1 });
   hide("block-a");
@@ -222,4 +226,131 @@ test("R2.2 existing Comments thread anchors remain readable", () => {
   const key = readingPositionKey("r", "comments", "", 1);
   localStorage.setItem(readingKey, JSON.stringify({ [key]: { id: "thread-synthetic", fraction: 0.25, at: 1 } }));
   expect(loadReadingPosition(key)).toEqual({ id: "thread-synthetic", fraction: 0.25 });
+});
+
+test.each([6, 400])("a line in a %s px gap uses the previous shown block", (gap) => {
+  const scroller = scene({ "block-a": 0, "block-b": 100 + gap, "block-c": 200 + gap }, 100 + gap / 2);
+  const anchor = { id: "block-a", fraction: 1, gap: 0.5 };
+  expect(findAnchor(scroller, '[id^="block-"]')).toEqual(anchor);
+  scroller.scrollTop = 0;
+  expect(applyAnchor(scroller, anchor, undefined, '[id^="block-"]')).toBe(100 + gap / 2);
+  expect(findAnchor(scroller, '[id^="block-"]')).toEqual(anchor);
+});
+
+test("above the first shown block uses a gap from the start", () => {
+  const scroller = scene({ "block-hidden": 0, "block-first": 100 }, 30);
+  vi.mocked(scroller.children[0]?.getBoundingClientRect as () => DOMRect).mockReturnValue(new DOMRect());
+  expect(findAnchor(scroller, '[id^="block-"]')).toEqual({ id: "block-first", fraction: 0, gap: 0.3 });
+});
+
+test.each([0, 40])("a gap before the first anchor round-trips after resizing with a %s px sticky bar", (barHeight) => {
+  const tops = { "block-hidden": 0, "block-first": 200 + barHeight };
+  const scroller = scene(tops, 60);
+  vi.mocked(scroller.children[0]?.getBoundingClientRect as () => DOMRect).mockReturnValue(new DOMRect());
+  const bar = document.createElement("div");
+  bar.className = "em-review-tabs";
+  scroller.prepend(bar);
+  vi.spyOn(bar, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 50, 300, barHeight));
+  const anchor = findAnchor(scroller, '[id^="block-"]');
+  expect(anchor).toEqual({ id: "block-first", fraction: 0, gap: 0.3 });
+  if (!anchor) throw new Error("Missing anchor");
+  tops["block-first"] += 200;
+  scroller.scrollTop = 17;
+  expect(applyAnchor(scroller, anchor, undefined, '[id^="block-"]')).toBe(120);
+  expect(findAnchor(scroller, '[id^="block-"]')).toEqual(anchor);
+});
+
+test.each([0, 40])("a gap after the last anchor round-trips after resizing with a %s px sticky bar", (barHeight) => {
+  const tops = { "block-last": 200 + barHeight, "block-hidden": 1000 };
+  const scroller = scene(tops, 500);
+  let scrollHeight = 1600;
+  Object.defineProperty(scroller, "scrollHeight", { get: () => scrollHeight });
+  Object.defineProperty(scroller, "clientHeight", { value: 500 });
+  vi.mocked(scroller.children[1]?.getBoundingClientRect as () => DOMRect).mockReturnValue(new DOMRect());
+  const bar = document.createElement("div");
+  bar.className = "em-review-tabs";
+  scroller.prepend(bar);
+  vi.spyOn(bar, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 50, 300, barHeight));
+  const anchor = findAnchor(scroller, '[id^="block-"]');
+  expect(anchor).toEqual({ id: "block-last", fraction: 1, gap: 0.25 });
+  if (!anchor) throw new Error("Missing anchor");
+  tops["block-last"] += 200;
+  scrollHeight += 600;
+  scroller.scrollTop = 17;
+  expect(applyAnchor(scroller, anchor, undefined, '[id^="block-"]')).toBe(800);
+  expect(findAnchor(scroller, '[id^="block-"]')).toEqual(anchor);
+});
+
+test.each([0, 1])("a stored fraction %s without a gap still restores the element edge", (fraction) => {
+  localStorage.setItem(readingKey, JSON.stringify({ old: { id: "block-a", fraction, at: 1 } }));
+  const anchor = loadReadingPosition("old");
+  expect(anchor).toEqual({ id: "block-a", fraction });
+  if (!anchor) throw new Error("Missing anchor");
+  const scroller = scene({ "block-a": 100 }, 30);
+  Object.defineProperty(scroller, "scrollHeight", { value: 1500 });
+  Object.defineProperty(scroller, "clientHeight", { value: 500 });
+  expect(applyAnchor(scroller, anchor, undefined, '[id^="block-"]')).toBe(100 + fraction * 100);
+});
+
+test("a gap restore skips hidden anchors", () => {
+  const scroller = scene({ "block-a": 0, "block-hidden": 150, "block-b": 300 }, 0);
+  vi.mocked(scroller.children[1]?.getBoundingClientRect as () => DOMRect).mockReturnValue(new DOMRect());
+  const anchor = { id: "block-a", fraction: 1, gap: 0.25 };
+  expect(applyAnchor(scroller, anchor, undefined, '[id^="block-"]')).toBe(150);
+  expect(findAnchor(scroller, '[id^="block-"]')).toEqual(anchor);
+});
+
+test.each([undefined, ".missing", "#block-b"])(
+  "a gap without its anchor in selector %s falls back to the bottom",
+  (selector) => {
+    const scroller = scene({ "block-a": 0, "block-b": 300 }, 0);
+    Object.defineProperty(scroller, "scrollHeight", { value: 1500 });
+    Object.defineProperty(scroller, "clientHeight", { value: 500 });
+    expect(applyAnchor(scroller, { id: "block-a", fraction: 1, gap: 0.5 }, undefined, selector)).toBe(100);
+  },
+);
+
+test("a gap after the last anchor falls back to its bottom when the content ends sooner", () => {
+  const scroller = scene({ "block-a": 400 }, 0);
+  Object.defineProperty(scroller, "scrollHeight", { value: 800 });
+  Object.defineProperty(scroller, "clientHeight", { value: 500 });
+  expect(applyAnchor(scroller, { id: "block-a", fraction: 1, gap: 0.5 }, undefined, '[id^="block-"]')).toBe(500);
+});
+
+test("gap anchors round-trip and clamp without changing old entries", () => {
+  const old = { id: "block-old", fraction: 0.25 };
+  localStorage.setItem(readingKey, JSON.stringify({ old: { ...old, at: 1 } }));
+  const anchor = { id: "block-a", fraction: 1, gap: 0.25 };
+  saveReadingPosition("gap", anchor);
+  expect(loadReadingPosition("gap")).toEqual(anchor);
+  expect(loadReadingPosition("old")).toEqual(old);
+  const scroller = scene({ "block-old": 0, "block-a": 200 }, 0);
+  expect(applyAnchor(scroller, loadReadingPosition("old") ?? old)).toBe(25);
+  saveReadingPosition("high", { ...anchor, gap: 2 });
+  saveReadingPosition("low", { ...anchor, gap: -1 });
+  expect(loadReadingPosition("high")).toEqual({ ...anchor, gap: 1 });
+  expect(loadReadingPosition("low")).toEqual({ ...anchor, gap: 0 });
+});
+
+test.each([-0.1, 1.1, "0.5", null])("stored gap %s drops only the invalid entry", (gap) => {
+  localStorage.setItem(
+    readingKey,
+    JSON.stringify({
+      bad: { id: "block-a", fraction: 1, gap, at: 1 },
+      good: { id: "block-b", fraction: 0.5, at: 1 },
+    }),
+  );
+  expect(loadReadingPosition("bad")).toBeUndefined();
+  expect(loadReadingPosition("good")).toEqual({ id: "block-b", fraction: 0.5 });
+});
+
+test("a gap search still reads O(log n) rects", () => {
+  const tops = Object.fromEntries(Array.from({ length: 512 }, (_, index) => [`block-${index}`, index * 106]));
+  const scroller = scene(tops, 300 * 106 + 103);
+  expect(findAnchor(scroller, '[id^="block-"]')).toEqual({ id: "block-300", fraction: 1, gap: 0.5 });
+  const reads = Array.from(scroller.children).reduce(
+    (count, element) => count + vi.mocked(element.getBoundingClientRect).mock.calls.length,
+    0,
+  );
+  expect(reads).toBeLessThan(20);
 });
