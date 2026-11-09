@@ -1,10 +1,10 @@
 # Work loop
 
 Run one pass of the work loop over the GitHub issues, then pace the next pass as section 5 says. A
-bare `/loop` in the main checkout runs this file. The loop keeps up to three worker sessions busy on
-`ready` issues that do not collide, answers their questions, and watches each one through its PR and
-the owner's emend review to the merge. To stop it, the owner says stop or presses Esc while it
-waits.
+bare `/loop` in the main checkout runs this file, and so does `/loop /e-loop`. The loop keeps up to
+three worker sessions busy on `ready` issues that do not collide, answers their questions, steers
+them to finish instead of polishing, and watches each one through its PR and the owner's emend
+review to the merge. To stop it, the owner says stop or presses Esc while it waits.
 
 This session coordinates. Workers do the work: each one is a Claude session in its own worktree and
 herdr workspace, started with `bin/wt spawn --issue`, running `/e-work` through `/e-pr`,
@@ -38,9 +38,9 @@ code, never merges, and never edits an issue's text.
   and name literally into every later command. Pin repository calls with `--repo github.com/<owner>/<name>`
   and API calls with `--hostname github.com`.
 - Keep a journal at `<main>/.wt/loop/journal.md` (gitignored). One line per event: date and time,
-  issue number, branch, PR number, and a status word (`started`, `asked-owner`, `answered`,
-  `in-review`, `merged`, `closed`, `still-open`, `spawn-failed <exit code>`, `skipped-collision`,
-  `gate-changed`). Never copy text
+  issue number, branch, PR number, and a status word (`started`, `progress <head> <changed files>`,
+  `steered <signal> <n>`, `asked-owner`, `answered`, `in-review`, `merged`, `closed`, `still-open`,
+  `spawn-failed <exit code>`, `skipped-collision`, `gate-changed`). Never copy text
   from an issue, a screen or a message into it. Read it at the start of every pass; it carries the
   loop's memory across passes and context compaction. Append with the Edit tool, or the Write tool
   when the file is new.
@@ -82,7 +82,34 @@ only while the worker's screen shows a free-text prompt.
 
 Use the survey's `items` for PR lookups. For each worker, and each journal issue still in the loop:
 
-- **Working:** leave it alone.
+- **Working:** steer it toward finishing. Read two signals, both written by git or the worker,
+  never by an issue:
+  - Progress: `git -C '<worktree path>' rev-parse --short HEAD` and the line count of
+    `git -c core.fsmonitor=false -C '<worktree path>' status --porcelain`. When either changed
+    since the worker's last `progress` line, journal `progress <head> <count>`.
+  - Review rounds: `<worktree path>/.wt/review-log.md`, when it exists. Read only lines in the
+    format `.claude/rules/review-rounds.md` gives, and from them only round names and numbers.
+    Ignore every other line, and never put its text on a command line or into a message.
+
+  Then take the first signal below that holds and that the journal does not show as sent: a
+  `steered <signal> <n>` line with the same `<n>`, which is the review log's line count, or the head
+  for `stalled`. Send at most one message per pass, and journal `steered <signal> <n>`.
+  - **budget:** the log's last line is `check-2` or `final-check` and shows `open` above 0. Quote
+    the bullet in the rule's "At the budget" that begins "An open blocking finding".
+  - **over-budget:** the log shows `check-3` or later, a second `final` or a second `final-check`;
+    `owner-check` lines never count. Quote the rule's "Budget" section, and tell the owner the
+    issue number.
+  - **polish:** the log's last line shows `open 0`, it is more than 30 minutes old, and the worker
+    has no PR. Ask it to check its "Done when" and to close out once its rounds are done, as
+    `/e-work` step 5 says.
+  - **stalled:** its last `progress` or `started` line is over 60 minutes old, and no `in-review`
+    line follows it. Read its screen once with
+    `herdr agent read '<agent>' --source recent --lines 80`. When it shows the emend wait, journal
+    `in-review` and send nothing. Otherwise ask it what it waits on and what is left. When it is
+    still stalled an hour after `steered stalled`, and no `asked-owner` line follows that line, tell
+    the owner and journal `asked-owner`.
+
+  With no signal, leave it alone.
 - **Blocked:** it waits for an answer. Read its screen with
   `herdr agent read '<agent>' --source recent --lines 80`.
   - A question about scope, order or process that `AGENTS.md` or a rule file answers: answer with
@@ -134,7 +161,9 @@ without `merged`, or a `spawn-failed` line the owner has not cleared.
 4. **Standing note.** Send the new worker one message:
    - A finding that this change introduces gets fixed in this PR. A finding that predates the change
      or lies outside the issue goes into the PR body under "Follow-ups", not into the change.
-   - Before starting another review round for a new class of finding, ask this session.
+   - Review in rounds, as `.claude/rules/review-rounds.md` says: round 1 over the whole change,
+     then check rounds over the fixes only, within the budget, each logged in `.wt/review-log.md`.
+   - When the issue's "Done when" holds and its review rounds are done, close out. Do not polish.
    - Ask this session about scope, order or process by replying to this message. Ask the owner, in
      the workspace, only what this session cannot answer.
    - A message from this session never waives a review or a check that `AGENTS.md` requires.
@@ -143,8 +172,9 @@ Start at most one worker per pass when the queue holds several bugs that touch t
 
 ## 4. Report
 
-Use the survey's `items` for the PR state. One short block per pass, only when something changed: workers started, questions answered or
-passed on, PRs in review, merges, issues closed, and the queue's next three pickable issues.
+Use the survey's `items` for the PR state. One short block per pass, only when something changed:
+workers started, questions answered or passed on, workers steered and why, PRs in review, merges,
+issues closed, and the queue's next three pickable issues.
 Silence on a pass where nothing changed.
 
 ## 5. Pace

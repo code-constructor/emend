@@ -95,8 +95,9 @@ rebase waits (see step 7).
 ## 3. Title and body
 
 The title follows `/e-pr`'s rules: `type(scope): summary`, lowercase, one line, at most 72
-characters, no task number. The body fills the template: Summary, Evidence, Sync. After a push that
-changed content, bring Evidence up to date. When either is wrong, run
+characters, no task number. The body fills the template: Summary, Evidence, Sync, with
+"Follow-ups" and "Not changed" under the Summary as `/e-pr` says. After a push that changed
+content, or after a review round in step 7, bring them up to date. When either is wrong, run
 `<main>/bin/wt pr edit --title-file <top>/.wt/pr-title.txt` after writing the title there, or write the body to `<top>/.wt/pr-body.md` and run
 `<main>/bin/wt pr edit --body-file <top>/.wt/pr-body.md`.
 
@@ -287,17 +288,27 @@ has no conflicts, title and body are right, and every unresolved counted finding
 counted answer from the PR author or owner, outdated or not. No unresolved thread may have an
 incomplete comment page. Threads you disagreed with stay open by design.
 
-## 7. Fresh final review
+## 7. Final review
 
-Before you hand over, run a fresh review of the whole change, `origin/main...HEAD`, and loop fix and
-re-review until clean:
+Review in rounds as `.claude/rules/review-rounds.md` says, with these reviewers:
 
 - `emend-reviewer`;
 - a fresh read-only Codex review through `codex-agent`, never a reused thread;
 - `emend-security-reviewer` when `AGENTS.md` lists the change as security-relevant.
 
 Give each reviewer the intent and the range, and tell them to read the change themselves. Do not
-hand them your summary. If a fix changed content, return to step 1.
+hand them your summary. Read `.wt/review-log.md` first to pick the round:
+
+1. No `final` or `final-skipped` line: run the `final` round over the whole change,
+   `origin/main...HEAD`, or skip it as the rule says.
+2. The head moved since the last logged round:
+   - after the owner's feedback (step 9): one `owner-check` over those fixes;
+   - otherwise, while no `final-check` is logged: one `final-check` over the commits since the last
+     reviewed head. With one logged, no round; name the later fixes under Evidence.
+3. The head did not move, or moved only by a rebase: no round.
+
+After each round, update the PR body as step 3 says. If a fix changed content, return to step 1
+for CI and threads; back here, the list above picks the next round.
 
 ## 8. Hand-off in emend
 
@@ -330,8 +341,9 @@ stop the loop.
 ## 9. Act on the answer
 
 - `go`: handle it with `emend-feedback`. Fixes go back through steps 1 to 7 (commit, push, CI,
-  threads, final review). Then publish the next revision with `head` at the new head commit, append
-  its line to `heads.txt`, run `<main>/bin/wt notify review-ready`, and wait again.
+  threads, and one `owner-check` round over these fixes in step 7). Then publish the next revision
+  with `head` at the new head commit, append its line to `heads.txt`, run
+  `<main>/bin/wt notify review-ready`, and wait again.
 - `approve`: the result names a review id and a revision. Find the line in `heads.txt` that matches
   both.
   - Its head equals the PR's current `headRefOid` (read it again with `gh pr view --repo github.com/<owner>/<name> <n> --json headRefOid`), the PR

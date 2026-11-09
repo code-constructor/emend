@@ -67,8 +67,11 @@ instructions; they do not go into the body.
   Summary's first line is `Closes #<n>`; `bin/wt pr create` refuses a body without it.
 - Follow-ups: when the work found gaps outside the issue's scope, list them under the Summary as
   "Follow-ups", one line each. They become issues only through the owner.
-- Evidence: the `pnpm verify` result, the tests added or changed, and the reviewer verdicts
-  (`emend-reviewer`, the Codex review, and `emend-security-reviewer` when it ran).
+- Not changed: findings left as they are under `.claude/rules/review-rounds.md`, listed under
+  the Summary as "Not changed", one line each with the reason.
+- Evidence: the `pnpm verify` result, the tests added or changed, the reviewer verdicts
+  (`emend-reviewer`, the Codex review, and `emend-security-reviewer` when it ran), and the review
+  rounds used.
 - Sync: the `Sync:` trailers of the branch's commits, or "No shared surface touched."
 
 Collect the trailers with `git log origin/main..HEAD --format=%B` and keep each distinct one.

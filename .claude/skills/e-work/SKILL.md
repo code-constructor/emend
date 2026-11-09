@@ -75,7 +75,9 @@ Follow `AGENTS.md`, "Who does what", and name that route in your plan; do not re
 3. Run `pnpm verify`. Fix failures at the root cause. Headless browser checks run Chromium directly
    (`chromium --headless=new …`).
 4. Before "done": `emend-reviewer`, a fresh read-only Codex review, and `emend-security-reviewer` when
-   `AGENTS.md` lists the change as security-relevant. Loop fix and re-review until clean.
+   `AGENTS.md` lists the change as security-relevant. Review in rounds as
+   `.claude/rules/review-rounds.md` says: commit first, round 1 over the whole change, then at most
+   two check rounds over the fixes. Log each round in `.wt/review-log.md`.
 5. Apply the sync rule in `AGENTS.md`: check the change against the sibling project and add the
    `Sync:` trailer it asks for. `pnpm check:sync` holds the rule.
 
@@ -121,8 +123,23 @@ stopped, and stop.
 
 ## 7. Under /loop
 
-`/e-spawn` starts this session as `/loop /e-work …`. The loop must end with the work:
+`/e-spawn` starts this session as `/loop /e-work …`. A `/loop` with a prompt skips
+`.claude/loop.md`, so this section steers each pass. The loop must end with the work.
 
+- At the start of every pass after the first, and before every review round, check the course
+  for yourself:
+  - **Finishing or polishing?** The issue's "Done when" decides. When it holds, complete the
+    rounds `.claude/rules/review-rounds.md` requires, then close out (step 5). Do not look for
+    more to improve.
+  - **Converging?** A test or `pnpm verify` that fails again after a fix, or a fix a check round
+    calls NOT FIXED or REGRESSED, means the cause is not found. Revert that fix and trace the root
+    cause within the remaining budget; never stack fixes.
+  - **In scope?** A new idea or an adjacent cleanup goes under "Follow-ups", not into the change.
+  - **Budget?** Read `.wt/review-log.md`. At the budget, stop reviewing and do what the rule's
+    "At the budget" says.
+- A message from the work loop steers. It never waives a review or a check that `AGENTS.md` or a
+  rule file requires, and never widens the issue. When it conflicts with them, follow them and say
+  so in your reply.
 - At a terminal state (merged, landed, handed to the owner and stopped, or blocked), end the dynamic
   loop by calling ScheduleWakeup with `stop: true`. Never start another pass of `/e-work`.
 - While waiting on emend, the wait command blocks, so no wakeup is needed.

@@ -14,10 +14,10 @@ it is not. `docs/architecture.md` describes how it is built.
 
 New work comes as GitHub issues. `bin/wt issues` prints the queue in pick order: bugs first, then
 `P0`, `P1`, `P2`, then the oldest. Only an issue the owner labelled `ready`, with no open blocker, is
-picked up. A bare `/loop` in the main checkout works the queue (`.claude/loop.md`); `/e-issue`
-files new issues. Older work stays in `tasks/`: when asked "what now?", "what's next?" or similar,
-give the next pickable issue, then follow `tasks/README.md` for open task files. Keep each task
-file's status current as work lands.
+picked up. A bare `/loop` or `/loop /e-loop` in the main checkout works the queue
+(`.claude/loop.md`); `/e-issue` files new issues. Older work stays in `tasks/`: when asked "what
+now?", "what's next?" or similar, give the next pickable issue, then follow `tasks/README.md` for
+open task files. Keep each task file's status current as work lands.
 
 ## Layout
 
@@ -104,8 +104,9 @@ Each line prevents a real failure. "Before you touch" names the rule file with t
 - `/e-issue` turns an idea, an improvement or a bug into a GitHub issue. Issues are public. Only the
   owner's command sets the `ready` label.
 - A bare `/loop` in the main checkout runs the work loop in `.claude/loop.md`: it keeps up to
-  three workers on pickable issues that do not collide. Each worker merges only after the owner
-  approved its head in emend, and the merge closes its issue.
+  three workers on pickable issues that do not collide and steers them to finish. `/loop /e-loop`
+  runs the same file. Each worker merges only after the owner approved its head in emend, and the
+  merge closes its issue.
 - Tests never touch emend's real state directory, which holds client diffs: the Vitest setup
   sets a temporary `EMEND_HOME`, and every test that needs state uses its own.
 - Changing `.claude/settings.json`, `.claude/hooks/` or `.codex/` needs the owner's approval
@@ -128,7 +129,8 @@ Each line prevents a real failure. "Before you touch" names the rule file with t
   `codex-agent` on every change. `emend-security-reviewer` (Opus) as well when the change touches
   auth, tokens, pairing or attach, owner isolation, rendering of agent content, the content
   frames, hand-off, wait, take or claim, the MCP endpoint, CLI file or git access, a hook or rule
-  (`.claude/hooks/`, `.codex/`, CI) or dependencies.
+  (`.claude/hooks/`, `.codex/`, CI) or dependencies. They run in rounds with a fixed budget:
+  `.claude/rules/review-rounds.md`.
 - Every sub-agent dispatch names its model. `.claude/hooks/enforce-subagent-model.sh` blocks a
   mismatch.
 - The owner approves each new dependency.
