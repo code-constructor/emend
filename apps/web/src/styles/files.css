@@ -111,12 +111,6 @@
     background: var(--fg-2);
     border-color: var(--fg-2);
   }
-  .em-viewed-mark[data-stale] .em-viewed-mark__box {
-    border-style: dashed;
-    border-color: var(--changed-line);
-    color: var(--changed-fg);
-    background: none;
-  }
   .em-viewed-mark__stale {
     color: var(--changed-fg);
   }
@@ -165,6 +159,9 @@
     }
     .em-viewed-mark {
       min-width: 40px;
+    }
+    .em-viewed-mark[data-stale] .em-viewed-mark__label {
+      display: none;
     }
   }
 }
