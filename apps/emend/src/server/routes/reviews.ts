@@ -1,4 +1,5 @@
 import {
+  APPROVED_ACTIVE_HOURS,
   InboxList,
   LIMITS,
   PublishMeta,
@@ -22,6 +23,7 @@ import {
   max,
   ne,
   not,
+  notInArray,
   or,
   type SQL,
   sql,
@@ -68,6 +70,9 @@ async function inbox(ownerId: string, q: Queries, deps: AppDeps, reviewId?: stri
     .groupBy(revisions.reviewId)
     .as("latest");
   const now = deps.now();
+  const serverTime = new Date(now).toISOString();
+  const approvedWindow = APPROVED_ACTIVE_HOURS * 3_600_000;
+  const cutoff = now - approvedWindow;
   const select = (where: SQL | undefined, order: SQL[], limit: number) =>
     q
       .select({
@@ -86,25 +91,56 @@ async function inbox(ownerId: string, q: Queries, deps: AppDeps, reviewId?: stri
       .all();
   const asleep = and(isNotNull(reviews.snoozedAt), or(isNull(reviews.snoozedUntil), gt(reviews.snoozedUntil, now)));
   const isOpen = eq(reviews.state, "open");
-  // The cap applies to each list: Active and Done by update, Snoozed by wake time.
+  const recentlyApproved = and(
+    eq(reviews.state, "approved"),
+    isNotNull(reviews.approvedAt),
+    gt(reviews.approvedAt, cutoff),
+  );
+  const activity = (review: typeof reviews.$inferSelect) =>
+    review.state === "open" ? Math.max(review.updatedAt, review.snoozedUntil ?? 0) : review.updatedAt;
+  // Open reviews take Active's capped places first; display order still follows activity.
+  const active =
+    reviewId === undefined
+      ? // Only open reviews count a passed timed snooze as an update at its wake time.
+        (
+          await select(
+            or(and(isOpen, not(asleep as SQL)), recentlyApproved),
+            [
+              asc(eq(reviews.state, "approved")),
+              sql`case when ${isOpen} then max(${reviews.updatedAt}, coalesce(${reviews.snoozedUntil}, 0)) else ${reviews.updatedAt} end desc`,
+              asc(reviews.id),
+            ],
+            LIMITS.inboxItems,
+          )
+        ).sort(
+          (a, b) =>
+            activity(b.review) - activity(a.review) ||
+            (a.review.id < b.review.id ? -1 : a.review.id > b.review.id ? 1 : 0),
+        )
+      : [];
+  const activeApprovedIds = new Set(
+    active.filter(({ review }) => review.state === "approved").map(({ review }) => review.id),
+  );
   const rows =
     reviewId === undefined
       ? [
-          // A timed snooze that has passed counts as an update at its wake time.
-          ...(await select(
-            and(isOpen, not(asleep as SQL)),
-            [sql`max(${reviews.updatedAt}, coalesce(${reviews.snoozedUntil}, 0)) desc`, asc(reviews.id)],
-            LIMITS.inboxItems,
-          )),
+          ...active,
           ...(await select(
             and(isOpen, asleep),
             [asc(sql`${reviews.snoozedUntil} is null`), asc(reviews.snoozedUntil), asc(reviews.id)],
             LIMITS.inboxItems,
           )),
-          ...(await select(ne(reviews.state, "open"), [desc(reviews.updatedAt), asc(reviews.id)], LIMITS.inboxItems)),
+          ...(await select(
+            and(
+              ne(reviews.state, "open"),
+              activeApprovedIds.size ? notInArray(reviews.id, [...activeApprovedIds]) : undefined,
+            ),
+            [desc(reviews.updatedAt), asc(reviews.id)],
+            LIMITS.inboxItems,
+          )),
         ]
       : await select(eq(reviews.id, reviewId), [asc(reviews.id)], 1);
-  if (!rows.length) return [];
+  if (!rows.length) return { items: [], serverTime };
   const ids = rows.map((row) => row.review.id);
   const drafts = await q
     .select({ id: comments.reviewId, count: count() })
@@ -198,6 +234,12 @@ async function inbox(ownerId: string, q: Queries, deps: AppDeps, reviewId?: stri
   const waitingIds = new Set(directWaits.map((row) => row.reviewId));
   const items = rows.map(({ review, origin, repo, newestRevision }) => {
     const snoozed = review.state === "open" && snoozeInEffect(review, now);
+    const activeUntil =
+      review.state === "approved" &&
+      review.approvedAt !== null &&
+      (reviewId === undefined ? activeApprovedIds.has(review.id) : review.approvedAt > cutoff)
+        ? new Date(review.approvedAt + approvedWindow).toISOString()
+        : null;
     return {
       id: review.id,
       title: review.title,
@@ -213,8 +255,14 @@ async function inbox(ownerId: string, q: Queries, deps: AppDeps, reviewId?: stri
       updatedAt: new Date(review.updatedAt).toISOString(),
       movedTo: review.movedToUrl,
       importedAt: review.importedAt === null ? null : new Date(review.importedAt).toISOString(),
-      list: review.state !== "open" ? ("done" as const) : snoozed ? ("snoozed" as const) : ("active" as const),
+      list:
+        review.state === "settled" || (review.state === "approved" && activeUntil === null)
+          ? ("done" as const)
+          : snoozed
+            ? ("snoozed" as const)
+            : ("active" as const),
       snoozed,
+      activeUntil,
       snoozedUntil: snoozed && review.snoozedUntil !== null ? new Date(review.snoozedUntil).toISOString() : null,
       releasedAt: review.releasedAt === null ? null : new Date(review.releasedAt).toISOString(),
       kind: publishIds.has(review.id) ? ("publish" as const) : ("review" as const),
@@ -222,11 +270,14 @@ async function inbox(ownerId: string, q: Queries, deps: AppDeps, reviewId?: stri
     };
   });
   // Inside Active, a review with a waiting agent comes first; the rows already run newest first.
-  return [
-    ...items.filter((item) => item.list === "active" && item.agentWaiting),
-    ...items.filter((item) => item.list === "active" && !item.agentWaiting),
-    ...items.filter((item) => item.list !== "active"),
-  ];
+  return {
+    serverTime,
+    items: [
+      ...items.filter((item) => item.list === "active" && item.agentWaiting),
+      ...items.filter((item) => item.list === "active" && !item.agentWaiting),
+      ...items.filter((item) => item.list !== "active"),
+    ],
+  };
 }
 
 async function revisionView(ownerId: string, q: Queries, deps: AppDeps, reviewId: string, seq: number) {
@@ -493,14 +544,16 @@ async function revisionView(ownerId: string, q: Queries, deps: AppDeps, reviewId
 export function reviewRoutes(app: Hono<AppEnv>, deps: AppDeps) {
   app.get("/api/v1/reviews", async (c) => {
     const ownerId = c.get("principal").ownerId;
-    const items = await deps.db.read((q) => inbox(ownerId, q, deps));
-    return c.json(InboxList.parse({ items }));
+    const list = await deps.db.read((q) => inbox(ownerId, q, deps));
+    return c.json(InboxList.parse(list));
   });
   app.get("/api/v1/reviews/:id", async (c) => {
     const ownerId = c.get("principal").ownerId;
     const reviewId = c.req.param("id");
     const view = await deps.db.read(async (q) => {
-      const [item] = await inbox(ownerId, q, deps, reviewId);
+      const {
+        items: [item],
+      } = await inbox(ownerId, q, deps, reviewId);
       if (!item) throw new ApiError("unknown_review");
       const rows = await q
         .select({ seq: revisions.seq, createdAt: revisions.createdAt })

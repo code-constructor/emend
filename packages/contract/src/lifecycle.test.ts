@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
 import {
+  APPROVED_ACTIVE_HOURS,
   ERROR_STATUS,
   ImportResult,
   InboxItem,
@@ -32,10 +33,15 @@ const item = {
   list: "active",
   snoozed: false,
   snoozedUntil: null,
+  activeUntil: null,
   releasedAt: null,
   pickedUpAt: null,
   kind: "review",
 };
+
+test("approvals stay Active for a fixed 12 hours", () => {
+  expect(APPROVED_ACTIVE_HOURS).toBe(12);
+});
 
 test("snooze takes exactly one strict end condition", () => {
   expect(SnoozeRequest.parse({ until: "2026-11-05T09:00:00.000Z" })).toEqual({ until: "2026-11-05T09:00:00.000Z" });
@@ -78,16 +84,31 @@ test("the inbox item carries its list, snooze and release fields", () => {
   const snoozed = { ...item, list: "snoozed", snoozed: true, snoozedUntil: "2026-11-05T09:00:00.000Z" };
   expect(InboxItem.parse(snoozed)).toEqual(snoozed);
   expect(InboxItem.safeParse({ ...item, list: "pinned" }).success).toBe(false);
-  for (const field of ["list", "snoozed", "snoozedUntil", "releasedAt"]) {
+  for (const field of ["list", "snoozed", "snoozedUntil", "activeUntil", "releasedAt"]) {
     const { [field]: _, ...rest } = item as Record<string, unknown>;
     expect(InboxItem.safeParse(rest).success).toBe(false);
   }
 });
 
+test("activeUntil is a required nullable ISO datetime", () => {
+  for (const activeUntil of [null, "2026-11-05T09:00:00.000Z"])
+    expect(InboxItem.parse({ ...item, activeUntil }).activeUntil).toBe(activeUntil);
+  for (const activeUntil of [undefined, "tomorrow", "2026-11-05", 0])
+    expect(InboxItem.safeParse({ ...item, activeUntil }).success).toBe(false);
+});
+
+test("the inbox requires a server clock as an ISO datetime", () => {
+  expect(InboxList.safeParse({ items: [] }).success).toBe(false);
+  for (const serverTime of [null, "tomorrow", "2026-11-04", 0])
+    expect(InboxList.safeParse({ items: [], serverTime }).success).toBe(false);
+  const list = { items: [], serverTime: "2026-11-04T10:00:00.000Z" };
+  expect(InboxList.parse(list)).toEqual(list);
+});
+
 test("the inbox cap applies per list", () => {
   const items = Array.from({ length: LIMITS.inboxItems * 3 }, () => item);
-  expect(InboxList.safeParse({ items }).success).toBe(true);
-  expect(InboxList.safeParse({ items: [...items, item] }).success).toBe(false);
+  expect(InboxList.safeParse({ serverTime: "2026-11-04T10:00:00.000Z", items }).success).toBe(true);
+  expect(InboxList.safeParse({ serverTime: "2026-11-04T10:00:00.000Z", items: [...items, item] }).success).toBe(false);
 });
 
 test("lifecycle events carry ids and a revision only", () => {

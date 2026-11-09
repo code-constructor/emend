@@ -1,7 +1,8 @@
+import type { InboxItem } from "@emend/contract";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, PanelLeftClose, Search } from "lucide-react";
 import { useEffect, useState } from "react";
-import { inboxQuery } from "../api/queries.ts";
+import { inboxQuery, serverNow } from "../api/queries.ts";
 import { needsAttention, ReviewRow } from "../components/inbox/ReviewRow.tsx";
 import { AppFrame } from "../components/layout/AppFrame.tsx";
 import { Button } from "../components/ui/Button.tsx";
@@ -19,6 +20,10 @@ const lists = [
   { list: "snoozed", title: "Snoozed" },
   { list: "done", title: "Done" },
 ] as const;
+
+function effectiveList(review: InboxItem, now: number) {
+  return review.activeUntil !== null && new Date(review.activeUntil).getTime() <= now ? "done" : review.list;
+}
 
 type Kind = "" | "review" | "publish";
 // A per-browser convenience: the inbox unmounts whenever a review opens.
@@ -63,17 +68,26 @@ export function Inbox({
     return () => window.clearInterval(interval);
   }, []);
   const items = query.data?.items ?? [];
+  const wall = Date.now();
+  const estimate = query.data ? serverNow(query.data, wall) : wall;
+  const approvalWake = (review: InboxItem) =>
+    review.activeUntil === null ? null : new Date(wall + (Date.parse(review.activeUntil) - estimate)).toISOString();
   const client = useQueryClient();
-  // A timed snooze ends on the server without an event: ask again when one passes. Until the
-  // refetch lands the row says "waking up" instead of a time in the past.
+  // Snoozes and approval windows end without an event: ask again when either time passes.
+  // Until the refetch lands, a passed snooze reads "waking up".
   useWakeTimer(
-    items.map((review) => review.snoozedUntil),
+    items.flatMap((review) => [review.snoozedUntil, approvalWake(review)]),
     (passed) => {
       setNow(Date.now());
       void client.invalidateQueries({ queryKey: ["inbox"] });
-      for (const review of items)
-        if (review.snoozedUntil && passed.includes(review.snoozedUntil))
+      for (const review of items) {
+        const activeUntil = approvalWake(review);
+        if (
+          (review.snoozedUntil && passed.includes(review.snoozedUntil)) ||
+          (activeUntil && passed.includes(activeUntil))
+        )
           void client.invalidateQueries({ queryKey: ["review", review.id] });
+      }
     },
   );
   const origins = [...new Map(items.map(({ origin }) => [origin.id, origin])).values()].sort((a, b) =>
@@ -186,8 +200,13 @@ export function Inbox({
           items.length > 0 &&
           filtered.length > 0 &&
           lists.map(({ list, title }) => {
-            const rows = filtered.filter((review) => review.list === list);
-            const nothingActive = list === "active" && !items.some((review) => review.list === "active");
+            const rows = filtered.filter((review) => effectiveList(review, estimate) === list);
+            if (list === "done")
+              rows.sort(
+                (a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+              );
+            const nothingActive =
+              list === "active" && !items.some((review) => effectiveList(review, estimate) === "active");
             if (rows.length === 0 && !nothingActive) return null;
             // A filter that matches only Done rows would otherwise show nothing.
             const expanded = list !== "done" || doneOpen || needle !== "";
