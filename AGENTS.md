@@ -103,6 +103,9 @@ Each line prevents a real failure. "Before you touch" names the rule file with t
   `/e-merge-local`.
 - `/e-issue` turns an idea, an improvement or a bug into a GitHub issue. Issues are public. Only the
   owner's command sets the `ready` label.
+- A hook guards Bash and Monitor: issue and label writes ask in main and are refused in worktrees;
+  secret reads and guard, settings or git metadata edits are denied. It runs from main, so
+  fast-forward main to a hook change before rebasing worktrees onto it.
 - A bare `/loop` in the main checkout runs the work loop in `.claude/loop.md`: it keeps up to
   three workers on pickable issues that do not collide and steers them to finish. `/loop /e-loop`
   runs the same file. Each worker merges only after the owner approved its head in emend, and the
