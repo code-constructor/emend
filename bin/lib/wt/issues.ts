@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { Command, CommandTable } from "./command.ts";
 import { gh } from "./github.ts";
-import { hiddenMarkdownReason } from "./markdown.ts";
+import { BLANK_GLYPHS, hiddenMarkdownReason } from "./markdown.ts";
 import { type Registry, readRegistry } from "./registry.ts";
 import { gitTry, type Repo } from "./repo.ts";
 import {
@@ -344,7 +344,12 @@ function hasInvisibleText(text: string): boolean {
   const pictographic = (index: number) => /\p{Extended_Pictographic}/u.test(chars[index] ?? "");
   return chars.some((char, i) => {
     if (char === "\u200d") {
-      const before = chars[i - 1] === "\ufe0f" ? i - 2 : i - 1;
+      let before = chars[i - 1] === "\ufe0f" ? i - 2 : i - 1;
+      // A skin tone belongs to the preceding pictograph, including its selector.
+      if (/[\u{1f3fb}-\u{1f3ff}]/u.test(chars[before] ?? "")) {
+        before--;
+        if (chars[before] === "\ufe0f") before--;
+      }
       return !pictographic(before) || !pictographic(i + 1);
     }
     if (char === "\ufe0f") {
@@ -352,8 +357,18 @@ function hasInvisibleText(text: string): boolean {
       return !keycap && !pictographic(i - 1);
     }
     if (char === "\n" || char === "\t") return false;
+    if (BLANK_GLYPHS.test(char)) return true;
+    if (/\p{M}/u.test(char)) {
+      // Keycaps also take # or * as a base. Other enclosing marks and marks
+      // directly after an emoji selector can draw misleading boxes.
+      const base = chars[i - 1] === "\ufe0f" ? i - 2 : i - 1;
+      const keycap = char === "\u20e3" && /^[0-9#*]$/u.test(chars[base] ?? "");
+      if (!keycap && /\p{Me}/u.test(char)) return true;
+      if (!keycap && chars[i - 1] === "\ufe0f") return true;
+      if (!keycap && !/[\p{L}\p{N}\p{M}]/u.test(chars[i - 1] ?? "")) return true;
+    }
     // biome-ignore lint/suspicious/noMisleadingCharacterClass: these ranges reject individual selectors and tags
-    return /[\p{Default_Ignorable_Code_Point}\p{Cf}\p{Co}\p{Cn}\p{Cc}\u{e0000}-\u{e007f}\ufe00-\ufe0f\u{e0100}-\u{e01ef}]/u.test(
+    return /[\p{Default_Ignorable_Code_Point}\p{Cf}\p{Co}\p{Cn}\p{Cc}\u2028\u2029\u{e0000}-\u{e007f}\ufe00-\ufe0f\u{e0100}-\u{e01ef}]/u.test(
       char,
     );
   });

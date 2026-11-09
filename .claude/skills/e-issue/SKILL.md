@@ -83,10 +83,28 @@ owner's OK.
    This run refines that issue (step 7 edits it) instead of creating a new one. Keep its body: an
    edit replaces the whole body, so the new body carries the earlier text and every existing image.
    Write each kept image as its own line, `![Screenshot <k>](<its URL>)`, with the URL unchanged; an
-   image shown as an HTML `img` tag becomes such a line too. The queue refuses other alt text and
-   any HTML, and step 6 shows the change. Kept text passes step 5's public check too; step 6 shows anything you propose to
+   image shown as an HTML `img` tag becomes such a line too.
+   `<k>` is the image's 1-based position among the body's screenshot lines, in body order.
+   Count kept and new images together. The queue refuses any other number.
+   It also refuses other alt text and any HTML. Step 6 shows the change.
+   Kept text passes step 5's public check too; step 6 shows anything you propose to
    remove. Leave out invisible characters (zero-width and bidi controls, tag and private-use
-   characters): `bin/wt` refuses an issue that holds them. Tell the owner where they were.
+   characters, the Unicode line and paragraph separators, blank glyphs such as the braille blank,
+   combining marks with no letter or number before them, enclosing marks other than a keycap):
+   `bin/wt` refuses an issue that holds them. Emoji keep their joiners, skin tones, keycaps and
+   emoji selectors; tag sequences such as subdivision flags are refused. Write task boxes in ASCII
+   only, `- [ ]` and `- [x]`: a bracket group of one to three characters after text with no ASCII
+   letter is refused when that text or the group holds any non-ASCII character. Full-width and
+   CJK brackets, and math, other and modifier symbols (not currency, emoji or arrows), count as
+   brackets; only the first such group on a line is judged. This also refuses CJK citations such
+   as `参考[1]`, a line that starts with `[…]`, and lines that start like `★ 5 ★`, `2 × 3 × 4`,
+   `0 ≤ x ≤ 9`, `- (−1, −2)` or `20° 25°`; write such math after a word or in ASCII. Text inside
+   code blocks is exempt, so pasted tables with box-drawing lines are fine there. Start list items
+   with ASCII `-`, `*`, `+` or a number, followed by an ASCII space: a line that continues a list
+   item or quote and starts with a non-ASCII dash, punctuation mark, number or symbol followed by
+   any space, or with an ASCII marker followed by a non-ASCII space, is refused, such as
+   `— Author` under a quote, `… more` or `① b` under a list item. A box glyph such as `☐` after
+   `- ` passes but is not a task GitHub counts. Tell the owner where they were.
 4. Several topics in one input: list them, propose one issue per topic, and ask the owner to
    confirm the split before you go on.
 
@@ -162,6 +180,32 @@ Conventional Commits prefix and no issue number.
 
 **Body**, in this order. The text in angle brackets below is guidance to replace, never to copy:
 
+These list rules are stricter than the check in step 6; follow them as written.
+Number a list `1., 2., 3.` only when every numbered line in the body, code blocks included, starts at
+the left margin. If any is nested, quoted or indented, every numbered item in the body uses `1.`.
+A later flat list may count up again after a heading or a `---` line at the left margin, or after a
+blank line and a sentence at the left margin; otherwise use `1.` throughout. A numbered item with a
+checkbox uses `1.`. Write a checkbox right after its list marker and one space, on one line: `- [ ] text`,
+`- [x] text`. It uses lowercase `[x]`, and an empty box holds one space, never a tab or another space
+character. Never write a box without the space after the marker (`-[x]`), with a backslash anywhere
+in it (`\[x]`, `[x\]`), split over two lines, bare at the start of a line, or with anything but one
+plain space and text after its `]`. Inside a list, never wrap a line back to the left margin;
+continue it at the item's text column. Under a numbered item other than `1.`, a checklist is indented
+with spaces only, never quoted, starts at the item's text column, comes before any code block in that
+item and in the items before it in the same list, keeps its lines together with no blank or text line
+between them, and a nested checkbox's `-` sits under its parent's `[`, never inside a code block:
+
+```text
+2. Step
+   - [ ] Parent
+     - [ ] Child
+```
+
+A checklist that must follow a code block goes under a list numbered `1.` throughout.
+
+Never put four or more digits followed by `.` or `)` at the start of a line or right after a list
+marker or `>`; rewrap instead, even for `2025.`.
+
 ```markdown
 ## Why
 
@@ -234,9 +278,11 @@ is installed:
    comment may remain. Look at the copy itself; it is the file step 6 shows and step 7 uploads.
 
 Without `magick`, or when a check fails, describe the image in text and attach nothing. Always
-write the alt text yourself, so the file name never becomes it: exactly `Screenshot <k>`, where
-`<k>` numbers the images. The page hides alt text, so the description belongs in the
-"Screenshots" section, and the queue refuses any other alt text.
+write the alt text yourself, so the file name never becomes it: `Screenshot <k>`.
+`<k>` is the image's 1-based position among the body's screenshot lines, in body order.
+Count kept and new images together. The queue refuses any other number.
+An empty alt or plain `Screenshot` also passes; anything else is refused.
+The page hides alt text, so the description belongs in the "Screenshots" section.
 
 ## 6. Confirm
 
@@ -247,7 +293,8 @@ other issue. Point out every HTML comment, raw HTML tag, link reference definiti
 permalink in the body, above all in text kept from someone else: GitHub's page hides or expands
 them, but the worker reads them as written. `bin/wt issues` checks the raw body, code blocks and
 inline code included, and refuses an issue whose body holds anywhere:
-- `<`, so no HTML, no comment and no `<n>` placeholder;
+- `<`, so no HTML, no comment and no `<n>` placeholder, in code too: write a comparison or a
+  generic type in words ("less than", "a map from string to number");
 - `](` or `]:`, so no Markdown link, image or definition, except an attached screenshot line;
 - a character reference such as `&#8203;` or `&amp;`;
 - `$$`, `` $` `` or `` `$ ``, or two `$` in one paragraph, code blocks included: leave out shell
@@ -260,8 +307,29 @@ inline code included, and refuses an issue whose body holds anywhere:
 - `github.com/`, because GitHub turns an issue or PR address into `#n` and drops what follows it;
   write `#n` instead;
 - a line over 200 characters, or more than 16 spaces or tabs in a row;
-- after three or more backticks or tildes, anything but one common language word such as `ts`,
-  `sh`, `json` or `text`, so no mermaid or math fence and no words after the language.
+- after three or more backticks or tildes, anything but one of these words: `text`, `plaintext`,
+  `console`, `sh`, `bash`, `shell`, `zsh`, `diff`, `json`, `jsonc`, `yaml`, `yml`, `toml`, `ini`,
+  `md`, `markdown`, `ts`, `typescript`, `tsx`, `js`, `javascript`, `jsx`, `mjs`, `css`, `html`,
+  `xml`, `sql`, `python`, `py`, `ruby`, `rb`, `go`, `rust`, `rs`, `http`; for any other language
+  write no word, so no mermaid or math fence and no words after the language;
+- a code block with a language word and nothing in it whose fence line starts with at most three
+  spaces, since the page hides the word (write none anywhere); a fence line inside another fence can count as such a block, so show
+  fence examples without a language word;
+- many list numbers and checkboxes the Body rules above do not allow: a number that does not count
+  up as they say, one that starts with `0` or has four or more digits, a nested, quoted or indented
+  number with two or more digits, a numbered checkbox other than `1.`, an uppercase `[X]`, a box
+  written another way than the Body rules show, a checkbox on a later line of a numbered item other
+  than `1.` that is not in a checklist placed as the Body rules say, a checkbox after a code block
+  under a numbered item other than `1.` (until a heading or a `---` line at the left margin, or a
+  new `1.` item at that item's level or further left), or an
+  empty box on a line that also holds `[x]` or `[X]`;
+- a line, code blocks included, that starts with digits and one more character before a checkbox,
+  also after a list marker or `>`, as in `12 [ ] Pending` or `- 12 [ ] a`, other than `1.` or `1)`
+  and a space; put a word before the digits;
+- a checkbox GitHub shows as text, code or a heading: one indented four or more columns past the
+  item or quote it continues (code blocks included), one with a no-break or other non-ASCII space
+  before its marker, one four or more columns in after an empty list item and a blank line, and one
+  whose paragraph a `===`, `---` or lone `-` line further down turns into a heading.
 
 Other bare URLs, `#12` and `@name` still become links. Wrap lines at about 100 characters. Offer to remove whatever the queue refuses before
 `ready`, write none of it yourself, and write placeholders as plain words (`N`, "the issue number").

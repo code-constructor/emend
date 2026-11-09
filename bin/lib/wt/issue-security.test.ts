@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { stripTypeScriptTypes } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -130,6 +131,186 @@ for (const [name, character] of [
       const row = evaluate({ [field]: `Visible ${character} text` });
       assert.equal(row.status, "untrusted");
       assert.equal(row.reason, "invisible characters in the title or body");
+    });
+  }
+}
+
+async function invisibleCheckerMutating(mutations: readonly (readonly [string, string])[]) {
+  const source = readFileSync(new URL("./issues.ts", import.meta.url), "utf8");
+  const markdown = readFileSync(new URL("./markdown.ts", import.meta.url), "utf8");
+  const glyphs = /^export const BLANK_GLYPHS = .*;$/mu.exec(markdown)?.[0];
+  assert.ok(glyphs, "shared blank-glyph set");
+  const start = source.indexOf("function hasInvisibleText(");
+  const end = source.indexOf("\n/** The single eligibility", start);
+  assert.ok(start >= 0 && end > start);
+  let changed = `${glyphs}\n${source.slice(start, end)}`;
+  for (const [from, to] of mutations) {
+    const parts = changed.split(from);
+    assert.equal(parts.length, 2, "exactly one invisible-character mutation target");
+    changed = parts.join(to);
+  }
+  const mutated = stripTypeScriptTypes(`${changed}\nexport { hasInvisibleText };`);
+  const module = await import(`data:text/javascript;base64,${Buffer.from(mutated).toString("base64")}`);
+  return module.hasInvisibleText as (text: string) => boolean;
+}
+
+function invisibleCheckerWithout(escapedCharacter: string) {
+  return invisibleCheckerMutating([[escapedCharacter, ""]]);
+}
+
+const enclosingMarkGuard = String.raw`if (!keycap && /\p{Me}/u.test(char)) return true;`;
+const postSelectorMarkGuard = String.raw`if (!keycap && chars[i - 1] === "\ufe0f") return true;`;
+const markControls = ["1️⃣", "#️⃣", "*️⃣", "1⃣", "#⃣", "*⃣", "👩🏽‍💻", "🫱🏻‍🫲🏿", "a\u0301", "का", "1️⃣\u0336"];
+
+for (const [name, text] of [
+  ["F2a enclosing square", "- x\u20de Check"],
+  ["keycap on letter", "- a\u20e3 Check"],
+  ["enclosing circle", "- x\u20dd Check"],
+  ["enclosing circle without following text", "- x\u20dd"],
+] as const) {
+  for (const field of ["title", "body"]) {
+    test(`round 24 OP2a ${name} in ${field}`, async () => {
+      assert.equal(evaluate({ [field]: text }).reason, "invisible characters in the title or body");
+      const mutated = await invisibleCheckerMutating([[enclosingMarkGuard, ""]]);
+      assert.equal(mutated(text), false, "removing the enclosing-mark guard must release the witness");
+      for (const control of markControls) assert.equal(evaluate({ [field]: control }).status, "pickable", control);
+    });
+  }
+}
+
+for (const [name, text, enclosing] of [
+  ["Mn after selector", "- 😀\ufe0f\u0301 Do B", false],
+  ["Mc after selector", "- 😀\ufe0f\u093e Do B", false],
+  ["D13 enclosing square after selector", "- 😀\ufe0f\u20de Do B", true],
+  ["keycap on emoji after selector", "- 😀\ufe0f\u20e3 Do B", true],
+] as const) {
+  for (const field of ["title", "body"]) {
+    test(`round 24 OP2b ${name} in ${field}`, async () => {
+      assert.equal(evaluate({ [field]: text }).reason, "invisible characters in the title or body");
+      // Enclosing marks also trip OP2a, so both independent guards must be
+      // removed to release those witnesses. Mn/Mc isolate the selector rule.
+      const mutations: [string, string][] = [[postSelectorMarkGuard, ""]];
+      if (enclosing) mutations.push([enclosingMarkGuard, ""]);
+      const mutated = await invisibleCheckerMutating(mutations);
+      assert.equal(mutated(text), false, "removing the applicable mark guards must release the witness");
+      for (const control of markControls) assert.equal(evaluate({ [field]: control }).status, "pickable", control);
+    });
+  }
+}
+
+const khitanRefusals = [
+  ["W1-filler-lazy-second-box", "- [ ] Do A\n-\u{16fe4} [x] Do B"],
+  ["W2-filler-inside-box", "- [ \u{16fe4}] Check"],
+  ["W4-filler-after-ordered", "1.\u{16fe4} [x] Check"],
+  ["W6-filler-under-step2", "2. Step\n   -\u{16fe4} [ ] Check"],
+  ["W7-filler-x-in-box", "- [\u{16fe4}x] Check"],
+  ["W9-filler-prose", "Visible \u{16fe4} text"],
+  ["ER1 U+16FE4 padded", "- \u{16fe4}[x] Check"],
+  ["ER1 U+16FE4 adjacent", "-\u{16fe4}[x] Check"],
+] as const;
+
+// These witnesses exercise both parts of OP2; removing only one still leaves
+// the other refusal for a filler following punctuation or a space.
+const orphanMarkGuard = String.raw`if (!keycap && !/[\p{L}\p{N}\p{M}]/u.test(chars[i - 1] ?? "")) return true;`;
+for (const [name, text] of khitanRefusals) {
+  for (const field of ["title", "body"]) {
+    test(`round 22 OP2 ${name} in ${field}`, async () => {
+      assert.equal(evaluate({ [field]: text }).reason, "invisible characters in the title or body");
+      const mutated = await invisibleCheckerMutating([
+        [String.raw`\u{16fe4}`, ""],
+        [orphanMarkGuard, ""],
+      ]);
+      assert.equal(mutated(text), false, "removing OP2 must release the filler");
+    });
+  }
+}
+
+for (const [category, mark] of [
+  ["Mn", "\u0301"],
+  ["Mc", "\u093e"],
+  ["Me", "\u20dd"],
+]) {
+  for (const base of ["", "-", "[", "]", ".", " "]) {
+    for (const field of ["title", "body"]) {
+      test(`round 22 orphan ${category} after ${JSON.stringify(base)} in ${field}`, async () => {
+        const text = `${base}${mark}text`;
+        assert.equal(evaluate({ [field]: text }).reason, "invisible characters in the title or body");
+        const mutations: [string, string][] = [[orphanMarkGuard, ""]];
+        // OP2a now independently refuses every non-keycap Me, even orphaned.
+        if (category === "Me") mutations.push([enclosingMarkGuard, ""]);
+        const mutated = await invisibleCheckerMutating(mutations);
+        assert.equal(mutated(text), false, "removing the base check must release the mark");
+        for (const valid of ["a\u0301", "中\u0301", "1\u0301", "a\u0301\u0302", "#\u20e3", "*\ufe0f\u20e3", "❤️"])
+          assert.equal(evaluate({ [field]: valid }).status, "pickable", valid);
+      });
+    }
+  }
+}
+
+const skinToneEmoji = [
+  ["E1-skin-tone-zwj", "Done by \u{1f469}\u{1f3fd}\u200d\u{1f4bb} today"],
+  ["E11-skin-tone-handshake", "Hi \u{1faf1}\u{1f3fb}\u200d\u{1faf2}\u{1f3ff}"],
+  ["CX1 title wording", "Fix \u{1f469}\u{1f3fd}\u200d\u{1f4bb} support"],
+  ["E1 bare", "\u{1f469}\u{1f3fd}\u200d\u{1f4bb}"],
+  ["E11 bare", "\u{1faf1}\u{1f3fb}\u200d\u{1faf2}\u{1f3ff}"],
+] as const;
+
+for (const [name, text] of skinToneEmoji) {
+  for (const field of ["title", "body"]) {
+    test(`round 22 ${name} in ${field} keeps its visible joiner`, async () => {
+      const row = evaluate({ [field]: text });
+      assert.equal(row.status, "pickable");
+      if (field === "title") assert.equal(row.title, text);
+      const mutated = await invisibleCheckerMutating([
+        [String.raw`/[\u{1f3fb}-\u{1f3ff}]/u.test(chars[before] ?? "")`, "false"],
+      ]);
+      assert.equal(mutated(text), true, "ignoring the modifier must restore the false refusal");
+      // Emoji exceptions never authorize hidden tag letters, even in flags.
+      assert.equal(
+        evaluate({ [field]: "Flag \u{1f3f4}\u{e0067}\u{e0062}\u{e0065}\u{e006e}\u{e0067}\u{e007f}" }).reason,
+        "invisible characters in the title or body",
+      );
+      for (const malformed of ["x🏽‍💻", "🏽‍💻", "👩🏽🏿‍💻", "👩🏽‍x"])
+        assert.equal(evaluate({ [field]: malformed }).reason, "invisible characters in the title or body");
+    });
+  }
+}
+
+for (const [name, character, escapedCharacter] of [
+  ["Egyptian full blank", "\u{13441}", String.raw`\u{13441}`],
+  ["Egyptian half blank", "\u{13442}", String.raw`\u{13442}`],
+  ["null notehead", "\u{1d159}", String.raw`\u{1d159}`],
+] as const) {
+  for (const text of [`- ${character}[x] Check`, `- [${character}] Check`]) {
+    for (const field of ["title", "body"]) {
+      test(`round 21 ${name} in ${field} is untrusted: ${JSON.stringify(text)}`, async () => {
+        const row = evaluate({ [field]: text });
+        assert.equal(row.status, "untrusted");
+        assert.equal(row.reason, "invisible characters in the title or body");
+        assert.equal(row.title, null);
+        const mutated = await invisibleCheckerWithout(escapedCharacter);
+        assert.equal(mutated(text), false, "removing the glyph must release the witness");
+      });
+    }
+  }
+}
+
+for (const [name, character, escapedCharacter] of [
+  ["line separator", "\u2028", String.raw`\u2028`],
+  ["paragraph separator", "\u2029", String.raw`\u2029`],
+  ["braille blank", "\u2800", String.raw`\u2800`],
+] as const) {
+  for (const field of ["title", "body"]) {
+    test(`round 20 invisible ${name} in ${field} is untrusted`, async () => {
+      const text = `Visible ${character} text`;
+      const row = evaluate({ [field]: text });
+      assert.equal(row.status, "untrusted");
+      assert.equal(row.reason, "invisible characters in the title or body");
+      assert.equal(row.title, null);
+      // Mutate only this character's membership in the actual invisible-text
+      // function. The Markdown guard must not mask a missing caller check.
+      const mutated = await invisibleCheckerWithout(escapedCharacter);
+      assert.equal(mutated(text), false, "removing this character must release the witness");
     });
   }
 }

@@ -1,0 +1,2954 @@
+// remark is not GitHub's renderer (cmark-gfm plus extensions such as math, emoji
+// shortcodes and alerts). Those need raw checker rules of their own; this oracle
+// covers CommonMark and GFM structure only, without contacting a renderer service.
+// GitHub also shortens recognized commit hashes, which remark does not model.
+// Only hashes naming real commits are shortened, so an author cannot choose the
+// hidden suffix beyond the few bits a brute-forced commit buys. No refusal is needed.
+// remark expands a tab inside a task box according to its column; GitHub reads
+// the raw tab. GitHub may also find boxes in rendered text after escape handling,
+// which the raw checker refuses conservatively without claiming renderer parity.
+// GitHub's text filters skip code: a canonical box-shaped line inside a fence
+// stays literal. Only fenced code exempts source boxes; indented box-shaped
+// lines are refused even when their source remains visible as code.
+// cmark also accepts digit-plus-any-character task markers and sets checked state
+// from any [x]/[X] on the raw line. remark models neither; explicit raw refusals
+// cover those cases instead of treating an oracle pass as GitHub equivalence.
+// The later-line box guards also cover that rendered-text model, including code
+// inside a non-one ordered item. Nested roman/alpha marker width is a raw limit;
+// remark's tree retains only the numeric start and cannot measure that width.
+// Ordered context is detected even in code; any fence-shaped line in that
+// context makes later boxes fail closed until a structural boundary ends it.
+// Outside fenced code, a source marker and box must produce a task item at
+// that source position with the same checked state, not merely visible text.
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { createRequire, stripTypeScriptTypes } from "node:module";
+import { test } from "node:test";
+import { pathToFileURL } from "node:url";
+import { hiddenMarkdownReason } from "./markdown.ts";
+
+// Only this test borrows core's installed parser; bin/wt stays dependency-free.
+// createRequire resolves with the require condition, which works because these
+// packages export a plain default rather than different import/require entries.
+const coreRequire = createRequire(new URL("../../../packages/core/package.json", import.meta.url));
+async function loadParser(resolve: (name: string) => string = coreRequire.resolve) {
+  try {
+    const [{ unified }, { default: remarkParse }, { default: remarkGfm }] = await Promise.all(
+      ["unified", "remark-parse", "remark-gfm"].map((name) => import(pathToFileURL(resolve(name)).href)),
+    );
+    return unified().use(remarkParse).use(remarkGfm);
+  } catch (error) {
+    if (["MODULE_NOT_FOUND", "ERR_MODULE_NOT_FOUND"].includes((error as NodeJS.ErrnoException).code ?? "")) {
+      throw new Error("run pnpm install: this test borrows packages/core's remark parser", { cause: error });
+    }
+    throw error;
+  }
+}
+const parser = await loadParser();
+
+interface Node {
+  type: string;
+  value?: string;
+  children?: Node[];
+  position?: { start: { offset: number }; end: { offset: number } };
+  url?: string;
+  title?: string | null;
+  alt?: string | null;
+  lang?: string | null;
+  meta?: string | null;
+  ordered?: boolean;
+  start?: number | null;
+  checked?: boolean | null;
+}
+
+const forbidden = new Set([
+  "html",
+  "definition",
+  "footnoteDefinition",
+  "footnoteReference",
+  "linkReference",
+  "imageReference",
+  "table",
+  "tableRow",
+  "tableCell",
+  "yaml",
+  "math",
+  "inlineMath",
+]);
+// Kept independent of the checker so expanding an exemption cannot bless itself.
+const languages =
+  "text plaintext console sh bash shell zsh diff json jsonc yaml yml toml ini md markdown ts typescript tsx js javascript jsx mjs css html xml sql python py ruby rb go rust rs http".split(
+    " ",
+  );
+const asset = "https://github.com/user-attachments/assets/01234567-89ab-cdef-0123-456789abcdef";
+const screenshot = (alt: string, url = asset) => `![${alt}](${url})`;
+const imageLine =
+  /^!\[([^\]\r\n]*)\]\(https:\/\/github\.com\/user-attachments\/assets\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\)$/u;
+const lettersAndDigits = (text: string) => text.match(/[\p{L}\p{N}]/gu)?.join("") ?? "";
+
+/**
+ * Every source letter/number the tree does not show must be determined by what
+ * it does show, subject to the two bounded allowances below. Compare Unicode
+ * letters/numbers in order and count after these AST-positioned deductions:
+ * list digits must be the rendered start + item index or use the allowance for 1,
+ * with no leading zero. GitHub hides a task item's ordered number, checked or
+ * unchecked, so only literal 1 is allowed there. A loaded screenshot's unseen
+ * alt must be empty, Screenshot, or Screenshot <its 1-based screenshot-line
+ * ordinal>. The exact approved image envelope is excluded, never arbitrary URLs.
+ * The ordinal counts screenshot lines, fenced ones included: their source line
+ * order is visible in the code block, so the digit remains determined.
+ * A checked item's visible check mark contributes the canonical source x; X is
+ * refused in that position, while literal a[X] remains text. Screenshots and list
+ * markers inside code keep their source letters rather than these deductions.
+ * The first allowance: a fenced code block may hide its one allowlisted info
+ * word. Inside a quote or list item this holds even when empty, because the code
+ * box stays visible and the word comes from the fixed allowlist. The tree and
+ * parser position identify the container and opener's prefix. Top-level fences,
+ * including those with up to three leading spaces, need non-whitespace content;
+ * an empty fence without an info word hides no letters or digits.
+ * The second allowance: an ordered marker may be 1 even when the page shows n
+ * or hides the marker for a task item.
+ * The hidden digits are only 1s, at most one per marker, and after the first such
+ * 1 a run accepts only 1s, so they cannot spell anything.
+ * Visible text is text/inlineCode/code values and literal autolink text, plus
+ * canonical checked state. Whitespace and punctuation are outside this invariant.
+ */
+// Known remark difference: after indented code it can read a list (including
+// a blank-start item) as paragraph text. Spell that AST-confirmed code value as
+// a fence in its own container, then run every check. Never convert code holding
+// a box: that could wrongly grant it the fenced-source-box exemption.
+function comparableSource(body: string): string {
+  const tree: Node = parser.parse(body);
+  const replacements: { start: number; end: number; text: string }[] = [];
+  function visit(parent: Node): void {
+    for (const [index, node] of (parent.children ?? []).entries()) {
+      visit(node);
+      const next = parent.children?.[index + 1];
+      if (
+        node.type !== "code" ||
+        !node.position ||
+        node.lang ||
+        !["paragraph", "heading", "list", "blockquote"].includes(next?.type ?? "") ||
+        !next?.position
+      )
+        continue;
+      const { start, end } = node.position;
+      const raw = body.slice(start.offset, end.offset);
+      if (/^ {0,3}(?:`{3,}|~{3,})/u.test(raw) || /\[[\sxX]+\]/u.test(raw)) continue;
+      const nextOffset =
+        next.type === "blockquote" ? next.children?.[0]?.position?.start.offset : next.position.start.offset;
+      if (nextOffset === undefined || !/^(?:[-*+]|[1-9]\d{0,8}[.)])(?=[ \t\r\n]|$)/u.test(body.slice(nextOffset)))
+        continue;
+      const lineStart = body.lastIndexOf("\n", start.offset - 1) + 1;
+      const prefix = body.slice(lineStart, start.offset).replace(/[^ \t>]/gu, " ");
+      const value = node.value ?? "";
+      const fence = "~".repeat(Math.max(3, ...(value.match(/~+/gu) ?? []).map((run) => run.length + 1)));
+      const text = `${fence}\n${value
+        .split("\n")
+        .map((line) => prefix + line)
+        .join("\n")}\n${prefix}${fence}`;
+      replacements.push({ start: start.offset, end: end.offset, text });
+    }
+  }
+  visit(tree);
+  // A root list or quote already recognized after a paragraph can hold a blank-start
+  // child. remark wrongly carries the outer interruption restriction into it.
+  // A blank before this existing root container preserves cmark's structure and
+  // lets remark parse the child; it cannot create a previously absent container.
+  for (const [index, node] of (tree.children ?? []).entries()) {
+    const first = node.type === "blockquote" ? node.children?.[0] : node.children?.[0]?.children?.[0];
+    if (
+      !["list", "blockquote"].includes(node.type) ||
+      !node.position ||
+      tree.children?.[index - 1]?.type !== "paragraph" ||
+      first?.type !== "paragraph" ||
+      !first.position
+    )
+      continue;
+    if (!/^(?:[-*+]|[1-9]\d{0,8}[.)])[ \t]*\r?\n/u.test(body.slice(first.position.start.offset))) continue;
+    const start = body.lastIndexOf("\n", node.position.start.offset - 1) + 1;
+    replacements.push({ start, end: start, text: "\n" });
+  }
+  const parts: string[] = [];
+  let cursor = 0;
+  for (const replacement of replacements.sort((a, b) => a.start - b.start)) {
+    assert.ok(replacement.start >= cursor, "oracle normalizations must not overlap");
+    parts.push(body.slice(cursor, replacement.start), replacement.text);
+    cursor = replacement.end;
+  }
+  parts.push(body.slice(cursor));
+  return parts.join("");
+}
+
+function checkCoverage(body: string, normalizeCodeEnd = true): void {
+  if (normalizeCodeEnd) body = comparableSource(body);
+  const root: Node = parser.parse(body);
+  const omitted: [number, number][] = [];
+  const visible: string[] = [];
+  const taskBoxes = new Map<number, boolean>();
+  const fencedCodeRanges: [number, number][] = [];
+  const screenshotOrdinals = new Map<number, number>();
+  let lineOffset = 0;
+  for (const line of body.split("\n")) {
+    const raw = line.replace(/\r$/u, "");
+    const match = imageLine.exec(raw);
+    if (match?.[0] === raw) screenshotOrdinals.set(lineOffset, screenshotOrdinals.size + 1);
+    lineOffset += line.length + 1;
+  }
+  const source = (node: Node) => {
+    assert.ok(node.position, "parser positions are required");
+    return body.slice(node.position.start.offset, node.position.end.offset);
+  };
+  function visit(node: Node, parent?: Node, index = 0): void {
+    assert.ok(!forbidden.has(node.type), `forbidden ${node.type}`);
+    if (node.type === "link") {
+      const text = (node.children ?? []).map((child) => child.value ?? "").join("");
+      assert.ok(
+        node.children?.every((child) => child.type === "text"),
+        "autolink children",
+      );
+      // GFM's post-parse autolink transform can synthesize positionless nodes.
+      // Explicit CommonMark links retain positions and must be literal too.
+      if (node.position) assert.equal(source(node), text, "literal autolink source");
+      assert.ok(!node.title, "autolink title");
+      // The fallback transform can leave a trailing dot outside a bare `www.`
+      // link. A `www.` email local part still gets mailto, not an HTTP prefix.
+      const www = /^www(?:\.|$)/iu.test(text);
+      const url = node.url === `mailto:${text}` ? `mailto:${text}` : www ? `http://${text}` : text;
+      assert.ok(/^https?:\/\//iu.test(text) || www || node.url === `mailto:${text}`, "literal autolink form");
+      assert.equal(node.url, url, "autolink destination must be visible");
+    }
+    if (node.type === "image") {
+      const raw = source(node);
+      const match = imageLine.exec(raw);
+      assert.ok(match && match[0] === raw, "screenshot form and alt");
+      assert.ok(node.position, "screenshot position");
+      const { start, end } = node.position;
+      const ordinal = screenshotOrdinals.get(start.offset);
+      assert.ok(ordinal, "screenshot line ordinal");
+      assert.ok(["", "Screenshot", `Screenshot ${ordinal}`].includes(node.alt ?? ""), "determined screenshot alt");
+      assert.ok(start.offset === 0 || body[start.offset - 1] === "\n", "whole screenshot line start");
+      assert.ok(end.offset === body.length || /^(?:\r?\n)/u.test(body.slice(end.offset)), "whole screenshot line end");
+      assert.equal(node.alt, match[1], "screenshot alt must be literal");
+      assert.equal(node.url, raw.slice(raw.indexOf("](") + 2, -1), "screenshot destination");
+      assert.ok(!node.title, "screenshot title");
+      omitted.push([start.offset, end.offset]);
+    }
+    if (node.type === "code") {
+      const raw = source(node);
+      assert.ok(node.position, "code position");
+      if (/^ {0,3}(?:`{3,}|~{3,})/u.test(raw))
+        fencedCodeRanges.push([node.position.start.offset, node.position.end.offset]);
+      assert.ok(!node.meta, "code meta must be empty");
+      assert.ok(!node.lang || languages.includes(node.lang.toLowerCase()), "code language must be allowlisted");
+      if (node.lang) {
+        const opening = /^[ \t]*(?:`{3,}|~{3,})[ \t]*([A-Za-z]+)[ \t]*(?:\r?\n|$)/u.exec(raw);
+        assert.ok(opening, "fence info source");
+        assert.equal(opening[1], node.lang, "literal fence language");
+        assert.ok(node.position, "fence position");
+        const fenceStart = node.position.start.offset + opening[0].search(/[`~]/u);
+        const lineStart = body.lastIndexOf("\n", fenceStart - 1) + 1;
+        const containerPrefix = body.slice(lineStart, fenceStart);
+        const inContainer = parent?.type === "blockquote" || parent?.type === "listItem";
+        assert.ok(
+          node.value?.trim() || (inContainer && /[\s>]/u.test(containerPrefix)),
+          "non-empty top-level fenced code block",
+        );
+        const start = node.position.start.offset + opening[0].indexOf(node.lang);
+        omitted.push([start, start + node.lang.length]);
+      }
+    }
+    if (node.type === "listItem" && parent?.ordered) {
+      const marker = /^(\d{1,9})[.)](?:[ \t\r\n]|$)/u.exec(source(node));
+      assert.ok(marker?.[1], "ordered marker source");
+      assert.match(marker[1], /^[1-9]\d{0,8}$/u, "canonical list number");
+      if (typeof node.checked === "boolean") {
+        assert.equal(marker[1], "1", "task list number must be 1");
+      } else {
+        assert.ok(marker[1] === "1" || Number(marker[1]) === (parent.start ?? 1) + index, "rendered list number");
+      }
+      assert.ok(node.position, "list marker position");
+      omitted.push([node.position.start.offset, node.position.start.offset + marker[1].length]);
+    }
+    if (node.type === "listItem" && typeof node.checked === "boolean") {
+      // Continuation lines can retain outer blockquote prefixes in this span.
+      const marker = /^(?:[-+*]|\d{1,9}[.)])[ \t\r\n>]*\[([ xX])\]/u.exec(source(node));
+      assert.ok(node.position, "task marker position");
+      if (marker) taskBoxes.set(node.position.start.offset + marker[0].length - 3, node.checked);
+      if (node.checked) {
+        assert.ok(marker, "checked task marker source");
+        assert.equal(marker[1], "x", "canonical task marker");
+        const start = node.position.start.offset + marker[0].length - 2;
+        visible.push(body.slice(start, start + 1));
+      }
+    }
+    if (["text", "inlineCode", "code"].includes(node.type)) visible.push(node.value ?? "");
+    for (const [childIndex, child] of (node.children ?? []).entries()) visit(child, node, childIndex);
+  }
+  visit(root);
+  fencedCodeRanges.sort(([a], [b]) => a - b);
+  let fenceIndex = 0;
+  lineOffset = 0;
+  for (const line of body.split("\n")) {
+    // Scan containers independently of the checker, without overlapping groups.
+    let cursor = 0;
+    let markerStart: number | undefined;
+    while (cursor < line.length) {
+      if (/[ \t>]/u.test(line[cursor] ?? "")) {
+        cursor++;
+        continue;
+      }
+      const marker = /^(?:[-+*]|\d{1,9}[.)])(?=[ \t])/u.exec(line.slice(cursor));
+      if (!marker) break;
+      markerStart = cursor;
+      cursor += marker[0].length;
+    }
+    const box = /^\[([\sxX]+)\]/u.exec(line.slice(cursor));
+    if (box && markerStart !== undefined) {
+      const markerOffset = lineOffset + markerStart;
+      // A marker inside a parsed fenced code span is literal. A list marker whose
+      // *content* becomes code still needs a task at its box's source position.
+      while (fencedCodeRanges[fenceIndex] && markerOffset >= (fencedCodeRanges[fenceIndex]?.[1] ?? Infinity))
+        fenceIndex++;
+      if (markerOffset < (fencedCodeRanges[fenceIndex]?.[0] ?? Infinity)) {
+        assert.equal(
+          taskBoxes.get(lineOffset + cursor),
+          /[xX]/u.test(box[1] ?? ""),
+          "source box must become the same task",
+        );
+      }
+    }
+    lineOffset += line.length + 1;
+  }
+  omitted.sort(([a], [b]) => a - b);
+  let offset = 0;
+  const expected: string[] = [];
+  for (const [start, end] of omitted) {
+    assert.ok(start >= offset, "coverage exclusions must not overlap");
+    expected.push(body.slice(offset, start));
+    offset = end;
+  }
+  expected.push(body.slice(offset));
+  assert.equal(lettersAndDigits(visible.join("")), lettersAndDigits(expected.join("")), "visible-text coverage");
+}
+
+// The structural policy also applies to literal numbered code examples.
+const newlyRefusedBodies = [
+  "-\n ```text\n2. a\n   [\n   ] x\n ```",
+  ">-\n   ```text\n2. a\n   [\n   ] x\n```",
+  "1. a\n2. b\n ```text\n [\n ] literal\n ```",
+  "```text\n104. a\n     - [ ] b\n```",
+  "```text\n104. a\n     [\n     ] x\n```",
+];
+
+const canonicalRefusals = [
+  "2. a\n   - b\n     - c\n     ---\n       - [ ] x",
+  "2. Step\n    - [ ] a\n        - [ ] b",
+  "104. a\n        - [ ] b",
+  "104. a\n\t\t- [ ] b",
+  "2.    a\n         - [ ] b",
+];
+
+// Earlier acceptance withdrawn by the same-line task-text rule.
+const sameLineTextRefusals = ["- [x]\n~"];
+
+// Earlier acceptance withdrawn by the ban on tabs after a task's list marker.
+const markerPaddingRefusals = ["1.\t[ ] Pending"];
+
+// Round 17: earlier checker acceptances withdrawn by real-list-start rules.
+// These include paragraph/lazy continuation and indented code, not fenced code.
+// Round 18: previously accepted bodies now refused, plus restored acceptances.
+const containerRefusals = [
+  "- \n\n    - [x] b",
+  "-\n\n    - [ ] a",
+  "1) \n\n      - [x] b",
+  "1. \n\n    - [ ] a",
+  "  - \n  \n    - [ ] a",
+  "10.\n\n    - [x] x",
+  "> - a\n\n>     - [x] x",
+  "~~~\n- a\n  ~~~\n    - [x] Done",
+];
+
+const rawContextRefusals = [
+  "> a\n2. Step\n   * [ ] Check",
+  "- a\n2. Step\n   * [ ] Check",
+  "Title\n===\n2. Step\n   * [ ] Check",
+  "    code\n2. Step\n   * [ ] Check",
+  "> Note\n2. Step\n   ```text\n   example\n       ```\n   - [ ] Check",
+  "> Note\n2. a\n   >- ```\n   >  ```\n   > - [ ] x",
+  "- Note\n2. a\n   >- ```\n   >  ```\n   > - [ ] x",
+  "Title\n=====\n2. a\n   >- ```\n   >  ```\n   > - [ ] x",
+  "Title\n-\n2. a\n   >- ```\n   >  ```\n   > - [ ] x",
+  "    code\n2. a\n   >- ```\n   >  ```\n   > - [ ] x",
+  "> > Note\n2. a\n   >- ```\n   >  ```\n   > - [ ] x",
+  "> Note\n2. a\n      ```\n        ```\n   - [ ] x",
+  "- Note\n2. a\n      ```\n        ```\n   - [ ] x",
+  "Title\n=====\n2. a\n      ```\n        ```\n   - [ ] x",
+  "Title\n-\n2. a\n      ```\n        ```\n   - [ ] x",
+  "    code\n2. a\n      ```\n        ```\n   - [ ] x",
+  "> > Note\n2. a\n      ```\n        ```\n   - [ ] x",
+  "> Note\n2. a\n   -\n       ```\n   [\n   ] x",
+  "- Note\n2. a\n   -\n       ```\n   [\n   ] x",
+  "Title\n=====\n2. a\n   -\n       ```\n   [\n   ] x",
+  "Title\n-\n2. a\n   -\n       ```\n   [\n   ] x",
+  "    code\n2. a\n   -\n       ```\n   [\n   ] x",
+  "> > Note\n2. a\n   -\n       ```\n   [\n   ] x",
+  "> Note\n2. Step\n   * [ ] Check",
+  "- Note\n2. Step\n   * [ ] Check",
+  "Title\n=====\n2. Step\n   * [ ] Check",
+  "Title\n-\n2. Step\n   * [ ] Check",
+  "    code\n2. Step\n   * [ ] Check",
+  "> > Note\n2. Step\n   * [ ] Check",
+];
+
+// Regional indicators form flag emoji, not bracket-like symbols.
+const flagControls = ["- 🇩🇪 🇬🇧", "## 🇩🇪 🇬🇧", "> 🇩🇪 🇬🇧", "🇩🇪🇬🇧 switcher", "支持语言：🇨🇳 🇺🇸", "🇩🇪 ✅ 🇬🇧 ❌"];
+
+// Round 26: code-point delimiters cannot disappear into Extend/Prepend clusters.
+const pointDelimiterRefusals = [
+  ["ER1 Extend after opener", "- [\u{1f3fb}] x"],
+  ["ER1 Prepend before opener", "- \u0d4e[ ] x"],
+  ["ER1 Prepend before check box", "- \u0d4e[✓] x"],
+  ["ER1 Prepend before closer", "- [ \u0d4e] x"],
+] as const;
+
+const round26MarkerRefusals = [
+  ["ER4 full-width number", "> a\n> １. b", "number"],
+  ["ER4 circled number", "- a\n  ① b", "number"],
+  ["ER4 lazy number", "- a\n１) b", "number"],
+  ["ER4 Arabic-Indic number", "> a\n> ١ b", "number"],
+  ["CX1 lazy hyphen NBSP", "- [ ] Do A\n-\u00a0Do B", "space"],
+  ["CX1 continued star em space", "- a\n  *\u2003b", "space"],
+  ["CX1 quoted plus ideographic space", "> a\n> +\u3000b", "space"],
+  ["CX1 continued ordered dot", "- a\n  1.\u00a0b", "space"],
+  ["CX1 lazy nine-digit ordered parenthesis", "- a\n123456789)\u2003b", "space"],
+] as const;
+
+const round26Costs = ["- (−1, −2)", "20° 25° are warm", "± 1 ± 2", "∑ x ≤ y"];
+const round26Arrows = [
+  ["1 ⬎ 2 ⬎ 3", String.raw`\u2b0e-\u2b11`],
+  ["1 ⯬ 2 ⯬ 3", String.raw`\u2bec-\u2bef`],
+  ["- one\n⯮ next", String.raw`\u2bec-\u2bef`],
+] as const;
+const round26Controls = [
+  ...round26Arrows.map(([body]) => body),
+  "[1] [✓] Check",
+  "- [1] [х] Check",
+  "- ]х[ Check",
+  "- one\n€ 5",
+  "- a\n  ①",
+  "- a\n  ①   ",
+  "> a\n> １.",
+  "> a\n> １.\u00a0",
+  "- a\n１)\t",
+  "- a\n  ①b",
+  "> a\n> １.b",
+  "- a\n١word",
+  "Text\n１. b",
+  "Text\n-\u00a0b",
+  "- a\n1234567890)\u00a0b",
+  "- a\nأكمل ١ خطوة",
+  "Café terminé",
+  "完成步骤",
+];
+
+// Round 25: groups try every opener; code contents keep their literal symbols.
+const clusterGroupRefusals = [
+  ["ER1 stars after long group", "- ★12345★x★ Check"],
+  ["ER1 bars after long group", "- │12345│x│ Check"],
+  ["retained control: ASCII long group before stars", "- [12345]★x★ Check"],
+  ["CX1 check inside ASCII box", "- [✓] Check"],
+  ["CX1 multiplication inside ASCII box", "- [×] Check"],
+  ["CX1 double full-width opener", "- ［［x］ Check"],
+  ["CX1 check inside symbol box", "- ⎡✓⎤ Check"],
+  ["Sk box", "- ˗x˗ Check"],
+  ["dotted square remains B", "- ⬚x⬚ Check"],
+  ["accepted cost: inequality", "0 ≤ x ≤ 9"],
+] as const;
+
+// CX3 withdraws the old indented-continuation allowance: it is still paragraph text.
+const continuationMarkerRefusals = [
+  ["ER2 NBSP", "- [ ] Do A\n‐ Do B", "space"],
+  ["ER2 em space", "- [ ] Do A\n‐ Do B", "space"],
+  ["ER2 ideographic space", "- [ ] Do A\n‐　Do B", "space"],
+  ["CX2b modifier minus", "- [ ] Do A\n˗ Do B", "Sk"],
+  ["CX3 continued task", "- [ ] Do A\n  ‐ Do B", "continued"],
+  ["CX3 old round-24 pin", "- one\n  ‐ Do B", "continued"],
+  ["CX3 over-indented paragraph", "- [ ] Do A\n      ‐ Do B", "continued"],
+  ["CX3 quoted continuation", "> - [ ] Do A\n>   ‐ Do B", "continued"],
+  ["ellipsis continuation", "- one\n… more", "lazy"],
+] as const;
+
+// Round 25.1 MS2: root paragraph continuations have no list or quote to disguise.
+const rootParagraphControls = [
+  ["plain prose", "Text\n‐ Do B"],
+  ["prose steps", "Steps:\n– one\n– two"],
+] as const;
+
+const codeGroupControls = [
+  ["MS1 fenced table", "Output:\n\n```\n│ a │ b │\n─────────\n```\n"],
+  ["MS1 indented table", "Output:\n\n    │ a │ b │\n"],
+  ["quoted fenced table", "> ```text\n> │ a │ b │\n> ```"],
+  ["list fenced table", "- Output:\n\n  ```text\n  │ a │ b │\n  ```"],
+  ["quoted indented table", "> Output:\n>\n>     │ a │ b │"],
+] as const;
+
+const round25Controls = [
+  "★★★☆☆",
+  "════════════",
+  "─────────",
+  "👍🏽👍🏽",
+  "[[x]]",
+  "Output:\n\n```\n════════════\n```\n",
+  "Title\n\n════════════\n",
+  "• a • b",
+  "≠",
+  "°",
+  "™",
+  "1 → 2 → 3",
+  "1 ⭢ 2 ⭢ 3",
+  "1 ⮕ 2 ⮕ 3",
+  "1 🡺 2 🡺 3",
+  "1⃣",
+  "1️⃣",
+  "👩🏽‍💻",
+  "🫱🏻‍🫲🏿",
+  "Café 完成",
+  "- [ ] Do A\n  ‐Do B",
+  "- [ ] Do A\n‐Do B",
+  "- one\n🏽 next",
+];
+
+// Round 24 witnesses; round 25 also checks continuations inside their containers.
+const symbolBoxRefusals = [
+  ["F1a upper pieces after real task", "- [ ] Do A\n- ⎡ ⎤ Do B"],
+  ["F1b upper pieces checked", "- ⎡x⎤ Check"],
+  ["F1c lazy hyphen with pieces", "- [ ] Do A\n‐ ⎡x⎤ Do B"],
+  ["F1d lower pieces", "- ⎣x⎦ Check"],
+  ["F1e square image", "- ⊏x⊐ Check"],
+  ["F1f eighth blocks", "- ▏x▕ Check"],
+  ["F1g corners", "- ⌜ ⌟ Check"],
+  ["vertical bars", "- │x│ Check"],
+  ["reversed B delimiters", "- ⎤x⎡ Check"],
+  ["B ends content", "- ⎡ab★cd⎤ Check"],
+  ["accepted cost: stars", "★ 5 ★"],
+  ["accepted cost: multiplication", "2 × 3 × 4"],
+] as const;
+
+const lazyMarkerRefusals = [
+  ["hyphen without box", "- [ ] Do A\n‐ Do B"],
+  ["F2b ballot box", "- [ ] Do A\n‐ ☐ Do B"],
+  ["B math symbol", "- [ ] Do A\n⎡ Do B"],
+  ["B other symbol", "- [ ] Do A\n│ Do B"],
+  ["Po bullet", "- [ ] Do A\n• Do B"],
+  ["tab after dash", "- [ ] Do A\n‐\tDo B"],
+  ["quoted lazy item", "> - [ ] Do A\n> ‐ Do B"],
+  ["nested lazy item", "- Outer\n  - [ ] Do A\n  ‐ Do B"],
+] as const;
+
+const round24Controls = [
+  "- [ ] Do A",
+  "- [x] Done",
+  "1. [ ] Step",
+  "> [!NOTE]",
+  "- [ ] 完成 the docs",
+  "Ünïcode [x] works",
+  "See [1] and [2].",
+  "See (1) and (2).",
+  "- [ ] café — ok",
+  "He wrote: […] and left",
+  "• Done [x]",
+  "- (é) Check",
+  "- {é} Check",
+  "- ［］ Check",
+  "- [ ] [х] Check",
+  "- [[x]] B",
+  "é[]",
+  "- [éééé] text",
+  "[1] é[x]",
+  "- [long字] text",
+  "label [χ] text",
+  "- ✅ Done",
+  "- ⚠️ Risk: data loss",
+  "→ Next: ship it",
+  "• one • two",
+  "– item",
+  "“Save” fails on Linux",
+  "- “a” and “b”",
+  "1 → 2 → 3",
+  "200 → 404",
+  "★★★☆☆",
+  "👍 👍",
+  "🎉 🎉 🎉 release",
+  "- «a» quote",
+  "- © 2026",
+  "- ±3 ms",
+  "- 5 € fee",
+  "— Note — text",
+  "· a · b",
+  "- ½ cup",
+  "1️⃣",
+  "#️⃣",
+  "*️⃣",
+  "1⃣",
+  "👩🏽‍💻",
+  "🫱🏻‍🫲🏿",
+  "- ☐ Check",
+  "- ☒ Check",
+  "- one\n- two",
+  "- one\ntext",
+  "- one\n2 words",
+  "- one\n😀 emoji",
+  "- one\n→ next",
+  "- one\n⟶ next",
+  "- one\n⤀ next",
+  "- one\n\n‐ Do B",
+  "- one\n‐Do B",
+  "- one\n```text\n‐ Do B\n```",
+  "1 ⟶ 2 ⟶ 3",
+  "1 ⤀ 2 ⤀ 3",
+  "Press 1️⃣̶ ok",
+];
+
+// Round 23: bracket categories and grapheme counts define the same short box.
+const unicodeBracketRefusals = [
+  ["full-width brackets", "- ［x］ Check"],
+  ["CJK brackets", "- 【x】 Do"],
+  ["look-alike hyphen and brackets", "‐ ［ ］ Do"],
+  ["mixed opening bracket", "- ［x] Check"],
+  ["mixed closing bracket", "- [x］ Check"],
+  ["full-width parentheses", "- （x） Check"],
+  ["full-width braces", "- ｛x｝ Check"],
+  ["CJK quote accepted cost", "日本「は」"],
+] as const;
+
+const graphemeBoxRefusals = [
+  ["1 grapheme with 2 overlays", "- [x\u0338\u0338] Check", 3],
+  ["1 grapheme with 3 overlays", "- [x\u0338\u0338\u0338] Check", 4],
+  ["2 graphemes with 2 overlays each", "- [x\u0338\u0338x\u0338\u0338] Check", 6],
+  ["2 graphemes with 3 overlays each", "- [x\u0338\u0338\u0338x\u0338\u0338\u0338] Check", 8],
+  ["3 graphemes with 2 overlays each", "- [x\u0338\u0338x\u0338\u0338x\u0338\u0338] Check", 9],
+  ["3 graphemes with 3 overlays each", "- [x\u0338\u0338\u0338x\u0338\u0338\u0338x\u0338\u0338\u0338] Check", 12],
+] as const;
+
+const round23Controls = [
+  "See (1) and (2).",
+  "- [ ] café — ok",
+  "He wrote: […] and left",
+  "• Done [x]",
+  "- (é) Check",
+  "- {é} Check",
+  "- ［］ Check",
+  "- [ ] [х] Check",
+  "‐ [link] [x] Do B",
+  "‐ [abcd] [x] Do B",
+  "- [[x]] B",
+  "- [x\u0338\u0338x\u0338\u0338x\u0338\u0338x\u0338\u0338] Check",
+  "- [x\u0338\u0338\u0338x\u0338\u0338\u0338x\u0338\u0338\u0338x\u0338\u0338\u0338] Check",
+];
+
+// Round 22: the structural rule replaces per-glyph guesses around short boxes.
+const lookAlikeBoxRefusals = [
+  ["H1-hyphen-2010-lazy", "- [ ] Do A\n\u2010 [x] Do B"],
+  ["H2-minus-2212-lazy", "- [ ] Do A\n\u2212 [x] Do B"],
+  ["H3-nbhyphen-2011-lazy", "- [ ] Do A\n\u2011 [x] Do B"],
+  ["H4-cyrillic-x-box", "- [\u0445] Check"],
+  ["H5-roman-ten-box", "- [\u2179] Check"],
+  ["H6-greek-chi-box", "- [\u03c7] Check"],
+  ["H9-two-items-cyrillic", "- [ ] Do A\n- [\u0445] Do B"],
+  ["W10-bamum-inside-box", "- [\u{16910}] Check"],
+  ["W11-bamum-lazy", "- [ ] Do A\n-\u{16910}[x] Do B"],
+  ["ER1 U+303F adjacent", "-\u303f[x] Check"],
+  ["ER1 U+303F padded", "- \u303f[x] Check"],
+  ["ER1 U+1DA7F adjacent", "-\u{1da7f}[x] Check"],
+  ["ER1 U+1DA7F padded", "- \u{1da7f}[x] Check"],
+  ["ER1 U+1DA80 adjacent", "-\u{1da80}[x] Check"],
+  ["ER1 U+1DA80 padded", "- \u{1da80}[x] Check"],
+] as const;
+
+// Earlier acceptances withdrawn by the exact OP1 prefix/group condition.
+const lookAlikeCorpusRefusals = [
+  ["old corpus 1", "- [\u{1f600}] Done"],
+  ["old corpus 2", "0[\u3000]"],
+  ["old corpus 3", "=:[\u00a0]9"],
+  ["old corpus 4", "!=[\u3000]^"],
+  ["old corpus 5", "0\u00e9[x]"],
+  ["old corpus 6", "\u00e9[^1]"],
+  ["old corpus 7", "~a[\n   ][\u3000]3.[x]- - -`9x [ ] [ ]a@(abc)"],
+  ["old corpus 8", ["\u0661[x\\]1234. 8www.example.comsynthetic", "example.coma[a]"].join("@")],
+  ["old corpus 9", "\u4e2d>[\t]$5"],
+  ["old corpus 10", "- 0[\u3000]~"],
+  ["old corpus 11", "![\u00a0]~~~"],
+  ["old corpus 12", ":&[\u3000][!][ ]- 081```"],
+  ["old corpus 13", "---=[\u00a0]synthetic@example.com[x86]"],
+  ["old corpus 14", "\u00e9[x]---+ 01. [Optional]2.\n- @- 0[a]www.example.com[X]c"],
+] as const;
+
+const khitanRefusals = [
+  ["W1-filler-lazy-second-box", "- [ ] Do A\n-\u{16fe4} [x] Do B"],
+  ["W2-filler-inside-box", "- [ \u{16fe4}] Check"],
+  ["W4-filler-after-ordered", "1.\u{16fe4} [x] Check"],
+  ["W6-filler-under-step2", "2. Step\n   -\u{16fe4} [ ] Check"],
+  ["W7-filler-x-in-box", "- [\u{16fe4}x] Check"],
+  ["W9-filler-prose", "Visible \u{16fe4} text"],
+  ["ER1 U+16FE4 padded", "- \u{16fe4}[x] Check"],
+  ["ER1 U+16FE4 adjacent", "-\u{16fe4}[x] Check"],
+] as const;
+
+// Round 21: the other blank glyphs disguise boxes in the same way as braille.
+const blankGlyphBoxRefusals = (
+  [
+    ["Egyptian full blank", "\u{13441}", String.raw`\u{13441}`],
+    ["Egyptian half blank", "\u{13442}", String.raw`\u{13442}`],
+    ["null notehead", "\u{1d159}", String.raw`\u{1d159}`],
+  ] as const
+).flatMap(([name, character, escapedCharacter]) =>
+  [`- ${character}[x] Check`, `- [${character}] Check`].map((body) => ({ name, body, escapedCharacter })),
+);
+
+// Round 20: braille blank can disguise task syntax without forming a task.
+const brailleBoxRefusals = [
+  "-\u2800[x] Check",
+  "- \u2800[x] Check",
+  "- [\u2800] Check",
+  "1. [\u2800x] Check",
+  "1.\u2800 [x] Check",
+  "> -\u2800[x] Check",
+  "2. Step\n   - [\u2800] Check",
+  "- [ ] Do A\n-\u2800[x] Do B",
+];
+// Already refused as malformed prefixes; now diagnosed as invisible characters.
+const invisiblePrefixRefusals = ["⠀- [x] Check", "- a\n  ⠀- [x] Check"];
+
+// Round 19: JavaScript-only line separators and lone CR cannot bypass the
+// standalone checker. These bodies were accepted before line normalization.
+const lineSeparatorRefusals = [
+  ["braille then LS", "⠀\u2028- [x] Check"],
+  ["braille then PS", "⠀\u2029- [x] Check"],
+  ["text then LS", "a\u2028- [x] Check"],
+  ["nested braille then LS", "- a\n  ⠀\u2028- [x] Check"],
+  ["LS in plain text", "before\u2028after"],
+  ["PS in fenced code", "```text\nbefore\u2029after\n```"],
+] as const;
+const loneCrRefusals = [
+  ["setext task after lone CR", "- [ ] T\r  ---", "task marker"],
+  ["table after lone CR", "a | b\r--- | ---", "table"],
+] as const;
+
+// Round 18b: earlier acceptances withdrawn when the whole task paragraph
+// becomes a heading. The immediate beta/--- case was already refused.
+const setextBoxRefusals = [
+  " - - [ ] T\n      1)\n      =",
+  "   - [x] T\n text\n      =\n   \n  * [ ] T\n       > - [ ] T",
+  "    [\n       ````\n***\n - [ ] T\ntext\n   -",
+  "     ````\n   > - [ ] T\n- 1. [x] T\n-  - [ ] T\n    text\n     -\n  1)",
+  "Text\n   - [x] T\n  * [x] T\n   - [ ] T\n      [\n     =\n1. [ ] T",
+  "     ***\n   - [ ] T\n       1)\n       --",
+  "- [x] Task\ncontinued\n  ===",
+  "- [ ] beta\n  ---",
+  " - - [ ] gamma\n      1)\n      =",
+  // Additional acceptances from round 18's default generated corpus.
+  "- - [ ] T\n     Text\n    =",
+  "  > - [x] T\n     > - a\n- [ ] T\n      - > a\n    --",
+  "  1) a\n * [ ] T\n   - [ ] T\n * [x] T\n       ```\n      -",
+];
+
+const boxShapeRefusals = ["- [ ] a\n  ---", "- [ ] a\n  ===", "1. [ ] a\n   ---", "- [ ] a\n  -", "Text\n- [ ] a\n  -"];
+
+const malformedBoxRefusals = [
+  "- [  ] Pending",
+  "- [   ] Pending",
+  "- [ \t] Pending",
+  "- [\t ] Pending",
+  "- [  ] Pending",
+  "2. Step\n   - [  ] Pending",
+  "2. Step\n   - [   ] Pending",
+  "2. Step\n   - [ \t] Pending",
+  "2. Step\n   - [\t ] Pending",
+  "2. Step\n   - [  ] Pending",
+  "> - [  ] Pending",
+  "> - [   ] Pending",
+  "> - [ \t] Pending",
+  "> - [\t ] Pending",
+  "> - [  ] Pending",
+  "```text\n- [  ] Pending",
+  "```text\n- [   ] Pending",
+  "```text\n- [ \t] Pending",
+  "```text\n- [\t ] Pending",
+  "```text\n- [  ] Pending",
+];
+
+const restoredBodies = [
+  "- a\ntext\n    - [ ] x",
+  "Heading\n===\n2.  Step\n    - [ ] Parent\n      - [ ] Child",
+  "    m\n2.  p\n    - [x] T",
+  "1.\n   - [ ] Task",
+  "-\n- [ ] Task",
+];
+
+// ER3 preservation pins: already refused in round 17.
+const containerPins = ["  - T\n   +\n    - [x] T"];
+const fencedBoxPins = [
+  "Para\n\n```text\n    - [ ] x\n```\n\n- [ ] real",
+  "```markdown\n- [ ] a\n      - [ ] deep\n```",
+];
+
+const realListRefusals = [
+  // 1: adjacent punctuation is not a chain of list markers.
+  "-2. Step\n    - [ ] Parent\n      - [ ] First\n      - [ ] Second",
+  "-2. Step\n    - [ ] Parent",
+  "*2) Step\n    - [ ] Parent\n      - [ ] First",
+  // 3: the unquoted checklist cannot continue a quoted ordered item.
+  "- > 2. Step\n       - [ ] A\n         - [ ] B\n           - [x] C\n         - [ ] D",
+  "> - 2. Step\n       - [ ] T\n         - [ ] T\n         - [x] T\n       - [ ] T",
+  "- > 2. Step\n       - [x] A",
+  "> - 2. Step\n       - [ ] A",
+  // 4: a non-one marker cannot interrupt the preceding paragraph.
+  "Text\n10. Step\n    - [ ] A\n      - [ ] B\n        - [x] C\n      - [ ] D",
+  "Text\n10. Step\n    - [ ] A",
+  "Text\n2.  Step\n    - [ ] A",
+  "Text\n    # H\n10. Step\n    - [ ] A",
+  "Text\n    ---\n10. Step\n    - [ ] A",
+  // 5: code and over-indented/lazy paragraph lines never open a task.
+  "    ```\n    - [ ] x",
+  "- a\n\n      ```\n      - [ ] x",
+  ">     ```\n>     - [ ] x",
+  "    - [ ] x",
+  "Intro\n\n    - [ ] x",
+  "Intro\n    - [ ] x",
+  "\t- [ ] x",
+  "Text\n    - [x] Done",
+  "- a\n\n      - [ ] x",
+  "- a\n      - [ ] x",
+  "- Item\n      - [x] Done",
+  "1. a\n\n       - [ ] x",
+  "1. Step\n        - [ ] T",
+  "> Intro\n>\n>     - [ ] x",
+  "> Quote\n    - [x] Done",
+];
+
+// 2: earlier acceptances withdrawn by ASCII-only indentation. The oracle
+// intentionally scans ASCII containers only, so these are checker-only rules.
+const nonAsciiIndentRefusals = [
+  0x00a0,
+  0x1680,
+  ...Array.from({ length: 11 }, (_, i) => 0x2000 + i),
+  0x2028,
+  0x2029,
+  0x202f,
+  0x205f,
+  0x3000,
+  0xfeff,
+  0x0b,
+  0x0c,
+].flatMap((code) => {
+  const space = String.fromCodePoint(code);
+  const kind = code === 0x2028 || code === 0x2029 ? "invisible character" : "task marker";
+  return [
+    `${space}- [x] Check`,
+    `> ${space}- [x] Check`,
+    `- Parent\n ${space} - [ ] Child`,
+    `${space}1. [x] Check`,
+  ].map((body) => [kind, body] as const);
+});
+
+const realListControls = [
+  "1. a\n2. b\n   - [ ] x",
+  "Text\n\n2. Step\n   - [ ] A",
+  "Text\n- a\n  - [ ] x",
+  "- a\n  - b\n    - [ ] c",
+  "* a\n    * b\n      - [ ] c",
+  "1. a\n   - [ ] x",
+  "10. a\n    - [ ] x",
+  "- a\n\n  - [ ] x",
+  "> Quote\n- [x] Done",
+  "2. Step\n   - [ ] Parent\n\n   - [ ] Next",
+  "2. Step\n\n       code\n   - [ ] Check",
+];
+
+// Shared by direct oracle assertions and the checker corpus.
+const oracleStructureWitnesses = [
+  ["raw HTML", "<!-- hidden -->"],
+  ["reference definition", "[a]: /hidden"],
+  ["reference definition", "[a]\n\n[a]: /hidden"],
+  ["reference definition", "![a]\n\n[a]: /hidden"],
+  ["reference definition", "[^1]\n\n[^1]: hidden"],
+  ["table", "| a |\n| - |\n| a | HIDDEN |"],
+  ["link destination", "[a](hidden)"],
+  ["link destination", "[https://example.com](https://example.com)"],
+  ["raw HTML", "<https://example.com>"],
+  ["link destination", "![hidden](image.png)"],
+  ["fence info", "```ts hidden\na\n```"],
+  ["fence info", "```mermaid\na\n```"],
+  ["character reference", "&amp;"],
+] as const;
+const sourceBoxWitnesses = [
+  ...setextBoxRefusals,
+  ...containerPins,
+  ...containerRefusals,
+  ...malformedBoxRefusals.filter((body) => !body.startsWith("```")),
+  ...realListRefusals,
+  "- [ ]Check",
+  "- [x]Check",
+  "-     [ ] Check",
+  "1.     [x] Check",
+  "- [x] Real\n\n- [x]Literal",
+  "> - [ ]Check",
+  ...[0x00a0, ...Array.from({ length: 11 }, (_, i) => 0x2000 + i), 0x202f, 0x3000, 0xfeff].flatMap((code) =>
+    ["[ ]", "[x]"].map((box) => `- ${box}${String.fromCodePoint(code)}Check`),
+  ),
+];
+
+const hostile = [
+  ...pointDelimiterRefusals.map(([, body]) => ["look-alike task box", body, "checker only"] as const),
+  ...round26MarkerRefusals.map(([, body]) => ["look-alike list marker", body, "checker only"] as const),
+  ...round26Costs.map((body) => ["look-alike task box", body, "checker only"] as const),
+  ["look-alike task box", "- ]1[ [х] Check", "checker only"],
+  ...clusterGroupRefusals.map(([, body]) => ["look-alike task box", body, "checker only"] as const),
+  ...continuationMarkerRefusals.map(([, body]) => ["look-alike list marker", body, "checker only"] as const),
+  ...symbolBoxRefusals.map(([, body]) => ["look-alike task box", body, "checker only"] as const),
+  ...lazyMarkerRefusals.map(([, body]) => ["look-alike list marker", body, "checker only"] as const),
+  ...[...unicodeBracketRefusals, ...graphemeBoxRefusals].map(
+    ([, body]) => ["look-alike task box", body, "checker only"] as const,
+  ),
+  ...[...lookAlikeBoxRefusals, ...lookAlikeCorpusRefusals].map(
+    ([, body]) => ["look-alike task box", body, "checker only"] as const,
+  ),
+  ...khitanRefusals.map(([, body]) => ["invisible character", body, "checker only"] as const),
+  ...blankGlyphBoxRefusals.map(({ body }) => ["invisible character", body, "checker only"] as const),
+  ...[...lineSeparatorRefusals.map(([, body]) => body), ...brailleBoxRefusals, ...invisiblePrefixRefusals].map(
+    (body) => ["invisible character", body, "checker only"] as const,
+  ),
+  ...loneCrRefusals.map(([, body, kind]) => [kind, body] as const),
+  // Preserve the raw ordered-context guard when an earlier marker was paragraph text.
+  ["task marker", "Text\n2) Step\n* 2. Step\n\t  - [x] T"],
+  ...[
+    ...rawContextRefusals,
+    ...boxShapeRefusals,
+    ...fencedBoxPins,
+    ...malformedBoxRefusals.filter((body) => body.startsWith("```")),
+  ].map((body) => ["task marker", body, "checker only"] as const),
+  // A bare split box four columns beyond its container also fails closed.
+  ["task marker", "    [\n    ] text", "checker only"],
+  ...nonAsciiIndentRefusals.map(([kind, body]) => [kind, body, "checker only"] as const),
+  ...markerPaddingRefusals.map((body) => ["task marker", body, "checker only"] as const),
+  ...oracleStructureWitnesses,
+  ...sourceBoxWitnesses.map((body) => ["task marker", body] as const),
+  ["task marker", "-\t[x] Check", "checker only"],
+  ["task marker", "1.\t[ ] Check", "checker only"],
+  ["task marker", "> -     [x] Check", "checker only"],
+  ["task marker", "- -     [ ] Check", "checker only"],
+  ["task marker", "> 1.\t[x] Check", "checker only"],
+  ["task marker", "- \t[ ] Check", "checker only"],
+  ["task marker", "2. Step\n   - [ ] Parent\n\n     - [ ] Child", "checker only"],
+  ["task marker", "2. Step\n   - [ ] Parent\n     text\n     - [ ] Child", "checker only"],
+  [
+    "task marker",
+    "2. Step\n   - [ ] Parent\n     - [ ] Child\n       - [ ] Grandchild\n   - [ ] Next\n       - [ ] Wrong",
+    "checker only",
+  ],
+  ...sameLineTextRefusals.map((body) => ["task marker", body, "checker only"] as const),
+  ...["- [ ]", "- [x]", "* [ ]", "1. [ ]", "1) [x]"].flatMap((box) =>
+    ["", " ", " \t"].map((suffix) => ["task marker", box + suffix] as const),
+  ),
+  ...canonicalRefusals.map((body) => ["task marker", body, "checker only"] as const),
+  ["task marker", "2. Step\n   ```\n   > ```\n   - 3. Nested\n   - [ ] Check\n   ```", "checker only"],
+  ["task marker", "2. Step\n   ```\n   - 3. Nested\n   - 1. Next\n   - [ ] Check\n   ```", "checker only"],
+  ["task marker", "2. Step\n   >     - [ ] Check", "checker only"],
+  ["task marker", "2. Step\n   -     [ ] Check"],
+  ["task marker", "2. Step\n   - [ ]Check"],
+  ["task marker", "2. Step\n   - [x]Check"],
+  ["task marker", "- [ ]Check"],
+  ...newlyRefusedBodies.map((body) => ["task marker", body, "checker only"] as const),
+  ...[
+    "- a\n  ```\n2. a\n   [\n   ] x",
+    "2. a\n   >- ```\n   >  ```\n   > - [ ] x",
+    "2. a\n      ```\n        ```\n   - [ ] x",
+    "2. a\n   ```\n   code\n   ```\n   - [ ] x",
+    "2. a\n   -\n       ```\n   [\n   ] x",
+    "2. a\n   - \n       - [ ] x",
+    "2. a\n   - b\nwrapped\n       - [ ] x",
+    "2. a\n   ```\n   code\n   ```\n\n text\n   - [ ] x",
+    "2. a\n   ```\n   code\n   ```\n> # h\n> - [ ] x",
+    "- [x\\] Done",
+    "- [\\x] Done",
+    "- [\n  \\] Done",
+  ].map((body) => ["task marker", body, "checker only"] as const),
+  ["link destination", "[abc](def)"],
+  ["alt text", screenshot("Hidden")],
+  ["alt text", screenshot("Screenshot 99")],
+  ["alt text", Array(30).fill(screenshot("Screenshot 12")).join("\n")],
+  ["alt text", `\`\`\`md\n${screenshot("Screenshot 1")}\n\`\`\`\n${screenshot("Screenshot 1")}`],
+  ["reference definition", "[abc]: def"],
+  ["character reference", "&amp;"],
+  ["table", "| a |\n| - |\n| a | HIDDEN |"],
+  ["raw HTML", "<!-- hidden -->"],
+  ["fence info", "```hidden\ncode\n```"],
+  ["list number", "1. a\n9. b"],
+  ["list number", "1. a\n2.    \n   ## h\n2. c"],
+  ["list number", "00001. a"],
+  ["list number", "- 1. a\n- 1. b\n  3. c"],
+  ["list number", "a\n2. b\n1. c\n4. d"],
+  ["list number", "1.\n1.\n2."],
+  ["list number", "1. a\n2. b\nlazy\n1. c\n2. d"],
+  ["list number", "1. a\n2. b\n\n   indented\n1. c\n2. d"],
+  ["list number", "1. a\n\u00a0\nb\n1.\n2."],
+  ["list number", "1. a\n\n9. b"],
+  ["list number", "- 00000001. x"],
+  ["list number", "1. 007. x"],
+  ["list number", "> - 0009. x"],
+  ["list number", "- 0."],
+  ["list number", "1. 01) a"],
+  ["list number", "* 011. "],
+  ["list number", "+ 01. x"],
+  ["list number", "987654321. [x] Done"],
+  ["list number", "- 987654321. [x] Done"],
+  ["list number", "987654321. [ ] Done"],
+  ["list number", "- 987654321. [ ] Done"],
+  ["list number", "2) [ ] step"],
+  ["list number", "1. 9. [x] Done"],
+  ["list number", "> - 9. [ ] Done"],
+  ["task marker", "2. [X] Done"],
+  ["list number", "2.\t[x] Done"],
+  ["list number", "1. [x] a\n2. [ ] b"],
+  ["task marker", "- [X] done"],
+  ["task marker", "> -\n >   [X] done"],
+  ["task marker", "> -\n>\t[X] done"],
+  ["task marker", "-\n[x] e"],
+  ["empty code block", "```go\n```"],
+  ["empty code block", "```ts\n\n```"],
+  ["empty code block", "> outside\n\n```ts\n```"],
+  ["empty code block", " ```go\n ``` "],
+  ["empty code block", "   ```go\n   ``` "],
+  ["empty code block", "   ```ts"],
+  ["list number", "1234. [\t] Done"],
+  ["task marker", "2.    [\t] Done"],
+  ["list number", "- 12. [\t] a"],
+  ["list number", "- 987654. [\t] Done"],
+  ["list number", "12345678. [\t] Done"],
+  ["task marker", "2. [\n   ] Done"],
+  ["task marker", "2.\n   [\n   ] Done"],
+  ["task marker", "2)\n   [\n   ] Done"],
+  ["task marker", "2.\n   [\n] Done"],
+  ["task marker", "- 2.\n     [\n     ] Done"],
+  ["task marker", "1. 2.\n      [\n      ] Done"],
+  ["task marker", "> - 2.\n>      [\n>      ] Done"],
+  [
+    "task marker",
+    "Steps\n\n104.\n     [\n     ] a\n\ntext\n\n101.\n     [\n     ] b\n\ntext\n\n108.\n     [\n     ] c",
+  ],
+  // These are required raw refusals beyond remark's model. Keep them in the
+  // hostile corpus and assert refusals, without claiming the oracle detects them.
+  ["task marker", "-\n  ```\n2. a\n   [\n   ] x", "checker only"],
+  ["task marker", "-    \n  ```\n2. a\n   [\n   ] x", "checker only"],
+  ["task marker", "1.\n   ```\n2. a\n   [\n   ] x", "checker only"],
+  ["task marker", "1)    \n   ```\n2) a\n   [\n   ] x", "checker only"],
+  ["task marker", "2. a\n   > -\n   >   ```\n   > ```\n   > - [ ] x", "checker only"],
+  ["task marker", "2. a\n   >> -\n   >>   ```\n   >> ```\n   >> - [ ] x", "checker only"],
+  ["task marker", "2. a\n   >-\n   >   ```\n   >  ```\n   > - [ ] x", "checker only"],
+  ["task marker", "2. a\n   >>-\n   > >   ```\n   >>  ```\n   >> - [ ] x", "checker only"],
+  ["task marker", "2. a\n   > -\n   >   ```\n   >\n   >   - [ ] x\n   >   ```", "checker only"],
+  // The requested blank-start restart refusals are stricter than the oracle's
+  // bounded literal-one allowance, which still covers their final marker.
+  ["list number", "1. a\n2.    \n   ## h\n1. c", "checker only"],
+  ["list number", "1. a\n2.    \n   ***\n1. c", "checker only"],
+  ["list number", "1. a\n2.\n   ## h\n1. c", "checker only"],
+  ["task marker", "2.    \n   text\n       - [ ] x", "checker only"],
+  ["task marker", "2.    \n   ```text\n   - [ ] x\n   ```", "checker only"],
+  ["list number", "1. a\n2.\t\n   ## h\n1. c", "checker only"],
+  ["task marker", "2.\t\n   text\n       - [ ] x", "checker only"],
+  ["list number", "1. a\r\n2.    \r\n   ## h\r\n1. c", "checker only"],
+  ["list number", "Steps\n\n104101108. [\t] a\n\ntext\n\n108111032. [\t] b", "checker only"],
+  ["task marker", "2. [\t] Done", "checker only"],
+  ["list number", "- 987654321. [\t] Done", "checker only"],
+  ["task marker", "1. [\t] a\n2. [\t] b", "checker only"],
+  ["list number", "2. -[x] Done", "checker only"],
+  ["list number", "987654321. +[x] Done", "checker only"],
+  ["list number", "2. 3.[x] Done", "checker only"],
+  ["list number", "2. 1.[x] Done", "checker only"],
+  ["list number", "2. \\[x] Done", "checker only"],
+  ["list number", "2. [x\\] Done", "checker only"],
+  ["task marker", "2. [\u00a0] Done", "checker only"],
+  ["task marker", "2. [\u3000] Done", "checker only"],
+  ["task marker", "2. a\n-[x] b", "checker only"],
+  ["task marker", "-[x] Done", "checker only"],
+  ["task marker", "1.[x] Done", "checker only"],
+  ["task marker", "1. [\n   ] Done", "checker only"],
+  ["task marker", "\\[x]", "checker only"],
+  ["list number", "1000. a", "checker only"],
+  ["list number", "- 1234. a", "checker only"],
+  ["task marker", "2. a\n\n   9x [ ] b", "checker only"],
+  ["task marker", "1. Steps\n\n   1h [ ] a\n\n   1i [ ] b", "checker only"],
+  ["task marker", "2.\n   12 [ ] b", "checker only"],
+  ["list number", "2. a\n\n   1234567890. [ ] b", "checker only"],
+  ...["2. Steps\n\n   1h [ ]\n\n   1i [ ]", "- a\n\n  1h [x]\n\nend"].flatMap((body) =>
+    [body, body.replaceAll("\n", "\r\n")].map((input) => ["task marker", input, "checker only"] as const),
+  ),
+  ["task marker", "2. a\n\n   1234567890. [ ]\n\nx", "checker only"],
+  ["task marker", "2. a\r\n\r\n   1234567890. [ ]\r\n\r\nx", "checker only"],
+  ["list number", "- 1234567890.[ ] x", "checker only"],
+  ["list number", `- ${"9".repeat(190)}.[ ] x`, "checker only"],
+  ["list number", "1. 104101108108111032.[x] x", "checker only"],
+  ["list number", "-\n  1234567890.[ ] x", "checker only"],
+  ["task marker", "2. 1234567890.\n   [\n   ] x", "checker only"],
+  ["task marker", "1234567890.\n   [\n   ] x", "checker only"],
+  ["task marker", "1234567890. 1.\n   [\n   ] x", "checker only"],
+  ["task marker", "2. a\n   - b\n   ---\n       - [ ] x", "checker only"],
+  ["task marker", "2. a\n   - b\n     - c\n   ---\n       - [ ] x", "checker only"],
+  ["task marker", "2. a\n   - b\n\n   text\n       - [ ] x", "checker only"],
+  ["task marker", "2. a\n   - b\n\n   \u00a0\n       - [ ] x", "checker only"],
+  ["task marker", "2. a\n   - b\n   ## Next\n       - [ ] x", "checker only"],
+  ["task marker", "2. a\n   - b\n   ```text\n   code\n   ```\n       - [ ] x", "checker only"],
+  ["task marker", "2. a\n   -\n       - [ ] x", "checker only"],
+  ["task marker", "104. a\n    ```\n         - [ ] x", "checker only"],
+  ["task marker", "2. a\n   ```text\n   - [ ]\n   ```", "checker only"],
+  ["task marker", "2. a\n   ```text\n   - [x] done\n   ```", "checker only"],
+  ["task marker", "2. a\n\n   1h [x]\n\nx", "checker only"],
+  ["task marker", "2. a\n   ```text\n   [ ]\n   ```", "checker only"],
+  ["task marker", "2. a\n   ```text\n   [x] done\n   ```", "checker only"],
+  ["task marker", "2. a\n   - [ ] b\n           - [ ] c", "checker only"],
+  ["task marker", "2. a\n   - [ ] b\n     text\n         - [ ] c", "checker only"],
+  ["task marker", "2. a\n   - - -\n        - [ ] c", "checker only"],
+  ["task marker", "104. a\n     \\- [ ] x", "checker only"],
+  ["task marker", "104. a\n     1\\. [ ] x", "checker only"],
+  ["task marker", "104. a\n         - [ ] x", "checker only"],
+  ["task marker", "104. a\n     ```text\n     x\n     - [ ] bar\n     ```", "checker only"],
+  ["task marker", "104. a\n     [\n     ] Done", "checker only"],
+  ["list number", "- 888. x", "checker only"],
+  ["list number", "- 999. a", "checker only"],
+  ["list number", "- 10. x", "checker only"],
+  ["list number", "1. 100. x", "checker only"],
+  ["task marker", "- a\n\n  1h [ ] b", "checker only"],
+  ["task marker", "> - Steps\n>\n>   9x [ ] Continue", "checker only"],
+  ["task marker", "> 1. Steps\n>\n>   9x [ ] Continue", "checker only"],
+  ["task marker", "- Steps\n\n   9x [ ] Continue", "checker only"],
+  ["task marker", "- 9x [ ] Continue", "checker only"],
+  ["task marker", "> - 9x [ ] Continue", "checker only"],
+  ["task marker", "1. 9x [ ] Continue", "checker only"],
+  ["task marker", "> 1. 9x [ ] Continue", "checker only"],
+  ["task marker", "- > 1. 1h [ ] Continue", "checker only"],
+  ["task marker", "- [ ] Remove the auth check [x]", "checker only"],
+  ["task marker", "1. [ ] Ship it [X]", "checker only"],
+  ["task marker", "- [ ] a\\[x]", "checker only"],
+  ["task marker", "- [ ] a[x]", "checker only"],
+  ["task marker", "> - [ ] text [X]\n- [ ] text [X]", "checker only"],
+] as const;
+const oracleHostile = hostile.filter(([, , scope]) => scope !== "checker only");
+
+const containerFences = [
+  ">```ts\ne",
+  ">```ts\n\n>a",
+  ">```ts\n    >a",
+  "1. a\n   ```ts\ncode",
+  "- ```ts\ne",
+  ">> ```ts\n> code",
+  ">   ```ts\n> code",
+  "- > ```ts\n> code",
+  "> ~~~go\n>    ~~~~",
+  "> ```go\n>    ````",
+  ">> ~~~go\n>>    ~~~~",
+  "- > ~~~go\n  >    ~~~~",
+  "> ~~~go\n>\t~~~~",
+  "> ```ts\noutside",
+  "- ```ts\noutside",
+  "> ```ts\n> \t\n> ```",
+  "1. ```ts",
+  " > ```ts\r\n\r\n>a",
+];
+
+// These owner forms must stay accepted; markdown-security.test.ts also asserts
+// them through issue evaluation. The mixed corpus below retains refusal cases too.
+const ownerBodies = [
+  ...flagControls,
+  ...round26Controls,
+  ...rootParagraphControls.map(([, body]) => body),
+  ...codeGroupControls.map(([, body]) => body),
+  ...round25Controls,
+  ...round24Controls,
+  ...round23Controls,
+  ...restoredBodies,
+  ...realListControls,
+  "2. Step\n   - [ ] Parent\n     - [ ] First\n     - [ ] Second",
+  "2. Step\n   - [ ] Parent\n     - [ ] First\n       - [x] Child\n     - [ ] Second\n   - [ ] Next",
+  "2. Step\n   - [ ] Parent\n     - [ ] First\n       - [ ] Child\n         - [x] Deep\n       - [ ] Sibling",
+  "-    [ ] Check",
+  "1.    [x] Check",
+  "> -    [x] Check",
+  "- [x]\tCheck",
+  "1. a\n2. Step\n   - [ ] Parent\n     - [ ] Child",
+  "```\n- ```\n```\n\n## Steps\n1. First\n2. Second\n   - [ ] Check",
+  "```\n> ```\n```\n\n## Steps\n1. First\n2. Second\n   - [ ] Check",
+  "1. a\n2. b\n   ```text\n   code\n   ```\n   More text",
+  "- [x] path\\name",
+  "2. a\n   ```\n   code\n   ```\n## Expected\n- [ ] x",
+  "-\n  ```text\n  code\n  - [ ] x\n  ```",
+  "1.\n   ```text\n   code\n   - [x] x\n   ```",
+  ">-\n>   ```text\n>   code\n>   - [ ] x\n>   ```",
+  "1. a\n2. b\n## h\n1. c",
+  "1.  a\n2.  b\n   ## H\n3.  c",
+  "2.    \n   text\n   - [ ] x",
+  "1. a\n2.    \n## h\n1. c",
+  "1. a\n2.    \n   ## h\n1) c",
+  "1. a\n2.    \n       ## h\n1. c",
+  "-\n  text",
+  "-    \n  text",
+  ...["## Expected", "---", "  ## Expected", "  * * *", "___"].map((boundary) => `1. a\n2. b\n${boundary}\n1. c\n2. d`),
+  "104. a\n   ## Expected\n1. c\n2. d",
+  "104. a\n## Expected\n[\n] literal",
+  "104. a\n\nExpected\n\n[\n] literal",
+  '1. Create\n2. Set:\n\n   ```json\n   [\n     "a"\n   ]\n   ```',
+  "1. a\n2. b\n```json\n[\n1\n]\n```",
+  "1. a\n2. b\n```text\n[\n] literal\n```",
+  "1. a\n2. Step\n   - [ ] a\n     - [ ] b\n       - [ ] c",
+  "104. a\n\n## Expected\n\n[\n] literal",
+  "Steps\n\n1. a\n2. b\n\n## Expected\n\n- [ ] Pending",
+  "2. a\n   - [ ] b",
+  "104. a\n     - [ ] b",
+  "104. a\n\n```text\n- [ ] b\n```",
+  "104. a\n\n## Expected\n\n```json\n[\n1\n]\n```",
+  "2. a\n1. b\n   [\n   ] x",
+  "> - [ ] Pending",
+  "> 1. [x] Done",
+  "> - 1) [ ] Pending",
+  "- > 1. [ ] Pending",
+  "- [ ] Pending",
+  "- [x] Done",
+  "1. [x] Done\n1. [ ] Pending",
+  "[1] ref",
+  "- [Optional]",
+  "- [x86]",
+  "- [ 1, 2 ]",
+  "- [x] Done\n  - [ ] Pending",
+  "> - [x] Done\n> - [ ] Pending",
+  "```python\nprint([1, 2])\n```",
+  "```sh\nprintf '%s\\n' pending\n```",
+  "- [a] item",
+  "1. [1] reference",
+  "[!] Note",
+  "2. [a] b",
+  "```text\n[1] 42\n```",
+  "1. [x] Done",
+  "- 1. [ ] a",
+  "1) [ ] step",
+  "> - [ ] quoted",
+  "- [ ] Pending\n- [x] Complete",
+  "```text\n- [x] Done\n1. [ ] Pending\n```",
+  "```json\n[\n  1,\n  2\n]\n```",
+  "999. a",
+  "```text\n\t```\n```",
+  "```text\n    ```\n```",
+  "```text\n \t```\n```",
+  "- a\n  ```text\n      ```\n  ```",
+  "```text\n> ```\n```",
+  "Steps\n\n1. a\n2. b\n\nExpected\n\n1. c\n2. d\n3. e",
+  "1. a\n2. b\n\n```text\n1. first\n2. second\n```",
+  "1. Steps\n2. More\n\nExpected\n\n1. c\n2. d",
+  "1. a\n2. b\n\ntext\n\n1. c\n2. d",
+  "1. a\n2. b\n\n## Expected\n\n1. c\n2. d",
+  "1. a\n2. b\n \t\nExpected\n1. c\n2. d",
+  "1. a\n2. b\n\n- divider\n1. c\n2. d",
+  "1. a\n2. b\n\n> divider\n1. c\n2. d",
+  "1. a\n2. b\n\n```text\ncode\n```\n1. c\n2. d",
+  Array.from({ length: 30 }, (_, i) => screenshot(`Screenshot ${i + 1}`)).join("\n"),
+  `\`\`\`md\n${screenshot("Screenshot 1")}\n\`\`\`\n${screenshot("Screenshot 2")}`,
+];
+
+// Mixed accepted, refused and historical fixtures, including the raw-rule fence
+// matrix and size boundaries. Acceptance is asserted separately for owner forms.
+const examples = [
+  ...hostile.map(([, body]) => body),
+  ...containerFences,
+  ...ownerBodies,
+  "```text\n2. [x] Done\n```",
+  "- a\n  ```go\n\t```",
+  "- a\n  ```go\n     ```",
+  "- a\n  ```go\n \t```",
+  "````text\n```go\n```\n````",
+  "10. x",
+  "100. x",
+  "- 7. x",
+  "1. 7. x",
+  "> - 9. x",
+  "- 10. x",
+  "1. 100. x",
+  "Text 01. x",
+  "```go\n~~~",
+  "~~~go\n```",
+  "````go\n```",
+  "~~~~go\n~~~",
+  "```go\n```text\ncode",
+  "> ```go\n> ```",
+  "1. a\n    ```ts\n    ```",
+  "1. Steps\n2. More\n\nExpected\n\n1. c\n1. d",
+  "1. Steps\n2. More\n\nExpected\n\n1. c\n2. d",
+  "1. a\n2. b\n\n- x\n  1. y\n  1. z",
+  "```text\n- 01. x\n```",
+  "1. a\n   ```ts\n   ```",
+  "```go\n```` \t",
+  "~~~go\n~~~~",
+  "1. a\n1. b\n1. c",
+  "1. a\n2. b\n3. c",
+  "7. a\n8. b\n9. c",
+  "5.\n1.\n1.",
+  "1.\n2.\n\ntext\n\n3.",
+  "1. a\n2. b\n\ntext\n\n1. c\n2. d",
+  "1. a\n2. b\n\ntext\n\n1) c\n2) d",
+  "> ```ts\n> code\n> ```",
+  "1. a\n   ```ts\n   code\n   ```",
+  "- > ```ts\n  > code\n  > ```",
+  "1. [ ] step",
+  "-\n[X] e",
+  "-\n[ ] e",
+  "-\n  [x] done",
+  "> -\n>   [x] done",
+  "> -\n>\t[x] done",
+  "1. a\n1. b\n2. c",
+  "-\n[x] e",
+  "1. a\n\n2. b",
+  "1. a\n   ```ts\n   code\n   ```\n2. b",
+  "1. a\n   1. b\n   2. c",
+  "1. a\n   1. b\n   1. c",
+  "```\n```",
+  screenshot("Screenshot 1"),
+  ["", "Screenshot", "Screenshot 3"].map((alt) => screenshot(alt)).join("\n"),
+  "Text\n---\nText",
+  "A | B\n\n---",
+  "$5\n \t\n$6",
+  "10:30:00",
+  "x".repeat(200),
+  "😀".repeat(200),
+  `a${" \t".repeat(8)}b`,
+  ["", "Screenshot", "Screenshot 0", "Screenshot 09", "Screenshot 99"].map((alt) => screenshot(alt)).join("\n"),
+  "Plain instructions.",
+  "## Summary\n- First item\n1. Second item",
+  "- [ ] Pending\n- [x] Complete",
+  "- [ ] Pending\n- [ ] Next",
+  "- [x]\n~",
+  "- [x] a",
+  "- [X] a",
+  "> quote\n**bold**",
+  "Use `const x = 1;` here.",
+  "```ts\nconst x = 1;\n```",
+  "https://example.com/a?q=1&x=2",
+  "synthetic@example.com",
+  "#12 @user",
+  "Choose A | B.",
+  "| : |",
+  screenshot("Screenshot"),
+  screenshot(""),
+  `Before.\r\n${screenshot("Screenshot")}\r\nAfter.`,
+  ":123: :12: :_-+:",
+  ":word :word",
+  "$5\n\n$6",
+  "&amp",
+  `&a${"1".repeat(32)};`,
+  ...["0", "9", "#", "*"].map((base) => `${base}\ufe0f\u20e3`),
+  ...["\u00a0", "\u1680", "\u2000", "\u2003", "\u202f", "\u205f", "\u3000"].map((space) => `| text |\n${space}\n---`),
+  "abc\n".repeat(65_536 / 4),
+  // Accepted issue bodies: test-support, issue-trust, issue-security and
+  // issue-boundaries (including snapshots with CRLF and no final newline).
+  "Approved task.\n",
+  "  Exact body\r\n\nNo final newline  ",
+  "Visible\r\nNo final newline",
+  "👩‍💻",
+  "👩️‍💻️",
+  "👩‍👩‍👧‍👦",
+  "❤️",
+  "Visible\r\n\ttext",
+  `Visible.\r\n~~~md\n**Visible instruction**  \n- [ ] Keep spacing\n~~~\n${screenshot("Screenshot")}`,
+  "```ts\nconst example = true;\n```",
+  `Owner text.\r\nhttps://example.com/docs/example.txt#L1-L40\n${screenshot("Screenshot")}\n~~~md\n**Visible instructions**  \n~~~`,
+];
+for (const prefix of ["", "   ", "> ", "- "]) {
+  for (const fence of ["```", "~~~~"]) {
+    for (const language of ["", ...languages]) {
+      const continuation = prefix === "- " ? "  " : prefix;
+      examples.push(`${prefix}${fence}\t ${language.toUpperCase()} \t\n${continuation}code\n${continuation}${fence}`);
+    }
+  }
+}
+
+// Broad list/container shapes derived from the review probes. Keep the generator
+// here so seeds are reproducible without any external probe files.
+function broadBodies(seed: number, count: number): string[] {
+  let state = seed;
+  const random = () => {
+    state ^= state << 13;
+    state >>>= 0;
+    state ^= state >>> 17;
+    state ^= state << 5;
+    state >>>= 0;
+    return state / 2 ** 32;
+  };
+  const pick = (values: string[]): string => values[Math.floor(random() * values.length)] ?? "";
+  const ordered = [
+    "2. Step",
+    "10. Step",
+    "2.  Step",
+    "2.\tStep",
+    "- 2. Step",
+    "- > 2. Step",
+    "> - 2. Step",
+    "1. Step",
+    "3. Next",
+    "* 2. Step",
+    "- - 2. Step",
+    "2. - Step",
+    "2. > Step",
+    "2) Step",
+    "1. - 2. Step",
+    "  - 2. Step",
+    "- 10. Step",
+  ];
+  const text = [
+    "Text",
+    "  text",
+    "   text",
+    "    text",
+    "     text",
+    "> text",
+    ">",
+    "",
+    "",
+    "# H",
+    "---",
+    "```",
+    "   ```",
+    "     ```",
+    "\ttext",
+    "  - item",
+    "     - item",
+    "1. one",
+    "- item",
+  ];
+  const box = () => {
+    const indent = Math.floor(random() * 13);
+    const choice = random();
+    const checked = random() < 0.3 ? "x" : " ";
+    if (choice < 0.75) return `${" ".repeat(indent)}- [${checked}] T`;
+    if (choice < 0.8) return `${" ".repeat(indent)}* [${checked}] T`;
+    if (choice < 0.85) return `${" ".repeat(indent)}> - [${checked}] T`;
+    if (choice < 0.9) return `${" ".repeat(Math.min(indent, 3))}1. [${checked}] T`;
+    if (choice < 0.95) return `${"\t".repeat(1 + Math.floor(random() * 2))}${" ".repeat(indent % 4)}- [${checked}] T`;
+    return `${" ".repeat(indent)}+ [${checked}] T`;
+  };
+  const bodies: string[] = [];
+  for (let i = 0; i < count; i++) {
+    const lines: string[] = [];
+    if (random() < 0.3) lines.push(pick(text));
+    lines.push(pick(ordered));
+    const length = 1 + Math.floor(random() * 6);
+    for (let j = 0; j < length; j++) lines.push(random() < 0.8 ? box() : pick([...text, ...ordered]));
+    bodies.push(lines.join("\n"));
+  }
+  return bodies;
+}
+
+// The review's broad container fuzzer, kept local and independent of its probes.
+function containerBodies(seed: number, count: number): string[] {
+  let state = (seed * 2654435761) >>> 0 || 1;
+  const random = () => {
+    state ^= state << 13;
+    state >>>= 0;
+    state ^= state >>> 17;
+    state ^= state << 5;
+    state >>>= 0;
+    return state / 2 ** 32;
+  };
+  const pick = (values: string[]) => values[Math.floor(random() * values.length)] ?? "";
+  const lead = () => pick(["", "", "", "> ", "- ", "1. ", ">", " > ", "- > ", "> - ", "  ", "\t"]);
+  const piece = () => {
+    const choice = random();
+    const indent = " ".repeat(Math.floor(random() * 8));
+    if (choice < 0.1) return indent + pick(["```", "~~~", "````"]);
+    if (choice < 0.15) return pick(["", "", ">", "> ", "   "]);
+    if (choice < 0.2) return indent + pick(["Text", "text", "more"]);
+    if (choice < 0.25) return indent + pick(["===", "-", "--", "---", "=", "# H", "***", "* * *"]);
+    if (choice < 0.35) return indent + pick(["-", "*", "+", "1.", "2.", "10.", "1)", "10)", "100."]);
+    if (choice < 0.5)
+      return (
+        indent +
+        pick(["- a", "* a", "+ a", "1. a", "2. a", "10. a", "2) a", "1) a", "- > a", "> - a", "> 2. a", "- 2. a"])
+      );
+    if (choice < 0.55) return indent + pick(["[", "] x", "[ ] x"]);
+    const checked = random() < 0.4 ? "x" : " ";
+    return `${indent}${pick(["- ", "- ", "- ", "* ", "1. ", "> - ", "- - "])}[${checked}] T`;
+  };
+  const bodies: string[] = [];
+  for (let i = 0; i < count; i++) {
+    const length = 2 + Math.floor(random() * 6);
+    const lines: string[] = [];
+    for (let j = 0; j < length; j++) lines.push((random() < 0.2 ? lead() : "") + piece());
+    bodies.push(lines.join("\n"));
+  }
+  return bodies;
+}
+
+function generatedBodies(seed = 0x5eedc0de, count = 4_000): string[] {
+  let state = seed;
+  const next = (limit: number) => {
+    state ^= state << 13;
+    state ^= state >>> 17;
+    state ^= state << 5;
+    return (state >>> 0) % limit;
+  };
+  const pieces = [
+    ..."[]():*_`~$!#>-+|\\&^=@<0123456789abcXYZ",
+    " ",
+    "\t",
+    "\n",
+    "\r\n",
+    "\u2028",
+    "\u2029",
+    "\n\n",
+    "é",
+    "中",
+    "١",
+    "- ",
+    "* ",
+    "+ ",
+    "1. ",
+    "2) ",
+    "2.\n",
+    "9x [ ] ",
+    "1h [ ] ",
+    "1234. ",
+    "12345678. ",
+    "- 12. ",
+    "- 0",
+    "01. ",
+    "1. 007. ",
+    "* 011. ",
+    "+ 01. ",
+    "1. [x] ",
+    "2. [ ] ",
+    "1) [ ] ",
+    "2) [x] ",
+    "987654321. [x] ",
+    "- 987654321. [x] ",
+    "> ",
+    "> > ",
+    "> - ",
+    "- > ",
+    "- - ",
+    "```",
+    "~~~",
+    "```ts",
+    "~~~text",
+    "```hidden",
+    "~~~math",
+    "```ts hidden",
+    "https://",
+    "https://example.com/a?q=1",
+    "www.",
+    "www.example.com",
+    "synthetic@example.com",
+    "#12",
+    "[^1]",
+    "> [!NOTE]",
+    "[x]",
+    "[X]",
+    "[ ]",
+    "[a]",
+    "[1]",
+    "[!]",
+    "[Optional]",
+    "[x86]",
+    "[ ] a[x]",
+    "[\t]",
+    "[\u00a0]",
+    "[\u3000]",
+    "\\[x]",
+    "[x\\]",
+    "-[x]",
+    "+[x]",
+    "3.[x]",
+    "1.[x]",
+    "[\n   ]",
+    "[a]: /b",
+    "](",
+    "[abc](",
+    "![abc](",
+    "(abc)",
+    "[abc][def]",
+    "[abc](def)",
+    "github.com/x/y",
+    "&amp;",
+    "---",
+    ":-",
+    "| a |",
+    screenshot("Screenshot"),
+    screenshot(""),
+    screenshot("Screenshot 09"),
+    screenshot("Hidden"),
+    screenshot("Screenshot 99"),
+    screenshot("Screenshot", asset.replace("01234567-89ab-cdef-0123-456789abcdef", "bad-id")),
+    screenshot("Screenshot", asset.replace("abcdef", "ABCDEF")),
+  ];
+  const prefixes = [
+    "",
+    "> ",
+    "> > ",
+    ">   ",
+    "- ",
+    "* ",
+    "+ ",
+    "1. ",
+    "2) ",
+    "> - ",
+    "> 1. ",
+    "> 1) ",
+    "> - 1. ",
+    "- 1. ",
+    "- > ",
+    "- - ",
+    "  ",
+    "\t",
+  ];
+  const pick = (values: string[]): string => {
+    const value = values[next(values.length)];
+    assert.ok(value !== undefined, "generator choices must not be empty");
+    return value;
+  };
+  const bodies: string[] = [];
+  for (let i = 0; i < count; i++) {
+    let body = "";
+    const count = 1 + next(24);
+    for (let j = 0; j < count; j++) body += pick(pieces);
+    bodies.push(body);
+    // Correlated lines reach block constructs that independent punctuation
+    // almost never produces: nested tables, task boxes and fenced paragraphs.
+    if (i % 13 === 0) {
+      const prefix = pick(prefixes);
+      bodies.push(`${prefix}| a |\n${prefix}${pick(["---", ":-", "| --- |"])}\n${prefix}visible | HIDDEN`);
+    } else if (i % 13 === 1) {
+      const marker = pick(["-", "1.", "2.", "1234.", "12345678.", "- 12.", "987654321."]);
+      const spacing = pick([" ", "    ", "\t"]);
+      const box = pick(["[ ]", "[x]", "[X]", "[\t]", "[\u00a0]", "[\u3000]", "\\[x]", "[x\\]", "[\n   ]"]);
+      bodies.push(
+        `${pick(prefixes)}${marker}${spacing}${pick(["", "-", "+", "3.", "1."])}${box} ${pick(["a", "é1", "task"])}\n${body}`,
+      );
+    } else if (i % 13 === 2) {
+      const fence = pick(["```", "~~~"]);
+      const prefix = pick(["", "> ", "- "]);
+      const continuation = prefix === "- " ? "  " : prefix;
+      bodies.push(
+        `${prefix}${fence}${pick(["", "ts", "TEXT", "math", "ts hidden"])}\n${continuation}${pick(["", " \t", "code", "const x = 1;"])}\n${continuation}${fence}`,
+      );
+    } else if (i % 13 === 3) {
+      bodies.push(
+        `${pick(prefixes)}${pick(["[abc](def)", "![abc](def)", "[abc][def]\n\n[def]: /hidden", '[abc](def "hidden")'])}`,
+      );
+    } else if (i % 13 === 4) {
+      bodies.push(
+        pick([
+          screenshot("Hidden"),
+          screenshot("Screenshot 99"),
+          screenshot("Screenshot 1"),
+          `${screenshot("Screenshot 1")}\n${screenshot("Screenshot 2")}`,
+          screenshot("Screenshot", asset.replace("01234567-89ab-cdef-0123-456789abcdef", "bad-id")),
+          screenshot("Screenshot", asset.replace("abcdef", "ABCDEF")),
+        ]),
+      );
+    } else if (i % 13 === 5) {
+      const prefix = pick(["", "> ", "  "]);
+      const markers = pick(["1,2,3", "1,1,1", "7,8,9", "1,9,3", "00001,2,3", "1,1,2"]).split(",");
+      bodies.push(markers.map((marker) => `${prefix}${marker}. visible`).join("\n"));
+    } else if (i % 13 === 6) {
+      bodies.push(pick(["Plain text.", "- [x] done", "- [ ] pending", "a[X]", "https://example.com/a", "#12 @user"]));
+    } else if (i % 13 === 7) {
+      const container = pick(["> -", "> 1.", "-"]);
+      const quote = container.startsWith(">") ? ">" : "";
+      bodies.push(
+        pick([
+          "2. a\n-[x] b",
+          "1. [\t] a\n2. [\t] b",
+          "Steps\n\n104101108. [\t] a\n\ntext\n\n108111032. [\t] b",
+          "2. [\n   ] Done",
+          "2. a\n\n   9x [ ] b",
+          "1. Steps\n\n   1h [ ] a\n\n   1i [ ] b",
+          "2.\n   12 [ ] b",
+          "2. a\n\n   1234567890. [ ] b",
+          "- a\n\n  1h [ ] b",
+          `${container} Steps\n${quote}\n${quote}   ${pick(["9x", "1h", "12", "1234567890."])} [ ] Continue`,
+          `- [ ] text ${pick(["[x]", "[X]", "a\\[x]"])}`,
+          "```text\n- [x] Done\n1. [ ] Pending\n```",
+          "```json\n[\n  1,\n  2\n]\n```",
+          `${pick(prefixes)}${pick(pieces)}\n${body}\n${pick(pieces)}`,
+        ]),
+      );
+    } else if (i % 13 === 8) {
+      const prefix = pick(["", "> ", "  "]);
+      const delimiter = pick([".", ")"]);
+      bodies.push(`${prefix}a\n${prefix}2${delimiter} b\n${prefix}1${delimiter} c\n${prefix}4${delimiter} d`);
+    } else if (i % 13 === 9) {
+      const fence = pick(["```", "~~~"]);
+      const prefix = pick(["", ">", "> ", ">> ", "- > ", "   "]);
+      const continuation = pick([
+        "",
+        ">",
+        "> ",
+        ">   ",
+        ">\t",
+        ">>    ",
+        "  >    ",
+        "    ",
+        "\t",
+        " \t",
+        "     ",
+        "      ",
+      ]);
+      const content = pick(["", "\n", `${continuation} \t\n`, `${continuation}code\n`]);
+      bodies.push(`${prefix}${fence}${pick(["go", "ts", "text"])}\n${content}${continuation}${fence}${fence[0]}`);
+    } else if (i % 13 === 10) {
+      bodies.push(
+        `${pick(["-", "> -", ">> -", "- > -", "2.", "2)", "- 2.", "1. 2.", "> - 2."])}\n${pick(["", " ", "   ", "\t", "> ", " >   ", ">\t", ">>    "])}${pick(["[X]", "[x]", "[ ]", "[\n   ]"])} done`,
+      );
+    } else if (i % 13 === 11) {
+      bodies.push(
+        pick([
+          "1. a\n   1. b\n   2. c",
+          "1. a\n   1. b\n   1. c",
+          "> 1. a\n> 2. b",
+          "1. a\n2) b\n3) c",
+          "1. a\n\n2. b",
+          "1. a\n   ```ts\n   code\n   ```\n2. b",
+        ]),
+      );
+    } else if (i % 13 === 12) {
+      const between = pick([
+        "\n\nExpected\n\n",
+        "\nExpected\n\n",
+        "\nlazy\n",
+        "\n\u00a0\nlazy\n",
+        "\n\n   indented\n",
+        "\n\n- divider\n",
+        "\n\n> divider\n",
+        "\n\n```text\ncode\n```\n",
+      ]);
+      bodies.push(`1. a\n2. b${between}1. c\n2. d`);
+    }
+  }
+  // A task paragraph may run over lazy text, indented text, and markers that
+  // cannot interrupt it before a continued (or deliberately lazy) underline.
+  const setextContainers = [
+    ["- ", "  "],
+    ["1. ", "   "],
+    [" - - ", "     "],
+    ["> - ", ">   "],
+    ["- > - ", "  >   "],
+  ] as const;
+  for (let i = 0; i < count / 4; i++) {
+    const [prefix, continuation] = setextContainers[next(setextContainers.length)] ?? setextContainers[0];
+    const lines = [`${prefix}[${pick([" ", "x"])}] Task`];
+    const length = next(4);
+    for (let j = 0; j < length; j++) {
+      lines.push(
+        pick([
+          "lazy",
+          `${continuation}indented`,
+          `${continuation}    over-indented`,
+          `${continuation}${pick(["1)", "2. text", "2) text", "+"])}`,
+        ]),
+      );
+    }
+    lines.push(`${pick([continuation, `${continuation} `, ""])}${pick(["=", "===", "-", "--", "---"])}`);
+    bodies.push(lines.join("\n"));
+  }
+  // Lazy/quoted/over-indented boxes, plus aligned siblings with depth changes.
+  bodies.push(...broadBodies(seed, count), ...containerBodies(seed, count));
+  for (let i = 0; i < count / 4; i++) {
+    bodies.push(
+      pick([
+        `${pick(["-", "1.", "1)", "10.", "  -"])}\n${pick(["", "  ", "\t"])}\n${pick(["    ", "      ", "\t"])}- [x] Task`,
+        `> - Parent\n${pick(["", ">", "> "])}\n> ${pick(["  ", "    ", "\t"])}- [ ] Child`,
+        `- Parent\n  ${pick(["```", "~~~"])}\n  - Literal\n    ${pick(["```", "~~~"])}\n      - [x] Task`,
+        `- [${pick([" ", "x", "  "])}] Task\n${pick(["", " ", "  ", "   "])}${pick(["=", "===", "-", "--", "---"])}`,
+      ]),
+    );
+    const head = pick([
+      "2. Step",
+      "-2. Step",
+      "*2) Step",
+      "- > 2. Step",
+      "> - 2. Step",
+      "Text\n10. Step",
+      "Text\n    # H\n10. Step",
+      "Text\n    ---\n10. Step",
+    ]);
+    let depth = 0;
+    const lines = [head];
+    for (let j = 0; j < 2 + next(7); j++) {
+      depth = Math.max(0, Math.min(depth + next(4) - 2, 4));
+      const column = Math.max(0, 3 + 2 * depth + next(3) - 1);
+      lines.push(`${" ".repeat(column)}- [${pick([" ", "x"])}] Task`);
+    }
+    bodies.push(lines.join("\n"));
+  }
+  return bodies;
+}
+
+function violation(body: string): string | null {
+  try {
+    checkCoverage(body);
+    return null;
+  } catch (error) {
+    if (!(error instanceof assert.AssertionError)) throw error;
+    return error.message.split("\n")[0] ?? error.message;
+  }
+}
+
+// Failure-only delta debugging: keep the same violation and shorten until no
+// single-character deletion preserves it. Keep CRLF intact: issue validation
+// rejects bare CR before Markdown, so shrinking must not introduce one.
+function minimize(body: string, reason: string): string {
+  for (let width = Math.ceil(body.length / 2); width >= 1; width = Math.floor(width / 2)) {
+    for (let start = 0; start + width <= body.length; ) {
+      const candidate = body.slice(0, start) + body.slice(start + width);
+      if (!/\r(?!\n)/u.test(candidate) && hiddenMarkdownReason(candidate) === null && violation(candidate) === reason) {
+        body = candidate;
+        start = 0;
+      } else start++;
+    }
+  }
+  return body;
+}
+
+test("coverage oracle detects lost text and unsafe structure independently of the checker", () => {
+  for (const [kind, body] of oracleHostile) {
+    assert.equal(hiddenMarkdownReason(body), `hidden Markdown in the body: ${kind}`, JSON.stringify(body));
+    assert.notEqual(violation(body), null, JSON.stringify(body));
+  }
+  for (const body of [
+    "123. a\n124. b",
+    "> 123. a",
+    "```TS\n123. a\n```",
+    "    123. a",
+    "`123. a`",
+    "é中١",
+    "https://example.com/a",
+    "www.example.com",
+    "www.",
+    "www.@.c",
+    "synthetic@example.com",
+    screenshot("Screenshot 1"),
+    `~~~text\n${screenshot("Screenshot")}\n~~~`,
+  ])
+    checkCoverage(body);
+});
+
+test("oracle accounts for cmark container-boundary differences", () => {
+  for (const body of [
+    "    m\n2.  p\n    - [x] T",
+    "1.     e\n   1.\n\t   - [ ] T",
+    "    x\n-\n    - [x] T\n-",
+    "t\n1. -\n       - [x] T",
+    "    t\n1. -\n       - [x] T",
+    "=\n>-\n>     - [x] T",
+    "    a\n>-\n>     - [ ] T",
+  ]) {
+    assert.equal(hiddenMarkdownReason(body), null);
+    assert.throws(() => checkCoverage(body, false), /source box must become the same task/u);
+    assert.doesNotThrow(() => checkCoverage(body));
+  }
+});
+
+test("GitHub renders a setext task paragraph as heading text without a checkbox", () => {
+  for (const body of setextBoxRefusals) {
+    assert.equal(hiddenMarkdownReason(body), "hidden Markdown in the body: task marker", JSON.stringify(body));
+    assert.throws(() => checkCoverage(body), /source box must become the same task/u, JSON.stringify(body));
+  }
+});
+
+test("only an underline in the same paragraph and continued container hides a box", () => {
+  for (const body of [
+    "- [ ] a\n---",
+    "- [x] a\n===",
+    "> - [x] a\n> ===",
+    "- [x] a\n\n  Heading\n  ===",
+    "- [x] a\n  # Heading\n  text\n  ===",
+    "- [x] a\n  - Child\n    text\n    ===",
+    "- [x] a\n  > text\n  > ===",
+    "- [x] a\n  ```\n  text\n  ```\n  Heading\n  ===",
+    "- [x] a\n      ===",
+  ]) {
+    assert.equal(hiddenMarkdownReason(body), null, JSON.stringify(body));
+    assert.doesNotThrow(() => checkCoverage(body), JSON.stringify(body));
+  }
+});
+
+test("source boxes must map to tasks at their own positions", () => {
+  for (const body of sourceBoxWitnesses) {
+    assert.equal(hiddenMarkdownReason(body), "hidden Markdown in the body: task marker", JSON.stringify(body));
+    assert.throws(() => checkCoverage(body), /source box must become the same task/u, JSON.stringify(body));
+  }
+  for (const body of ["- [ ] Pending\n- [x] Done", "literal [x]", "`[x]`", "```text\n- [x]Literal\n```"])
+    assert.doesNotThrow(() => checkCoverage(body), JSON.stringify(body));
+});
+
+test("owner bodies remain accepted and preserve renderer coverage", () => {
+  for (const body of ownerBodies) {
+    assert.equal(hiddenMarkdownReason(body), null, JSON.stringify(body));
+    assert.doesNotThrow(() => checkCoverage(body), JSON.stringify(body));
+  }
+});
+
+test("container fences retain the bounded info-word allowance even when empty", () => {
+  for (const body of containerFences) {
+    assert.equal(hiddenMarkdownReason(body), null, JSON.stringify(body));
+    assert.doesNotThrow(() => checkCoverage(body), JSON.stringify(body));
+  }
+});
+
+test("checked task state covers canonical x while literal X remains text", () => {
+  for (const body of [
+    "- [x] done",
+    "> 1. [x] done\n>    - [x] nested",
+    "1. [ ] step",
+    "- [x] a[x]",
+    "`a[x]`",
+    "    a[X]",
+    "a\\[x]",
+  ]) {
+    assert.equal(hiddenMarkdownReason(body), null, JSON.stringify(body));
+    assert.doesNotThrow(() => checkCoverage(body), JSON.stringify(body));
+  }
+});
+
+test("missing parser install has an actionable error", async () => {
+  for (const code of ["MODULE_NOT_FOUND", "ERR_MODULE_NOT_FOUND"]) {
+    const missing = Object.assign(new Error("synthetic missing module"), { code });
+    await assert.rejects(
+      loadParser(() => {
+        throw missing;
+      }),
+      (error: unknown) =>
+        error instanceof Error &&
+        error.cause === missing &&
+        error.message === "run pnpm install: this test borrows packages/core's remark parser",
+    );
+  }
+});
+
+// math, emoji shortcode, GitHub link, whitespace run and line length are not
+// observable by this CommonMark/GFM oracle; markdown-security.test.ts owns them.
+// The checker-only hostile cases likewise cover GitHub text filters and clipping.
+test("coverage catches each observable refusal-class mutation", (t) => {
+  for (const [kind, body] of hostile) {
+    assert.equal(hiddenMarkdownReason(body), `hidden Markdown in the body: ${kind}`, body);
+  }
+  for (const kind of new Set(oracleHostile.map(([kind]) => kind))) {
+    const mutated = (body: string) => {
+      const reason = hiddenMarkdownReason(body);
+      return reason === `hidden Markdown in the body: ${kind}` ? null : reason;
+    };
+    const released = oracleHostile.map(([, body]) => body).filter((body) => mutated(body) === null);
+    assert.ok(released.length > 0, `${kind}: mutation must release a hostile body`);
+    for (const body of released) assert.notEqual(violation(body), null, `${kind}: ${JSON.stringify(body)}`);
+    t.diagnostic(`mutation ${kind}: caught=yes`);
+  }
+});
+
+test("group scanning has a bounded number of steps", async (t) => {
+  const source = await readFile(new URL("./markdown.ts", import.meta.url), "utf8");
+  const instrument = async (unbounded: boolean) => {
+    let changed = source;
+    const replace = (from: string, to: string) => {
+      const parts = changed.split(from);
+      assert.equal(parts.length, 2, "one scanner instrumentation target");
+      changed = parts.join(to);
+    };
+    replace(
+      "function* lookAlikeGroups(line: string) {",
+      "let openerSteps = 0; let candidateSteps = 0;\nfunction* lookAlikeGroups(line: string) {",
+    );
+    const outer = "for (const opener of points) {";
+    const inner = "for (const closer of cluster.segment) {";
+    replace(outer, `${outer}\n    openerSteps++;`);
+    replace(inner, `${inner}\n      candidateSteps++;`);
+    if (unbounded) replace("const BOX_CONTENT_LIMIT = 3;", "const BOX_CONTENT_LIMIT = Infinity;");
+    changed += `
+export function scanGroupSteps(line) {
+  openerSteps = 0; candidateSteps = 0;
+  const groups = [...lookAlikeGroups(line)];
+  return { groups, openerSteps, candidateSteps };
+}`;
+    return import(`data:text/javascript;base64,${Buffer.from(stripTypeScriptTypes(changed)).toString("base64")}`);
+  };
+  const bounded = await instrument(false);
+  const unbounded = await instrument(true);
+  for (const [name, line] of [
+    ["B delimiters", "★".repeat(200)],
+    ["ASCII openers", "[".repeat(200)],
+  ]) {
+    await t.test(name, (caseTest) => {
+      const result = bounded.scanGroupSteps(line);
+      assert.deepEqual(result.groups, []);
+      assert.equal(result.openerSteps, 200);
+      assert.ok(result.candidateSteps <= 4 * 200, "at most four candidate visits per opener");
+      assert.ok(unbounded.scanGroupSteps(line).candidateSteps > 4 * 200, "removing the window must violate the bound");
+      caseTest.diagnostic(
+        `200 code points: ${result.openerSteps} opener visits, ${result.candidateSteps} candidate visits`,
+      );
+    });
+  }
+});
+
+test("each individual rule has a mutation witness", async (t) => {
+  // Mutate this checkout's checker in memory, without runtime test switches or
+  // editing its file. Each replacement must name exactly one existing guard.
+  const checkerSource = await readFile(new URL("./markdown.ts", import.meta.url), "utf8");
+  const mutations = [
+    ...flagControls.map((body) => ({
+      name: `regional indicators remain outside B: ${body}`,
+      from: String.raw`\p{Regional_Indicator}|`,
+      to: "",
+      body,
+      kind: null,
+    })),
+    ...pointDelimiterRefusals.map(([name, body]) => ({
+      name: `round 26 ${name}: round-25 cluster delimiters`,
+      from: "Array.from(line.matchAll(/./gu), (match) => ({ point: match[0], index: match.index }))",
+      to: "Array.from(BOX_GRAPHEMES.segment(line), ({ segment, index }) => ({ point: segment, index }))",
+      body,
+      kind: "look-alike task box",
+      checkerOnly: true,
+    })),
+    ...round26MarkerRefusals.map(([name, body, rule]) => ({
+      name: `round 26 ${name}`,
+      from:
+        rule === "number"
+          ? String.raw`|(?=\P{ASCII})\p{N}[.)]?\s+(?=\S)`
+          : String.raw`|(?:[-*+]|[0-9]{1,9}[.)])(?=\P{ASCII})\s`,
+      to: "",
+      body,
+      kind: "look-alike list marker",
+      checkerOnly: true,
+    })),
+    ...round26Arrows.map(([body, from]) => ({
+      name: `round 26 CX3 arrow exclusion: ${body}`,
+      from,
+      to: "",
+      body,
+      kind: null,
+    })),
+    ...["[1] [✓] Check", "- [1] [х] Check"].map((body) => ({
+      name: `round 26 ER5 first group by design: ${body}`,
+      from: "break; // Only the first short group is judged, by design: [1] [✓] Check is not a task either.",
+      to: "",
+      body,
+      kind: null,
+    })),
+    {
+      name: "round 26 CX2 reversed ASCII cannot shield a real box",
+      from: 'closer !== "[" && ',
+      to: "",
+      body: "- ]1[ [х] Check",
+      kind: "look-alike task box",
+      checkerOnly: true,
+    },
+    ...rootParagraphControls.map(([name, body]) => ({
+      name: `round 25.1 MS2 ${name}`,
+      from: "containers.length > 0 && !!scope.paragraph",
+      to: "!!scope.paragraph",
+      body,
+      kind: null,
+    })),
+    ...clusterGroupRefusals.map(([name, body]) => {
+      const onlyFirst = name.startsWith("ER1") || name === "CX1 double full-width opener";
+      return {
+        name: `round 25 group ${name}`,
+        from: onlyFirst
+          ? "      content.push(cluster.segment);\n    }"
+          : name.startsWith("CX1")
+            ? "within += closer.length;"
+            : name === "Sk box"
+              ? String.raw`\p{Sk}`
+              : String.raw`\p{Sm}\p{So}`,
+        to: onlyFirst
+          ? "      content.push(cluster.segment);\n    }\n    return;"
+          : name.startsWith("CX1")
+            ? "if (delimiters.has(end)) return;\n        within += closer.length;"
+            : "",
+        body,
+        kind: "look-alike task box",
+        checkerOnly: true,
+      };
+    }),
+    ...continuationMarkerRefusals.map(([name, body, rule]) => ({
+      name: `round 25 marker ${name}`,
+      from:
+        rule === "space"
+          ? String.raw`[\p{Pd}\p{Po}])\s`
+          : rule === "Sk"
+            ? String.raw`\p{Sk}`
+            : rule === "continued"
+              ? "LOOK_ALIKE_LIST_MARKER.test(remaining)"
+              : "LOOK_ALIKE_LIST_MARKER.test(rest)",
+      to: rule === "space" ? String.raw`[\p{Pd}\p{Po}])[ \t]` : rule === "Sk" ? "" : "false",
+      body,
+      kind: "look-alike list marker",
+      checkerOnly: true,
+    })),
+    ...codeGroupControls.map(([name, body]) => ({
+      name: `round 25 code content ${name}`,
+      from: "if (structure[index]?.codeContent) continue;",
+      to: "",
+      body,
+      kind: null,
+    })),
+    ...(
+      [
+        ["arrow U+2B62", "1 ⭢ 2 ⭢ 3", String.raw`\u2b5a-\u2b95`],
+        ["arrow U+2B95", "1 ⮕ 2 ⮕ 3", String.raw`\u2b5a-\u2b95`],
+        ["arrow U+1F87A", "1 🡺 2 🡺 3", String.raw`\u{1f800}-\u{1f8ff}`],
+        ["emoji modifier", "- one\n🏽 next", String.raw`\p{Emoji_Modifier}|`],
+      ] as const
+    ).map(([name, body, from]) => ({
+      name: `round 25 B excludes ${name}`,
+      from,
+      to: "",
+      body,
+      kind: null,
+    })),
+    ...["★★★☆☆", "════════════", "─────────"].map((body) => ({
+      name: `round 25 delimiter runs stay literal: ${body}`,
+      from: "!between.includes(opener.point) && !between.includes(closer)",
+      to: "true",
+      body,
+      kind: null,
+    })),
+    ...symbolBoxRefusals.map(([name, body]) => ({
+      name: `round 24 OP1 ${name}`,
+      from: String.raw`\p{Sm}\p{So}`,
+      to: "",
+      body,
+      kind: "look-alike task box",
+      fallbackKind: name.startsWith("F1c") ? "look-alike list marker" : null,
+      checkerOnly: true,
+    })),
+    ...lazyMarkerRefusals.map(([name, body]) => ({
+      name: `round 24 OP2c ${name}`,
+      from: "LOOK_ALIKE_LIST_MARKER.test(rest)",
+      to: "false",
+      body,
+      kind: "look-alike list marker",
+      checkerOnly: true,
+    })),
+    ...["1 → 2 → 3", "1 ⟶ 2 ⟶ 3", "1 ⤀ 2 ⤀ 3"].map((body) => ({
+      name: `round 24 arrows stay outside B: ${body}`,
+      from: String.raw`|[\u2190-\u21ff\u2794-\u27bf\u27f0-\u27ff\u2900-\u297f\u2b00-\u2b0d\u2b0e-\u2b11\u2b30-\u2b4f\u2b5a-\u2b95\u2b98-\u2bb8\u2bec-\u2bef\uffe9-\uffec\u{1f800}-\u{1f8ff}]`,
+      to: "",
+      body,
+      kind: null,
+    })),
+    {
+      name: "round 24 pictographs stay outside B",
+      from: String.raw`\p{Extended_Pictographic}|`,
+      to: "",
+      body: "👍 👍",
+      kind: null,
+    },
+    {
+      name: "round 24 ASCII parentheses stay outside B",
+      from: String.raw`(?=\P{ASCII})(?!`,
+      to: "(?!",
+      body: "- (é) Check",
+      kind: null,
+    },
+    ...unicodeBracketRefusals.map(([name, body]) => ({
+      name: `round 23 Unicode brackets ${name}`,
+      from: String.raw`(?=\P{ASCII})(?!\p{Extended_Pictographic}|\p{Emoji_Modifier}|\p{Regional_Indicator}|[\u2190-\u21ff\u2794-\u27bf\u27f0-\u27ff\u2900-\u297f\u2b00-\u2b0d\u2b0e-\u2b11\u2b30-\u2b4f\u2b5a-\u2b95\u2b98-\u2bb8\u2bec-\u2bef\uffe9-\uffec\u{1f800}-\u{1f8ff}])[\p{Ps}\p{Pe}\p{Sm}\p{So}\p{Sk}]`,
+      to: "(?!)",
+      body,
+      kind: "look-alike task box",
+      checkerOnly: true,
+    })),
+    ...graphemeBoxRefusals.map(([name, body, points]) => ({
+      name: `round 23 grapheme count ${name}`,
+      // The two-overlay, one-grapheme case already fit the old code-point
+      // bound. It pins the existing predicate; the others kill point counting.
+      from:
+        points <= 3
+          ? String.raw`!/[A-Za-z]/u.test(prefix) && /\P{ASCII}/u.test(prefix + box[0])`
+          : "BOX_GRAPHEMES.segment(line.slice(offset))",
+      to:
+        points <= 3
+          ? "false"
+          : "Array.from(line.slice(offset).matchAll(/./gu), (match) => ({ segment: match[0], index: match.index }))",
+      body,
+      kind: "look-alike task box",
+      checkerOnly: true,
+    })),
+    {
+      name: "round 23 only the first short group is judged",
+      from: "break; // Only the first short group is judged, by design: [1] [✓] Check is not a task either.",
+      to: "",
+      body: "- [ ] [х] Check",
+      kind: null,
+    },
+    ...round23Controls.slice(-2).map((body) => ({
+      name: `round 23 four graphemes stay outside the bound: ${body}`,
+      from: "const BOX_CONTENT_LIMIT = 3;",
+      to: "const BOX_CONTENT_LIMIT = 4;",
+      body,
+      kind: null,
+    })),
+    {
+      name: "round 22 supplementary characters count once",
+      from: "BOX_GRAPHEMES.segment(line.slice(offset))",
+      to: "Array.from(line.slice(offset).matchAll(/./g), (match) => ({ segment: match[0], index: match.index }))",
+      body: "- [😀😀] Check",
+      kind: "look-alike task box",
+      checkerOnly: true,
+    },
+    ...[...lookAlikeBoxRefusals, ...lookAlikeCorpusRefusals].map(([name, body]) => ({
+      name: `round 22 OP1 ${name}`,
+      from: String.raw`!/[A-Za-z]/u.test(prefix) && /\P{ASCII}/u.test(prefix + box[0])`,
+      to: "false",
+      body,
+      kind: "look-alike task box",
+      fallbackKind: /^H[123]-/u.test(name) ? "look-alike list marker" : null,
+      checkerOnly: true,
+    })),
+    ...khitanRefusals.map(([name, body]) => ({
+      name: `round 22 Khitan ${name}`,
+      from: String.raw`\u{16fe4}`,
+      to: "",
+      body,
+      kind: "invisible character",
+      // Code-point delimiters still expose W7's box if the blank-glyph guard is removed.
+      fallbackKind: /^W9/u.test(name) ? null : "look-alike task box",
+      checkerOnly: true,
+    })),
+    ...blankGlyphBoxRefusals.map(({ name, body, escapedCharacter }) => ({
+      name: `round 21 ${name} ${JSON.stringify(body)}`,
+      from: escapedCharacter,
+      to: "",
+      body,
+      kind: "invisible character",
+      fallbackKind: "look-alike task box",
+      checkerOnly: true,
+    })),
+    ...brailleBoxRefusals.map((body) => ({
+      name: `round 20 braille box ${JSON.stringify(body)}`,
+      from: String.raw`\u2800`,
+      to: "",
+      body,
+      kind: "invisible character",
+      fallbackKind: "look-alike task box",
+      checkerOnly: true,
+    })),
+    ...lineSeparatorRefusals.map(([name, body]) => ({
+      name: `round 19 ${name}`,
+      from: String.raw`/[\u2028\u2029]/u.test(body) || BLANK_GLYPHS.test(body)`,
+      to: "false",
+      body,
+      kind: "invisible character",
+      fallbackKind: name.includes("braille") ? "look-alike task box" : null,
+      checkerOnly: true,
+    })),
+    ...loneCrRefusals.map(([name, body, kind]) => ({
+      name: `round 19 ${name}`,
+      from: String.raw`body.split(/\r\n|[\r\n]/u)`,
+      to: String.raw`body.replaceAll("\r\n", "\n").split("\n")`,
+      body,
+      kind,
+    })),
+    ...(
+      [
+        ["setext task keeps CRLF atomic", "- [ ] T\r\n  ---", "task marker"],
+        ["table keeps CRLF atomic", "| T |\r\n---", "table"],
+      ] as const
+    ).map(([name, body, kind]) => ({
+      name: `round 19 ${name}`,
+      from: String.raw`body.split(/\r\n|[\r\n]/u)`,
+      to: String.raw`body.split(/[\r\n]/u)`,
+      body,
+      kind,
+      // The pipe-free table delimiter is a conservative raw refusal.
+      checkerOnly: kind === "table",
+    })),
+    ...(
+      [
+        ["fenced code strips CRLF", "```ts\r\ncode\r\n```"],
+        ["screenshot strips CRLF", `Before.\r\n${screenshot("Screenshot")}\r\nAfter.`],
+      ] as const
+    ).map(([name, body]) => ({
+      name: `round 19 ${name}`,
+      from: String.raw`body.split(/\r\n|[\r\n]/u)`,
+      to: String.raw`body.split("\n")`,
+      body,
+      kind: null,
+    })),
+    {
+      name: "setext headings cannot retain source boxes",
+      from: 'if (current.paragraph?.setext) return refusal("task marker");',
+      to: "",
+      body: "- [ ] beta\n  ---",
+      kind: "task marker",
+    },
+    {
+      name: "paragraph identity survives continuation lines",
+      from: "scope.paragraph ??= { setext: false }",
+      to: "scope.paragraph = { setext: false }",
+      body: "- [x] Task\ncontinued\n  indented\n  ===",
+      kind: "task marker",
+    },
+
+    {
+      name: "an empty marker closes an uncontinued item",
+      from: String.raw`|(?:[-*+]|\d{1,9}[.)])(?= |$))/u.test(rest)`,
+      to: String.raw`|(?:[-*+]|\d{1,9}[.)]) +\S)/u.test(rest)`,
+      body: "  - T\n   +\n    - [x] T",
+      kind: "task marker",
+    },
+    {
+      name: "a real nested ordered item supersedes a paragraph reading",
+      from: " || orderedItem.paragraphOnly",
+      to: "",
+      body: "Text\n2) Step\n* 2. Step\n\t  - [x] T",
+      kind: "task marker",
+    },
+    {
+      name: "blank-start item ends at the next blank",
+      from: "if (container.blankStart) break;",
+      to: "",
+      body: "-\n\n    - [ ] a",
+      kind: "task marker",
+    },
+    {
+      name: "blank line cannot lazily continue a quote",
+      from: "!!rest && previousScope.paragraph",
+      to: "previousScope.paragraph",
+      body: "> - a\n\n>     - [x] x",
+      kind: "task marker",
+    },
+    {
+      name: "fence contents cannot open containers",
+      from: "if (fence) {",
+      to: "if (false) {",
+      body: "~~~\n- a\n  ~~~\n    - [x] Done",
+      kind: "task marker",
+    },
+    {
+      name: "combined marker prefix uses real-line offsets",
+      from: "finalMarker.index - shift",
+      to: "finalMarker.index",
+      body: "1.\n   - [ ] Task",
+      kind: null,
+    },
+    {
+      name: "multi-character task box is recognized and refused",
+      from: String.raw`(?:([\sxX]+)\]`,
+      to: String.raw`(?:([\sxX])\]`,
+      body: "- [  ] Pending",
+      kind: "task marker",
+    },
+    {
+      name: "indented block syntax cannot interrupt a paragraph",
+      from: "else if (!remaining || (end - cursor <= 3 && headingOrBreak(remaining)))",
+      to: "else if (!remaining || headingOrBreak(remaining))",
+      body: "Text\n    # H\n10. Step\n    - [ ] A",
+      kind: "task marker",
+    },
+    {
+      name: "real markers require a whitespace boundary",
+      from: String.raw`/^(?:[-*+]|\d{1,9}[.)])(?= |$)/u.exec(content)`,
+      to: String.raw`/^(?:[-*+]|\d{1,9}[.)])/u.exec(content)`,
+      body: "-2. Step\n    - [ ] Parent",
+      kind: "task marker",
+    },
+    {
+      name: "non-one markers cannot interrupt paragraphs",
+      from: "scope.paragraph && !isSibling &&",
+      to: "false &&",
+      body: "Text\n10. Step\n    - [ ] A",
+      kind: "task marker",
+    },
+    {
+      name: "four columns past a container never opens an item",
+      from: "if (indent > 3) break;",
+      to: "",
+      body: "    - [ ] x",
+      kind: "task marker",
+    },
+    {
+      name: "dedenting closes list items",
+      from: "if (end - cursor < container.width)",
+      to: "if (false)",
+      body: "- a\n# H\n    - [ ] x",
+      kind: "task marker",
+    },
+    {
+      name: "closing an item closes its paragraph",
+      from: "let scope = containers.at(-1) ?? root;",
+      to: "let scope = previousScope;",
+      body: "> a\n10. Step\n    - [ ] Check",
+      kind: null,
+    },
+    {
+      name: "task marker padding has at most four columns",
+      from: " || padding.length > 4",
+      to: "",
+      body: "-     [ ] Check",
+      kind: "task marker",
+    },
+    {
+      name: "task marker padding excludes tabs",
+      from: 'padding.includes("\\t") || ',
+      to: "",
+      body: "-\t[x] Check",
+      kind: "task marker",
+      checkerOnly: true,
+    },
+    {
+      name: "four spaces of task marker padding stay accepted",
+      from: "padding.length > 4",
+      to: "padding.length >= 4",
+      body: "-    [ ] Check",
+      kind: null,
+    },
+    {
+      name: "task right edge is ASCII whitespace",
+      from: '/[^ \\t]/u.test(text[task[0].length] ?? "")',
+      to: '/\\S/u.test(text[task[0].length] ?? "")',
+      body: "- [x] Check",
+      kind: "task marker",
+    },
+    {
+      name: "checklist keeps parent columns for siblings",
+      from: "boxColumns.push(indent + 2);",
+      to: "boxColumns.splice(0, boxColumns.length, indent + 2);",
+      body: "2. Step\n   - [ ] Parent\n     - [ ] First\n     - [ ] Second",
+      kind: null,
+    },
+    {
+      name: "shallower checklist retires every deeper column",
+      from: "while (indent < (boxColumns.at(-1) ?? 0))",
+      to: "if (indent < (boxColumns.at(-1) ?? 0))",
+      body: "2. Step\n   - [ ] Parent\n     - [ ] Child\n       - [ ] Grandchild\n   - [ ] Next\n       - [ ] Wrong",
+      kind: "task marker",
+      checkerOnly: true,
+    },
+    {
+      name: "nested markers retain the outer context",
+      from: "} else if (!orderedItem || orderedItem.paragraphOnly || markerColumn <= orderedItem.markerColumn) {",
+      to: "} else {",
+      body: "2. Step\n   ```\n   - 3. Nested\n   - 1. Next\n   - [ ] Check\n   ```",
+      kind: "task marker",
+      checkerOnly: true,
+    },
+    {
+      name: "later siblings retain fence history",
+      from: "orderedItem = {",
+      to: "sawFence = false; orderedItem = {",
+      body: "2. Step\n   ```\n   ```\n3. Next\n   - [ ] Check",
+      kind: "task marker",
+      checkerOnly: true,
+    },
+    {
+      name: "only canonical checklist syntax in ordered context",
+      from: "!canonicalBox ||",
+      to: "",
+      body: "2. Step\n   * [ ] Check",
+      kind: "task marker",
+      checkerOnly: true,
+    },
+    {
+      name: "canonical prefix uses spaces only",
+      from: "/^( *)- \\[[ x]\\] \\S/u",
+      to: "/^([ \\t]*)- \\[[ x]\\] \\S/u",
+      body: "2.  Step\n\t- [ ] Check",
+      kind: "task marker",
+      checkerOnly: true,
+    },
+    {
+      name: "canonical boxes exclude quote containers",
+      from: "/^( *)- \\[[ x]\\] \\S/u",
+      to: "/^([ >]*)- \\[[ x]\\] \\S/u",
+      body: "2. Step\n   > - [ ] Check",
+      kind: "task marker",
+      checkerOnly: true,
+    },
+    {
+      name: "canonical dash has exactly one space",
+      from: "/^( *)- \\[[ x]\\] \\S/u",
+      to: "/^( *)- +\\[[ x]\\] \\S/u",
+      body: "2. Step\n   -  [ ] Check",
+      kind: "task marker",
+      checkerOnly: true,
+    },
+    {
+      name: "canonical box needs exactly one space before text",
+      from: "/^( *)- \\[[ x]\\] \\S/u",
+      to: "/^( *)- \\[[ x]\\] +\\S/u",
+      body: "2. Step\n   - [ ]  Check",
+      kind: "task marker",
+      checkerOnly: true,
+    },
+    {
+      name: "intervening text ends the checklist stack",
+      from: "else boxColumns.length = 0;",
+      to: "",
+      body: "2. Step\n   - [ ] Parent\n     wrapped\n     - [ ] Child",
+      kind: "task marker",
+      checkerOnly: true,
+    },
+    {
+      name: "box right edge needs whitespace",
+      from: 'if (/[^ \\t]/u.test(text[task[0].length] ?? "")) return refusal("task marker");',
+      to: "",
+      body: "- [ ]Check",
+      kind: "task marker",
+    },
+    {
+      name: "task box needs same-line text",
+      from: 'if (!/\\S/u.test(text.slice(task[0].length))) return refusal("task marker");',
+      to: "",
+      body: "- [x]",
+      kind: "task marker",
+    },
+    {
+      name: "root fence ignores container-shaped closers",
+      from: '(fenceHasContainers || /^[ \\t]*$/u.test(fence[1] ?? "")) &&',
+      to: "",
+      body: "```\n> ```\n```\n\n## Steps\n1. First\n2. Second\n   - [ ] Check",
+      kind: null,
+    },
+    {
+      name: "ordered markers ignore fence guesses",
+      from: "const markerColumn = columns(line.slice(0, marker.index));",
+      to: "if (fenceRun) break; const markerColumn = columns(line.slice(0, marker.index));",
+      body: "- a\n  ```\n2. a\n   [\n   ] x",
+      kind: "task marker",
+      checkerOnly: true,
+    },
+    {
+      name: "fence flag survives apparent closers",
+      from: "sawFence || ",
+      to: "",
+      body: "2. a\n   ```\n   code\n   ```\n   - [ ] x",
+      kind: "task marker",
+      checkerOnly: true,
+    },
+    {
+      name: "context beginning inside a fence",
+      from: " || fenceRun !== null",
+      to: "",
+      body: "```text\n2. a\n   - [ ] b\n```",
+      kind: "task marker",
+      checkerOnly: true,
+    },
+    {
+      name: "ordered boundary needs column zero",
+      from: "/^\\S/u.test(boundaryLine) &&",
+      to: "",
+      body: "2. a\n   ```\n   code\n   ```\n\n text\n   - [ ] x",
+      kind: "task marker",
+      checkerOnly: true,
+    },
+    {
+      name: "deeper quote cannot end context",
+      from: "quoteDepth <= orderedItem.quoteDepth &&",
+      to: "",
+      body: "2. a\n   ```\n   code\n   ```\n> # h\n> - [ ] x",
+      kind: "task marker",
+      checkerOnly: true,
+    },
+    {
+      name: "literal-one sibling ends context",
+      from: "if (orderedItem && markerColumn <= orderedItem.markerColumn)",
+      to: "if (false)",
+      body: "2. a\n1. b\n   [\n   ] x",
+      kind: null,
+    },
+    {
+      name: "escape before closing bracket",
+      from: 'line.slice(0, boxEnd + 1).includes("\\\\")',
+      to: 'line.slice(0, line.indexOf("[")).includes("\\\\")',
+      body: "- [x\\] Done",
+      kind: "task marker",
+      checkerOnly: true,
+    },
+    {
+      name: "escaped split closing bracket",
+      from: '(lines[index + 1] ?? "").replaceAll("\\\\", "")',
+      to: 'lines[index + 1] ?? ""',
+      body: "- [\n  \\] Done",
+      kind: "task marker",
+      checkerOnly: true,
+    },
+    {
+      name: "blank-start numbering padding",
+      from: "blankStart ? 1 : columns(marker[0] + spacing) - markerEnd",
+      to: "columns(marker[0] + spacing) - markerEnd",
+      body: "1. a\n2.    \n   ## h\n2. c",
+      kind: "list number",
+    },
+    {
+      name: "blank-start ordered context padding",
+      from: "end === line.length ? 1 : columns(line.slice(0, end)) - markerEnd",
+      to: "columns(line.slice(0, end)) - markerEnd",
+      body: "2.    \n   text\n      - [ ] x",
+      kind: "task marker",
+      checkerOnly: true,
+    },
+    {
+      name: "blank-start block restart",
+      from: 'if (number === 1 && previous !== 1 && blankItemBlock) return refusal("list number");',
+      to: "",
+      body: "1. a\n2.\n   ## h\n1. c",
+      kind: "list number",
+      checkerOnly: true,
+    },
+    {
+      name: "block at content column stays in item",
+      from: "prefix.length >= contentColumn",
+      to: "prefix.length > contentColumn",
+      body: "1. a\n2.\n   ## h\n1. c",
+      kind: "list number",
+      checkerOnly: true,
+    },
+
+    {
+      name: "block boundary resets numbering",
+      from: "flat && endsList(line, sequenceContentColumn)",
+      to: "false",
+      body: "1. a\n2. b\n## Expected\n1. c\n2. d",
+      kind: null,
+    },
+    {
+      name: "thematic boundary resets numbering",
+      from: " || thematicBreak(content)",
+      to: "",
+      body: "1. a\n2. b\n---\n1. c\n2. d",
+      kind: null,
+    },
+    {
+      name: "block boundary must precede item content",
+      from: "prefix.length >= contentColumn",
+      to: "false",
+      body: "1. a\n2. b\n   ## Expected\n1. c\n2. d",
+      kind: "list number",
+    },
+    {
+      name: "block boundary clears task context",
+      from: "headingOrBreak(boundaryLine)",
+      to: "false",
+      body: "104. a\n## Expected\n[\n] literal",
+      kind: null,
+    },
+    ...["- [ ] done", "- [x] done"].map((box) => ({
+      name: `canonical fenced task ${box}`,
+      from: "const fencedContext = sawFence || fenceRun !== null;",
+      to: "const fencedContext = false;",
+      body: `2. a\n   \`\`\`text\n   ${box}\n   \`\`\``,
+      kind: "task marker",
+      checkerOnly: true,
+    })),
+    {
+      name: "digit-letter checked box at end of line",
+      from: String.raw`\[[ xX]\](?:[ \t]|$)`,
+      to: String.raw`\[[ xX]\][ \t]`,
+      body: "2. a\n\n   1h [x]\n\nx",
+      kind: "task marker",
+      checkerOnly: true,
+    },
+    {
+      name: "split box closing line",
+      from: String.raw`if (split && !/^[\s>]*\]/u.test((lines[index + 1] ?? "").replaceAll("\\", ""))) continue;`,
+      to: "",
+      body: '1. Create\n2. Set:\n\n   ```json\n   [\n     "a"\n   ]\n   ```',
+      kind: null,
+    },
+    {
+      name: "column-zero fence ends ordered context",
+      from: "(fence !== null && /^[`~]/u.test(boundaryLine))",
+      to: "false",
+      body: "1. a\n2. b\n```text\n[\n] literal\n```",
+      kind: null,
+    },
+    {
+      name: "canonical child follows its parent box column",
+      from: " && !boxColumns.includes(indent)",
+      to: "",
+      body: "1. a\n2. Step\n   - [ ] a\n     - [ ] b\n       - [ ] c",
+      kind: null,
+    },
+    {
+      name: "canonical box establishes child column",
+      from: "if (orderedItem && canonicalBox) boxColumns.push(indent + 2);",
+      to: "if (false) boxColumns.push(indent + 2);",
+      body: "2. Step\n   - [ ] a\n     - [ ] b",
+      kind: null,
+    },
+    {
+      name: "long marker-only predecessor",
+      from: String.raw`/^(?:[ \t>]|(?:[-*+]|\d+[.)])(?=[ \t]|$))*(?:[-*+]|\d+[.)])[ \t]*$/u`,
+      to: String.raw`/^(?:[ \t>]|(?:[-*+]|\d{1,9}[.)])(?=[ \t]|$))*(?:[-*+]|\d{1,9}[.)])[ \t]*$/u`,
+      body: "1234567890.\n   [\n   ] x",
+      kind: "task marker",
+      checkerOnly: true,
+    },
+    {
+      name: "end-of-line scanner box",
+      from: String.raw`\[[ xX]\](?:[ \t]|$)`,
+      to: String.raw`\[[ xX]\][ \t]`,
+      body: "- a\n\n  1h [x]\n\nend",
+      kind: "task marker",
+      checkerOnly: true,
+    },
+    {
+      name: "long task chain",
+      from: String.raw`/^((?:[\s>]|[-*+]|\d+[.)])*)\[(?:([\sxX]+)\]|\s*$)/u`,
+      to: String.raw`/^((?:[\s>]|[-*+]|\d{1,9}[.)])*)\[(?:([\sxX]+)\]|\s*$)/u`,
+      body: "- 1234567890.[ ] x",
+      kind: "list number",
+      checkerOnly: true,
+    },
+    {
+      name: "escaped box chain",
+      from: 'line.slice(0, boxEnd + 1).includes("\\\\")',
+      to: "false",
+      body: "- [x\\] x",
+      kind: "task marker",
+      checkerOnly: true,
+    },
+    {
+      name: "later bare split box",
+      from: " || orderedItem || overIndented)",
+      to: " || overIndented)",
+      body: "104. a\n     [\n     ] Done",
+      kind: "task marker",
+      checkerOnly: true,
+    },
+    {
+      name: "canonical box needs an authorized column",
+      from: "(indent !== orderedItem.contentColumn && !boxColumns.includes(indent))",
+      to: "false",
+      body: "104. a\n      - [ ] x",
+      kind: "task marker",
+      checkerOnly: true,
+    },
+    {
+      name: "later fenced box",
+      from: "const fencedContext = sawFence || fenceRun !== null;",
+      to: "const fencedContext = false;",
+      body: "104. a\n     ```text\n     x\n     - [ ] bar\n     ```",
+      kind: "task marker",
+      checkerOnly: true,
+    },
+    {
+      name: "ordered item boundary",
+      from: " || followsContextBlank",
+      to: "",
+      body: "104. a\n\nExpected\n\n[\n] literal",
+      kind: null,
+    },
+    {
+      name: "nested number width",
+      from: String.raw`/^(?:[\s>]|[-*+]|\d{1,9}[.)])+\d{2,9}[.)](?=[ \t]|$)/u`,
+      to: "/a^/u",
+      body: "- 888. x",
+      kind: "list number",
+      checkerOnly: true,
+    },
+    {
+      name: "nested-chain zero",
+      from: String.raw`/^(?:[\s>]|[-*+]|\d{1,9}[.)])*0\d{0,8}[.)](?=[ \t]|$)/u`,
+      to: String.raw`/^[\s>]*0\d{0,8}[.)](?=[ \t]|$)/u`,
+      body: "- 0. x",
+      kind: "list number",
+    },
+    { name: "onesOnly", from: "onesOnly || ", to: "", body: "1.\n1.\n2.", kind: "list number" },
+    { name: "flat numbering", from: "!flat || ", to: "", body: "1. a\n   2. b\n3. c", kind: "list number" },
+    {
+      // Real-list-start validation now also refuses non-one marker chains.
+      // Isolate this guard's literal-one allowance instead of bypassing both.
+      name: "task number allows literal one",
+      from: 'number[1] !== "1"',
+      to: 'number[1] !== "0"',
+      body: "1. [x] Done",
+      kind: null,
+    },
+    {
+      name: "task box alphabet",
+      from: String.raw`(?:([\sxX]+)\]`,
+      to: String.raw`(?:([\s\S]+)\]`,
+      body: "- [a] item",
+      kind: null,
+    },
+    {
+      name: "marker-only box continuation",
+      from: "if (followsMarker)",
+      to: "if (false)",
+      body: "1.\n   [\n   ] Done",
+      kind: "task marker",
+      checkerOnly: true,
+    },
+    {
+      name: "cmark digit task scanner",
+      from: String.raw`/^(?:[ \t>]|(?:[-*+]|\d{1,9}[.)])(?=[ \t]|$))*\d+[^\n][ \t]+\[[ xX]\](?:[ \t]|$)/u`,
+      to: "/a^/u",
+      body: "2. a\n\n   9x [ ] b",
+      kind: "task marker",
+      checkerOnly: true,
+    },
+    {
+      name: "cmark task container prefixes",
+      from: String.raw`/^(?:[ \t>]|(?:[-*+]|\d{1,9}[.)])(?=[ \t]|$))*\d+[^\n][ \t]+\[[ xX]\](?:[ \t]|$)/u`,
+      to: String.raw`/^[ \t]*\d+[^\n][ \t]+\[[ xX]\](?:[ \t]|$)/u`,
+      body: "> - Steps\n>\n>   9x [ ] Continue",
+      kind: "task marker",
+      checkerOnly: true,
+    },
+    {
+      name: "cmark task container exception",
+      from: String.raw`/^(?:[ \t>]|(?:[-*+]|\d{1,9}[.)])(?=[ \t]|$))*1[.)][ \t]+\[/u`,
+      to: String.raw`/^[ \t]*1[.)][ \t]+\[/u`,
+      body: "> 1. [x] Done",
+      kind: null,
+    },
+    {
+      name: "raw-line checked state",
+      from: String.raw`task[2] === " " && /\[[xX]\]/u.test(line)`,
+      to: "false",
+      body: "- [ ] a[x]",
+      kind: "task marker",
+      checkerOnly: true,
+    },
+    {
+      name: "restart availability",
+      from: "flat && followsBlank",
+      to: "false",
+      body: "Steps\n\n1. a\n2. b\n\nExpected\n\n1. c\n2. d\n3. e",
+      kind: null,
+    },
+    {
+      name: "restart requires blank line",
+      from: "followsBlank && ",
+      to: "",
+      body: "1. a\n2. b\nlazy\n1. c\n2. d",
+      kind: "list number",
+    },
+    {
+      name: "restart requires Markdown blank",
+      from: String.raw`const followsBlank = index > 0 && /^[ \t]*$/u.test(lines[index - 1] ?? "")`,
+      to: String.raw`const followsBlank = index > 0 && /^\s*$/u.test(lines[index - 1] ?? "")`,
+      body: "1. a\n\u00a0\nb\n1.\n2.",
+      kind: "list number",
+    },
+    {
+      name: "restart requires column zero",
+      from: String.raw`/^\S/u.test(line) && `,
+      to: "",
+      body: "1. a\n2. b\n\n   indented\n1. c\n2. d",
+      kind: "list number",
+    },
+    {
+      name: "restart excludes ordered markers",
+      from: String.raw`/^\S/u.test(line) && !marker`,
+      to: String.raw`/^\S/u.test(line)`,
+      body: "1. a\n\n9. b",
+      kind: "list number",
+    },
+    {
+      name: "closer character",
+      from: "closer[0] === needsContent[0] && ",
+      to: "",
+      body: "```go\n~~~",
+      kind: null,
+    },
+    {
+      name: "closer length",
+      from: " && closer.length >= needsContent.length",
+      to: "",
+      body: "````go\n```",
+      kind: null,
+    },
+    {
+      name: "closer suffix",
+      from: String.raw`[ \t]*$/u.exec(content)`,
+      to: "/u.exec(content)",
+      body: "```go\n```text\ncode",
+      kind: null,
+    },
+    {
+      name: "closer indentation",
+      from: " && indent <= openerIndent + 3",
+      to: "",
+      body: "```text\n\t```\n```",
+      kind: null,
+    },
+    {
+      name: "opener indentation",
+      from: "const opener = /^ {0,3}",
+      to: "const opener = /^",
+      body: " ```go\n ``` ",
+      kind: "empty code block",
+    },
+    {
+      name: "empty fence at EOF",
+      from: 'if (needsContent) return refusal("empty code block");',
+      to: "",
+      body: "```ts",
+      kind: "empty code block",
+    },
+  ] as const;
+  for (const mutation of mutations) {
+    const { name, from, to, body, kind } = mutation;
+    const checkerOnly = "checkerOnly" in mutation && mutation.checkerOnly;
+    await t.test(name, async (caseTest) => {
+      const parts = checkerSource.split(from);
+      assert.equal(parts.length, 2, `${name}: exactly one mutation target must exist`);
+      const source = stripTypeScriptTypes(parts.join(to));
+      const module = await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
+      const mutated = (input: string): string | null => module.hiddenMarkdownReason(input);
+      assert.equal(hiddenMarkdownReason(body), kind === null ? null : `hidden Markdown in the body: ${kind}`, name);
+      if (kind === null) {
+        // Broadening a refusal or removing an acceptance guard makes the checker
+        // stricter. An oracle-approved owner form must catch that loss.
+        assert.equal(violation(body), null, `${name}: witness must preserve coverage`);
+        assert.notEqual(mutated(body), null, `${name}: mutation must falsely refuse its witness`);
+      } else {
+        const fallbackKind = "fallbackKind" in mutation ? mutation.fallbackKind : null;
+        assert.equal(
+          mutated(body),
+          fallbackKind ? `hidden Markdown in the body: ${fallbackKind}` : null,
+          `${name}: mutation must release this guard, preserving any independent fallback`,
+        );
+        if (checkerOnly) {
+          assert.equal(violation(body), null, `${name}: remark does not model this cmark behavior`);
+        } else {
+          assert.notEqual(violation(body), null, `${name}: oracle must flag the released witness`);
+        }
+      }
+      const evidence = kind === null ? "acceptance" : checkerOnly ? "raw refusal" : "oracle";
+      caseTest.diagnostic(`rule mutation ${name}: caught=yes (${evidence})`);
+    });
+  }
+});
+
+test("accepted Markdown preserves CommonMark/GFM structure and visible letters and digits", (t) => {
+  const generated = generatedBodies();
+  const corpus = [...examples, ...generated];
+  const failures = new Map<string, string>();
+  let accepted = 0;
+  const started = performance.now();
+  for (const body of corpus) {
+    if (hiddenMarkdownReason(body) !== null) continue;
+    accepted++;
+    const reason = violation(body);
+    if (reason && body.length < (failures.get(reason)?.length ?? Infinity)) failures.set(reason, body);
+  }
+  t.diagnostic(
+    `${corpus.length} bodies (${examples.length} fixtures, ${generated.length} generated); ${accepted} accepted; ${(performance.now() - started).toFixed(0)} ms`,
+  );
+  assert.ok(accepted > 1_000, "the accepted corpus must not become vacuous");
+  assert.deepEqual(
+    [...failures].map(([reason, body]) => ({ reason, minimalBody: minimize(body, reason) })),
+    [],
+    "accepted bodies must preserve renderer coverage",
+  );
+});
