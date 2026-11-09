@@ -1,10 +1,11 @@
 # Work loop
 
 Run one pass of the work loop over the GitHub issues, then pace the next pass as section 5 says. A
-bare `/loop` in the main checkout runs this file, and so does `/loop /e-loop`. The loop keeps up to
-three worker sessions busy on `ready` issues that do not collide, answers their questions, steers
-them to finish instead of polishing, and watches each one through its PR and the owner's emend
-review to the merge. To stop it, the owner says stop or presses Esc while it waits.
+`/loop` without a prompt in the main checkout runs this file (`/loop` or `/loop <interval>`), and so
+does `/loop /e-loop` or `/loop <interval> /e-loop`. The loop keeps up to three worker sessions busy
+on `ready` issues that do not collide, answers their questions, steers them to finish instead of
+polishing, and watches each one through its PR and the owner's emend review to the merge. To stop
+it, the owner says stop or, without an interval, presses Esc while it waits.
 
 This session coordinates. Workers do the work: each one is a Claude session in its own worktree and
 herdr workspace, started with `bin/wt spawn --issue`, running `/e-work` through `/e-pr`,
@@ -17,7 +18,7 @@ code, never merges, and never edits an issue's text.
   every `bin/wt` call as `<main>/bin/wt`. Bash calls do not share shell variables, so write every
   captured value (path, number, branch, pane) literally into later commands.
 - Run only in the main checkout (`git rev-parse --show-toplevel` equals `<main>`), inside herdr
-  (`HERDR_ENV=1`). Otherwise say so, and end the loop with ScheduleWakeup `stop: true`.
+  (`HERDR_ENV=1`). Otherwise say so, and end the loop as section 5 says.
 - Only `bin/wt issues` decides what is pickable: `ready` set by the repository owner after the
   issue's last edit and last rename, whoever made them. The repository owner must have written the
   current body.
@@ -179,14 +180,21 @@ Silence on a pass where nothing changed.
 
 ## 5. Pace
 
-End each pass with ScheduleWakeup:
+A loop without an interval (`/loop`, `/loop /e-loop`) paces itself. End each pass with
+ScheduleWakeup:
 
 - A worker is working or blocked: about 270 seconds.
 - Only reviews are pending: about 1200 seconds.
 - No worker and nothing pickable: about 1800 seconds.
 
-When the owner says stop, end the loop with ScheduleWakeup `stop: true`. Running workers go on;
-tell the owner which ones.
+A loop with an interval (`/loop <interval>`, `/loop <interval> /e-loop`) runs on a cron that sets
+the pace: never call ScheduleWakeup or CronCreate.
+
+When the owner says stop, end the loop. Without an interval, call ScheduleWakeup with
+`stop: true`. With an interval, take the job ID from this session's CronCreate result, or use
+CronList to find the one job marked `[session-only]` whose prompt is exactly `<<loop.md>>` or
+`/e-loop`, and delete only that job with CronDelete. If no job or more than one job matches,
+delete nothing and tell the owner. Running workers go on; tell the owner which ones.
 
 ## Never
 
