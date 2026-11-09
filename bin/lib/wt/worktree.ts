@@ -19,7 +19,14 @@ import { isatty } from "node:tty";
 import { pathToFileURL } from "node:url";
 import type { Command, CommandTable } from "./command.ts";
 import { PrLookupPrivacyError, prForBranch } from "./github.ts";
-import { closeWorkspace, herdrLocatedAgents, writeIssueSnapshot } from "./herdr.ts";
+import {
+  agentInside,
+  agentInventory,
+  closeWorkspace,
+  detectedBackend,
+  locatedAgents,
+  writeIssueSnapshot,
+} from "./herdr.ts";
 import { branchClaims, indexClaims, type PickedIssue, pickIssue } from "./issues.ts";
 import { run } from "./proc.ts";
 import { allocatePort, busyPorts, readRegistry, type WorktreeEntry, withRegistry } from "./registry.ts";
@@ -411,7 +418,7 @@ export interface ListRow {
   missing: boolean;
 }
 
-function isInside(dir: string, p: string): boolean {
+export function isInside(dir: string, p: string): boolean {
   let real = p;
   try {
     real = realpathSync(p);
@@ -455,10 +462,10 @@ function lookupPr(repo: Repo, branch: string, skipped: () => void): ListRow["pr"
   return null;
 }
 
-/** One row per registered worktree. gh and herdr are optional: without them their columns are null. */
+/** One row per registered worktree. gh and agent backends are optional: failed lookups leave columns null. */
 export function list(repo: Repo): ListRow[] {
   const reg = readRegistry(repo);
-  const agents = herdrLocatedAgents();
+  const agents = locatedAgents();
   const rows: ListRow[] = [];
   let noted = false;
   const skipped = () => {
@@ -489,7 +496,7 @@ export function list(repo: Repo): ListRow[] {
       });
       if (st.code === 0) dirty = st.stdout.trim() !== "";
     }
-    const inside = agents?.filter((a) => a.location !== null && isInside(entry.path, a.location)) ?? [];
+    const inside = agents?.filter((a) => !a.idleShell && agentInside(a, entry.path)) ?? [];
     rows.push({
       branch,
       path: entry.path,
@@ -656,19 +663,25 @@ function guardEntry(repo: Repo, branch: string, entry: WorktreeEntry, skip: Read
 
   if (portListening(entry.port)) return fail("port-listening");
 
-  const agents = herdrLocatedAgents();
-  if (agents) {
-    // From the main checkout no pane is skipped. From a linked worktree, only the caller's own pane is: the one
-    // named by HERDR_PANE_ID whose location lies inside the caller's own worktree.
-    const mine = process.env.HERDR_PANE_ID;
-    const own = repo.callerTop !== null && repo.callerTop !== repo.mainRoot ? repo.callerTop : null;
-    for (const a of agents) {
-      if (own !== null && mine && a.paneId === mine && a.location !== null && isInside(own, a.location)) continue;
-      if (a.status === "idle" || a.status === "done") continue;
-      // An agent that works somewhere unknown may work in this worktree: fail closed.
-      if (a.location === null) return fail("agent-unknown", a.name ?? a.paneId ?? "unnamed");
-      if (isInside(real, a.location)) return fail("agent-active");
+  const inventory = agentInventory();
+  if (inventory.unavailable.length > 0) return fail("agents-unavailable", inventory.unavailable.join(", "));
+  // First exempt the caller's own terminal in its detected backend when its live location is inside
+  // the caller's linked worktree, regardless of status. For all other terminals, working/blocked
+  // overrides the idle/done/idle-shell skips.
+  const backend = detectedBackend();
+  const own = repo.callerTop !== null && repo.callerTop !== repo.mainRoot ? repo.callerTop : null;
+  for (const a of inventory.agents) {
+    const ownTerminal =
+      backend === a.backend &&
+      (backend === "hc" ? a.address === process.env.HC_TERMINAL_ID : a.paneId === process.env.HERDR_PANE_ID);
+    if (own !== null && ownTerminal && a.location !== null && isInside(own, a.location)) continue;
+    if (a.status !== "working" && a.status !== "blocked") {
+      if (a.status === "idle" || a.status === "done" || a.idleShell) continue;
     }
+    // An agent that works somewhere unknown may work in this worktree: fail closed.
+    if (a.location === null && a.launchCwd === null)
+      return fail("agent-unknown", a.name ?? a.address ?? a.paneId ?? "unnamed");
+    if (agentInside(a, real)) return fail("agent-active");
   }
   return { ok: true };
 }
@@ -677,7 +690,7 @@ function guardEntry(repo: Repo, branch: string, entry: WorktreeEntry, skip: Read
  * Checks, in order, naming the first that fails: registered, directory present, clean (untracked files
  * included), attached to the registered branch, every commit in origin/main, in local main, in the merged PR head
  * or landed on main, no operation in progress, no nested worktree, no listener on the port, and no other
- * herdr agent active inside it.
+ * agent active inside it, with all required backends answering.
  */
 export function safetyGuard(repo: Repo, branch: string): GuardResult {
   return runGuard(repo, branch, new Set());
@@ -766,7 +779,7 @@ export function cleanup(repo: Repo, o: { target: string; closeWorkspace: boolean
   say(deleted ? `Deleted local branch ${branch}.` : `The local branch ${branch} was not deleted.`);
   // Last: closing the workspace can end the caller's own session.
   // A discarded worktree was not merged, so the workspace closes without the "merged" notification.
-  if (o.closeWorkspace) closeWorkspace(repo, entry.path, branch, { notifyMerged: !o.discard });
+  if (o.closeWorkspace) closeWorkspace(repo, entry.path, branch, { notifyMerged: !o.discard, removedEntry: entry });
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -537,6 +537,18 @@ test("brief spawn uses a task namespace distinct from issue branches", () =>
     assert.equal(readRegistry(repo).worktrees["emend-task-014-add-thing"]?.task, "014");
   }));
 
+test("herdr spawn ignores a failed hc listing during its name collision check", () =>
+  scenario({}, ({ env, repo }) =>
+    inHerdr(async () => {
+      installFake(env, "herdr", herdrRules("wt-emend-task-001-add-thing"));
+      installFake(env, "hc", [{ code: 124 }]);
+      const result = await spawn(repo, { brief: BRIEF, slug: "add-thing", mode: "github" }, fakeClock());
+      assert.equal(result.state, "working");
+      assert.deepEqual(fakeCalls(env, "hc"), [["ls", "--json"]]);
+      assert.equal(fakeCalls(env, "herdr").filter((c) => c[1] === "start").length, 1);
+    }),
+  ));
+
 test("spawn passes model and effort to the agent only", () =>
   scenario({ withBin: true }, async ({ fx, env }) => {
     writeBrief(fx.main);
@@ -884,6 +896,7 @@ test("cleanup --close-workspace closes last", () =>
     inHerdr(() => {
       const r = setup(repo, { branch: "feat-a" });
       installFake(env, "herdr", [
+        { match: ["agent", "list"], stdout: json({ type: "agent_list", agents: [] }) },
         { match: ["workspace", "list"], stdout: workspaces(r.path) },
         { match: ["notification", "show"], stdout: "{}" },
         { match: ["workspace", "close"], stdout: json({ type: "ok" }) },
@@ -904,7 +917,10 @@ test("cleanup without --close-workspace never calls workspace commands", () =>
   scenario({}, ({ env, repo }) =>
     inHerdr(() => {
       setup(repo, { branch: "feat-a" });
-      installFake(env, "herdr", [{ match: ["workspace"], stdout: json({ type: "workspace_list", workspaces: [] }) }]);
+      installFake(env, "herdr", [
+        { match: ["agent", "list"], stdout: json({ type: "agent_list", agents: [] }) },
+        { match: ["workspace"], stdout: json({ type: "workspace_list", workspaces: [] }) },
+      ]);
       captureStdout(() => cleanup(repo, { target: "feat-a", closeWorkspace: false, discard: false }));
       assert.equal(fakeCalls(env, "herdr").filter((c) => c[0] === "workspace").length, 0);
     }),
@@ -915,6 +931,7 @@ test("cleanup --discard --close-workspace closes the workspace without the merge
     inHerdr(() => {
       const r = setup(repo, { branch: "feat-a" });
       installFake(env, "herdr", [
+        { match: ["agent", "list"], stdout: json({ type: "agent_list", agents: [] }) },
         { match: ["workspace", "list"], stdout: workspaces(r.path) },
         { match: ["notification", "show"], stdout: "{}" },
         { match: ["workspace", "close"], stdout: json({ type: "ok" }) },
@@ -1011,14 +1028,22 @@ test("an agent without a determinable location fails the guard closed, naming th
       rules([{ name: "m", pane_id: "w5:p1", agent_status: "working" }], [["w5", "/elsewhere"]]),
     );
     assert.deepEqual(safetyGuard(repo, "loc-a"), { ok: true });
-    // HERDR_PANE_ID: from the main checkout no pane is skipped; from the linked worktree itself only the pane
-    // whose location lies inside that worktree is
+    // The caller's pane inside its linked worktree is exempt even when working/blocked;
+    // the main checkout skips no pane.
     const saved = process.env.HERDR_PANE_ID;
+    const savedBackend = process.env.HERDR_ENV;
+    process.env.HERDR_ENV = "1";
     process.env.HERDR_PANE_ID = "w5:p2";
     try {
       setFakeRules(env, "herdr", rules([{ name: "me", pane_id: "w5:p2", agent_status: "working" }], [["w5", r.path]]));
       assert.deepEqual(safetyGuard(repo, "loc-a"), { ok: false, failed: "agent-active" }, "main skips no pane");
       const fromWorktree = resolveRepo(r.path);
+      for (const status of ["working", "blocked"]) {
+        setFakeRules(env, "herdr", rules([{ name: "me", pane_id: "w5:p2", agent_status: status }], [["w5", r.path]]));
+        assert.deepEqual(safetyGuard(fromWorktree, "loc-a"), { ok: true }, `own ${status} pane is exempt`);
+        assert.deepEqual(safetyGuard(repo, "loc-a"), { ok: false, failed: "agent-active" }, `main: ${status}`);
+      }
+      setFakeRules(env, "herdr", rules([{ name: "me", pane_id: "w5:p2", agent_status: "unknown" }], [["w5", r.path]]));
       assert.deepEqual(safetyGuard(fromWorktree, "loc-a"), { ok: true }, "its own pane inside it is skipped");
       // the same pane id located outside the caller's worktree is not skipped
       setFakeRules(env, "herdr", rules([{ name: "me", pane_id: "w5:p2", agent_status: "working" }]));
@@ -1029,6 +1054,8 @@ test("an agent without a determinable location fails the guard closed, naming th
     } finally {
       if (saved === undefined) delete process.env.HERDR_PANE_ID;
       else process.env.HERDR_PANE_ID = saved;
+      if (savedBackend === undefined) delete process.env.HERDR_ENV;
+      else process.env.HERDR_ENV = savedBackend;
     }
     setFakeRules(env, "herdr", rules([{ name: "idle-one", pane_id: "w6:p1", agent_status: "idle" }]));
     assert.deepEqual(safetyGuard(repo, "loc-a"), { ok: true });

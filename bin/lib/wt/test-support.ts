@@ -48,6 +48,7 @@ const PATCHED = ["HOME", "PATH", "TERM"] as const;
 const SCRUBBED_PREFIXES = [
   "GIT_",
   "HERDR_",
+  "HC_",
   "GH_",
   "GITHUB_",
   "CLAUDECODE",

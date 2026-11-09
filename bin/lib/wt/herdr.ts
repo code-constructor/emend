@@ -1,10 +1,12 @@
-import { closeSync, constants, lstatSync, mkdirSync, openSync, writeFileSync } from "node:fs";
-import { isAbsolute, join, resolve } from "node:path";
+import { createHash } from "node:crypto";
+import { accessSync, closeSync, constants, lstatSync, mkdirSync, openSync, statSync, writeFileSync } from "node:fs";
+import { basename, delimiter, isAbsolute, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { stripVTControlCharacters } from "node:util";
 import type { Command, CommandTable } from "./command.ts";
 import { issueSlug, issueSnapshot, issueSnapshotText, type PickedIssue, pickIssue } from "./issues.ts";
 import { run } from "./proc.ts";
-import { allocatePort, busyPorts, readRegistry } from "./registry.ts";
+import { allocatePort, busyPorts, readRegistry, type WorktreeEntry, withRegistry } from "./registry.ts";
 import { fetchOrigin, gitTry, listGitWorktrees, type Repo, refExists } from "./repo.ts";
 import { releaseReservation, reserveTask } from "./tasks.ts";
 import {
@@ -12,14 +14,16 @@ import {
   branchName,
   slug as checkSlug,
   type Exit,
+  hcAddress,
   issueNumber,
   parseFlags,
+  readFileBytes,
   requireIssueBranch,
   TASK_BRANCH_PREFIX,
   textArg,
   WtError,
 } from "./validate.ts";
-import { type SetupResult, setup, worktreeDirName } from "./worktree.ts";
+import { isInside, type SetupResult, setup, worktreeDirName } from "./worktree.ts";
 
 // ---------------------------------------------------------------------------------------------
 // Agent list
@@ -49,6 +53,12 @@ function herdrId(v: unknown): string | null {
   return s !== null && HERDR_ID_RE.test(s) ? s : null;
 }
 
+export function detectedBackend(): "herdr" | "hc" | "both" | null {
+  const hc = hcAddress(process.env.HC_TERMINAL_ID) !== null;
+  const herdr = process.env.HERDR_ENV === "1";
+  return hc ? (herdr ? "both" : "hc") : herdr ? "herdr" : null;
+}
+
 function first(...vals: unknown[]): string | null {
   for (const v of vals) {
     const s = str(v);
@@ -72,7 +82,7 @@ export function parseAgents(json: unknown): AgentInfo[] | null {
   let list: unknown = json;
   if (isRecord(list) && "result" in list) list = list.result;
   if (isRecord(list) && Array.isArray(list.agents)) list = list.agents;
-  if (!Array.isArray(list)) return null;
+  if (!Array.isArray(list) || !list.every(isRecord)) return null;
   const out: AgentInfo[] = [];
   for (const item of list) {
     if (!isRecord(item)) continue;
@@ -172,20 +182,98 @@ export function herdrCall(args: string[], expectedType: string | null, timeoutMs
   return data.result;
 }
 
+/** $HC_BIN_PATH when absolute, otherwise hc from PATH. */
+function hcBin(): string {
+  const p = process.env.HC_BIN_PATH;
+  return p !== undefined && isAbsolute(p) ? p : "hc";
+}
+
+class HcAbsent extends WtError {
+  constructor() {
+    super(69, "herdr desktop (hc) is unavailable.");
+  }
+}
+
+function hcOutput(args: string[], timeoutMs = 20_000): string {
+  const r = run(hcBin(), args, { cwd: "/", timeoutMs });
+  if (r.code === 127) throw new HcAbsent();
+  if (r.code === 124) throw new WtError(124, "herdr desktop (hc) did not answer in time; outcome unconfirmed.");
+  if (r.code !== 0) {
+    // hc uses {error: {kind, message, hint}}. Ignore hint: it can contain arbitrary terminal text.
+    const err = errorFrom(r.stderr) ?? errorFrom(r.stdout);
+    throw new WtError(
+      1,
+      `herdr desktop (hc) exited ${r.code}: ${err?.message ?? (tidy(r.stderr || r.stdout) || "no explanation")}; outcome unconfirmed.`,
+    );
+  }
+  return r.stdout;
+}
+
+/** JSON commands must return exactly one object, without herdr's result envelope. */
+export function hcCall(args: string[], timeoutMs = 20_000): Record<string, unknown> {
+  const output = hcOutput(args, timeoutMs);
+  try {
+    const data: unknown = JSON.parse(output);
+    if (isRecord(data)) return data;
+  } catch {
+    // Invalid or multiple JSON values are unconfirmed, never a successful launch.
+  }
+  throw new WtError(1, "herdr desktop (hc) returned no valid JSON object; outcome unconfirmed.");
+}
+
+function hcTerminals(): Record<string, unknown>[] {
+  const listed = hcCall(["ls", "--json"], 5000);
+  if (
+    !Array.isArray(listed.terminals) ||
+    !listed.terminals.every((t) => isRecord(t) && hcAddress(t.address) !== null && typeof t.state === "string")
+  )
+    throw new WtError(1, "Invalid herdr desktop (hc) terminal list.");
+  return listed.terminals.filter((t) => t.state === "live");
+}
+
+function assertHcTarget(address: string, terminals = hcTerminals()): void {
+  if (hcAddress(address) === null || terminals.some((t) => t.name === address))
+    throw new WtError(2, "The hc address is invalid or shadowed by a live terminal name; nothing was sent or closed.");
+}
+
+function hcGet(address: string, timeoutMs = 5000): Record<string, unknown> {
+  const info = hcCall(["get", address, "--json"], timeoutMs);
+  if (hcAddress(info.address) !== address) throw new WtError(1, "Invalid herdr desktop (hc) terminal response.");
+  return info;
+}
+
 export interface LocatedAgent extends AgentInfo {
-  /** The directory the agent works in: its own `cwd`, else the checkout path of its workspace, else null. */
+  backend: "herdr" | "hc";
+  address: string | null;
+  labels: Record<string, string>;
+  /** Live hc foreground cwd; for herdr, agent cwd or workspace checkout path. Null when unknown. */
   location: string | null;
+  launchCwd: string | null;
+  idleShell: boolean;
+}
+
+export type AgentListing<T> = "absent" | "failed" | T[];
+
+function herdrListing(): AgentListing<AgentInfo> {
+  const r = run(herdrBin(), ["agent", "list"], { cwd: "/", timeoutMs: 5000 });
+  if (r.code === 127) return "absent";
+  if (r.code !== 0) return "failed";
+  try {
+    return parseAgents(JSON.parse(r.stdout)) ?? "failed";
+  } catch {
+    return "failed";
+  }
 }
 
 /**
  * Every agent with its location. `agent list` is not confirmed to carry a working directory, so an agent
  * without `cwd` is placed through its workspace (`workspace_id`, or the part of a pane id such as `w1:p1`
- * before the colon) and `herdr workspace list` (`worktree.checkout_path`). Null when herdr does not answer.
- * An agent that stays at null has no determinable location.
+ * before the colon) and `herdr workspace list` (`worktree.checkout_path`). Preserves absent/failed listing
+ * outcomes. An agent whose location stays null has no determinable location.
  */
-export function herdrLocatedAgents(): LocatedAgent[] | null {
-  const agents = herdrAgents();
-  if (agents === null) return null;
+function herdrLocatedListing(): AgentListing<LocatedAgent> {
+  const agents = herdrListing();
+  if (!Array.isArray(agents)) return agents;
   const byWorkspace = new Map<string, string>();
   if (agents.some((a) => a.cwd === null)) {
     try {
@@ -201,21 +289,118 @@ export function herdrLocatedAgents(): LocatedAgent[] | null {
     }
   }
   return agents.map((a) => {
-    if (a.cwd !== null) return { ...a, location: a.cwd };
     const workspace = a.workspaceId ?? /^([^:]+):/.exec(a.paneId ?? "")?.[1] ?? null;
-    return { ...a, location: workspace === null ? null : (byWorkspace.get(workspace) ?? null) };
+    return {
+      ...a,
+      backend: "herdr",
+      address: null,
+      labels: {},
+      launchCwd: null,
+      idleShell: false,
+      location: a.cwd ?? (workspace === null ? null : (byWorkspace.get(workspace) ?? null)),
+    };
   });
+}
+
+export function herdrLocatedAgents(): LocatedAgent[] | null {
+  const listing = herdrLocatedListing();
+  return Array.isArray(listing) ? listing : null;
+}
+
+const SHELLS = new Set(["sh", "bash", "zsh", "fish", "nu", "dash", "ksh", "tcsh", "elvish", "xonsh"]);
+
+function absoluteFolder(value: unknown): string | null {
+  return typeof value === "string" && isAbsolute(value) ? value : null;
+}
+
+function hcLocatedListing(): AgentListing<LocatedAgent> {
+  let terminals: Record<string, unknown>[];
+  try {
+    terminals = hcTerminals();
+  } catch (e) {
+    return e instanceof HcAbsent ? "absent" : "failed";
+  }
+  return terminals.map((t) => {
+    const address = hcAddress(t.address);
+    let info: Record<string, unknown> = {};
+    if (address !== null) {
+      try {
+        assertHcTarget(address, terminals);
+        info = hcGet(address);
+      } catch {
+        // Keep the agent, with unknown status and location, so removal fails closed.
+      }
+    }
+    const foreground = isRecord(info.foreground) ? info.foreground : {};
+    const location = absoluteFolder(foreground.cwd);
+    const launchCwd = absoluteFolder(info.cwd);
+    const program = Array.isArray(info.argv) ? str(info.argv[0]) : null;
+    const foregroundProgram = Array.isArray(foreground.argv) ? str(foreground.argv[0]) : null;
+    const foregroundName = str(foreground.name) ?? (foregroundProgram === null ? null : basename(foregroundProgram));
+    const status = tidy((isRecord(info.status) ? str(info.status.state) : null)?.toLowerCase() ?? "unknown", 20);
+    const idleShell =
+      typeof info.pid === "number" &&
+      info.pid > 0 &&
+      foreground.pid === info.pid &&
+      program !== null &&
+      SHELLS.has(basename(program)) &&
+      foregroundName !== null &&
+      SHELLS.has(foregroundName) &&
+      status !== "working" &&
+      status !== "blocked";
+    const name = first(info.name, t.name);
+    const labels = Object.fromEntries(
+      Object.entries(isRecord(info.labels) ? info.labels : {})
+        .filter((entry): entry is [string, string] => typeof entry[1] === "string")
+        .map(([key, value]) => [tidy(key), tidy(value)]),
+    );
+    return {
+      backend: "hc",
+      address,
+      labels,
+      name: name === null ? null : tidy(name, 64),
+      status,
+      cwd: location,
+      location,
+      launchCwd,
+      idleShell,
+      paneId: null,
+      workspaceId: null,
+    };
+  });
+}
+
+export function agentInventory(): { agents: LocatedAgent[]; answered: boolean; unavailable: string[] } {
+  const herdr = herdrLocatedListing();
+  const hc = hcLocatedListing();
+  const backend = detectedBackend();
+  const unavailable: string[] = [];
+  if ((backend === "herdr" || backend === "both") && !Array.isArray(herdr)) unavailable.push("herdr");
+  if (hc === "failed" || ((backend === "hc" || backend === "both") && hc === "absent"))
+    unavailable.push("herdr desktop (hc)");
+  return {
+    agents: [...(Array.isArray(herdr) ? herdr : []), ...(Array.isArray(hc) ? hc : [])],
+    answered: Array.isArray(herdr) || Array.isArray(hc),
+    unavailable,
+  };
+}
+
+/** Optional display/collision information. Enforcement callers use agentInventory's availability too. */
+export function locatedAgents(): LocatedAgent[] | null {
+  const inventory = agentInventory();
+  return inventory.answered ? inventory.agents : null;
+}
+
+export function agentInside(agent: LocatedAgent, path: string): boolean {
+  return [agent.location, agent.launchCwd].some(
+    (folder) => folder !== null && isAbsolute(folder) && isInside(path, folder),
+  );
 }
 
 /** Every agent herdr knows, or null when herdr is missing or does not answer. Never throws. */
 export function herdrAgents(): AgentInfo[] | null {
-  const r = run(herdrBin(), ["agent", "list"], { cwd: "/", timeoutMs: 5000 });
-  if (r.code !== 0) return null;
-  try {
-    return parseAgents(JSON.parse(r.stdout));
-  } catch {
-    return null;
-  }
+  const listing = herdrListing();
+  return Array.isArray(listing) ? listing : null;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -249,7 +434,8 @@ function plainName(branch: string): boolean {
  * caller's branch.
  */
 export function notify(repo: Repo, kind: NotifyKind, branch: string | null = repo.callerBranch): void {
-  if (process.env.HERDR_ENV !== "1") return;
+  const backend = detectedBackend();
+  if (backend !== "herdr" && backend !== "both") return;
   const [title, body] = NOTIFY_TEXT[kind];
   // The title is an argument of herdr: a branch name that bin/wt would refuse (a leading dash) is not used.
   const name = branch !== null && (branch === "main" || plainName(branch)) ? branch : "session";
@@ -280,9 +466,20 @@ export function closeWorkspace(
   repo: Repo,
   worktreePath: string,
   branch?: string,
-  o: { notifyMerged?: boolean } = {},
+  o: { notifyMerged?: boolean; removedEntry?: WorktreeEntry } = {},
 ): void {
-  if (process.env.HERDR_ENV !== "1") {
+  const backend = detectedBackend();
+  if (backend === "both") {
+    say("Both herdr and herdr desktop are detected; no workspace or terminal was closed.");
+    return;
+  }
+  if (backend === "hc") {
+    const branchName = branch ?? repo.callerBranch;
+    const entry = o.removedEntry ?? (branchName === null ? undefined : readRegistry(repo).worktrees[branchName]);
+    closeHcTerminal(worktreePath, branchName, entry);
+    return;
+  }
+  if (backend === null) {
     say("Not inside herdr: no workspace was closed.");
     return;
   }
@@ -330,6 +527,46 @@ export function closeWorkspace(
   }
 }
 
+function closeHcTerminal(worktreePath: string, branch: string | null, entry?: WorktreeEntry): void {
+  const address = hcAddress(entry?.hcAddress);
+  if (address === null || entry === undefined || !samePath(entry.path, worktreePath) || branch === null) {
+    say("No recorded herdr desktop terminal owns this worktree; none was closed.");
+    return;
+  }
+  let name: string;
+  try {
+    assertHcTarget(address);
+    const info = hcGet(address);
+    const cwd = absoluteFolder(info.cwd);
+    if (
+      info.state !== "live" ||
+      cwd === null ||
+      !samePath(cwd, worktreePath) ||
+      !isRecord(info.labels) ||
+      info.labels["emend.branch"] !== branch
+    ) {
+      say("The recorded herdr desktop terminal does not match the removed worktree; none was closed.");
+      return;
+    }
+    name = tidy(str(info.name) ?? address, 64);
+  } catch (e) {
+    say(
+      `No terminal was closed: herdr desktop could not inspect its terminals${e instanceof WtError ? ` (${e.message})` : ""}.`,
+    );
+    return;
+  }
+  say(`Closing herdr desktop terminal ${name} (${address}).`);
+  try {
+    // Last external call: killing this terminal may end the caller's session.
+    hcCall(["kill", address]);
+  } catch (e) {
+    throw new WtError(
+      e instanceof WtError ? e.code : 1,
+      `The worktree is removed, but herdr desktop did not close its terminal${e instanceof WtError ? ` (${e.message})` : ""}.`,
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Spawn
 
@@ -340,6 +577,7 @@ export type SpawnOptions = {
 } & ({ brief: string; slug: string; issue?: never } | { issue: number; brief?: never; slug?: never });
 
 export interface SpawnResult {
+  backend: "herdr" | "hc";
   number: string;
   slug: string;
   branch: string;
@@ -365,6 +603,27 @@ export interface SpawnClock {
 }
 
 const spawnClock: SpawnClock = { now: () => performance.now(), sleep };
+
+async function waitForHc(address: string, clock: SpawnClock): Promise<"working" | "blocked"> {
+  const deadline = clock.now() + 90_000;
+  while (clock.now() < deadline) {
+    let info: Record<string, unknown> | null = null;
+    try {
+      info = hcGet(address, Math.max(1, Math.ceil(Math.min(5000, deadline - clock.now()))));
+    } catch {
+      // A transient read failure cannot confirm startup. Keep polling, never relaunch or send input.
+    }
+    if (info !== null) {
+      if (info.state === "exited" || info.state === "finished" || typeof info.exit_code === "number")
+        throw new WtError(1, "herdr desktop terminal exited before work was confirmed.");
+      const status = isRecord(info.status) ? str(info.status.state)?.toLowerCase() : null;
+      if (clock.now() < deadline && (status === "working" || status === "blocked")) return status;
+    }
+    const remaining = deadline - clock.now();
+    if (remaining > 0) await clock.sleep(Math.min(500, remaining));
+  }
+  throw new WtError(124, "herdr desktop did not confirm work before the deadline; outcome unconfirmed.");
+}
 
 /** A new pane can still be running shell startup commands. Wait at most 30s, then let agent start report failures. */
 export async function waitForShell(pane: string, clock: SpawnClock = spawnClock): Promise<void> {
@@ -461,6 +720,21 @@ function nothingCreated(e: unknown): WtError {
   return new WtError(1, "bin/wt failed unexpectedly. Nothing was created.");
 }
 
+/** Resolve the program before hc can interpret a bare name as a template. */
+function claudeExecutable(): string {
+  for (const directory of process.env.PATH === undefined ? [] : process.env.PATH.split(delimiter)) {
+    const file = resolve(directory || ".", "claude");
+    try {
+      if (!statSync(file).isFile()) continue;
+      accessSync(file, constants.X_OK);
+      return file;
+    } catch {
+      // Try the next PATH entry, including when this one is not executable.
+    }
+  }
+  throw new WtError(69, "Claude is unavailable on PATH.");
+}
+
 type Stage = "task-files" | "opening" | "already_open" | "starting" | "not_ready" | "mismatch" | "prompting";
 
 /**
@@ -478,6 +752,8 @@ export async function spawn(repo: Repo, o: SpawnOptions, clock: SpawnClock = spa
   let busy: Set<number>;
   let agents: AgentInfo[];
   let slugValue: string;
+  let claudePath = "";
+  const backend = detectedBackend();
   try {
     if (o.issue !== undefined && (o.brief !== undefined || o.slug !== undefined))
       throw new WtError(2, "Give an issue or a brief and slug, not both.");
@@ -486,7 +762,13 @@ export async function spawn(repo: Repo, o: SpawnOptions, clock: SpawnClock = spa
     if (o.mode !== "github" && o.mode !== "local") throw new WtError(2, "Invalid mode.");
     if (o.model !== undefined && !MODEL_RE.test(o.model)) throw new WtError(2, "Invalid model.");
     if (o.effort !== undefined && !EFFORTS.has(o.effort)) throw new WtError(2, "Invalid effort.");
-    if (process.env.HERDR_ENV !== "1") throw new WtError(69, "Run inside a herdr pane (HERDR_ENV=1).");
+    if (backend === null)
+      throw new WtError(69, "Run inside a herdr pane (HERDR_ENV=1) or a herdr desktop terminal (HC_TERMINAL_ID).");
+    if (backend === "both")
+      throw new WtError(
+        2,
+        "Both herdr and herdr desktop are detected; run spawn from one of them. Nothing was created.",
+      );
     if (repo.callerTop !== repo.mainRoot) throw new WtError(2, "Run spawn from the main checkout.");
     if (o.issue !== undefined) {
       issue = pickIssue(repo, o.issue);
@@ -497,9 +779,17 @@ export async function spawn(repo: Repo, o: SpawnOptions, clock: SpawnClock = spa
       briefText = o.brief;
       if (!ID_LINE_RE.test(briefText)) throw new WtError(2, "The brief needs the line 'id: NNN'.");
     }
-    const listed = parseAgents(herdrCall(["agent", "list"], "agent_list"));
-    if (listed === null) throw new WtError(1, "Invalid herdr agent list.");
-    agents = listed;
+    if (backend === "hc") {
+      const listed = hcLocatedListing();
+      if (!Array.isArray(listed)) throw new WtError(69, "herdr desktop (hc) did not list its terminals.");
+      claudePath = claudeExecutable();
+      agents = [...listed, ...(herdrLocatedAgents() ?? [])];
+    } else {
+      const listed = parseAgents(herdrCall(["agent", "list"], "agent_list"));
+      if (listed === null) throw new WtError(1, "Invalid herdr agent list.");
+      const hc = hcLocatedListing();
+      agents = [...listed, ...(Array.isArray(hc) ? hc : [])];
+    }
     if (!issue) fetchOrigin(repo);
     busy = await busyPorts();
     allocatePort(readRegistry(repo), busy);
@@ -542,7 +832,13 @@ export async function spawn(repo: Repo, o: SpawnOptions, clock: SpawnClock = spa
     const remote = gitTry(repo, ["ls-remote", "--exit-code", "--heads", "origin", `refs/heads/${branch}`]);
     if (remote.code === 0) throw new WtError(3, "The branch already exists on origin.");
     if (remote.code !== 2) throw new WtError(69, "Could not reach origin to check the branch.");
-    if (agents.some((a) => a.name === agent)) throw new WtError(3, "A herdr agent with that name already exists.");
+    if (agents.some((a) => a.name === agent))
+      throw new WtError(
+        3,
+        backend === "herdr"
+          ? "A herdr agent with that name already exists."
+          : "A herdr or herdr desktop agent with that name already exists.",
+      );
   } catch (e) {
     release();
     throw nothingCreated(e);
@@ -587,6 +883,23 @@ export async function spawn(repo: Repo, o: SpawnOptions, clock: SpawnClock = spa
     const code: Exit = cause instanceof WtError ? cause.code : 1;
     const herdrCode = cause instanceof HerdrError ? cause.herdrCode : "";
     const why = cause instanceof WtError ? cause.message : "Unexpected failure.";
+    if (backend === "hc") {
+      const lines = [tidy(why, 1000)];
+      if (stage === "task-files") {
+        lines.push("Setup succeeded, but the task files could not be written. No herdr desktop terminal was opened.");
+      } else {
+        lines.push(
+          workspaceId === ""
+            ? "No herdr desktop terminal was confirmed by this run. Check herdr desktop before any teardown."
+            : `Check herdr desktop terminal ${workspaceLabel} (${workspaceId}) with hc read ${workspaceId} before any teardown.`,
+        );
+        lines.push(
+          "The initial prompt may have been delivered. Do not resend the prompt. To stop the agent, exit Claude (/exit) in its terminal.",
+        );
+      }
+      lines.push(existsReport(repo, branch, wt.path, issue ? null : number));
+      return new WtError(code, lines.join("\n"));
+    }
     const where = `herdr workspace ${workspaceLabel} (${workspaceId})`;
     const promptCmd = `${quote(herdrBin())} agent prompt ${quote(agent)} ${quote(prompt)} --wait --until working --until blocked`;
     let lines: string[];
@@ -669,6 +982,65 @@ export async function spawn(repo: Repo, o: SpawnOptions, clock: SpawnClock = spa
     throw failure(e instanceof WtError ? e : new WtError(1, e instanceof Error ? e.message : "write failed"));
   }
 
+  const result = (state: "working" | "blocked"): SpawnResult => ({
+    backend,
+    number,
+    slug: slugValue,
+    branch,
+    agent,
+    path: wt.path,
+    port: wt.port,
+    emendHome: wt.emendHome,
+    taskFile,
+    issue: issue ? { number: issue.number, url: issue.url } : undefined,
+    workspaceId,
+    workspaceLabel,
+    state,
+  });
+  const claudeArgs = ["--permission-mode", "auto", "--name", branch];
+  if (o.model !== undefined) claudeArgs.push("--model", o.model);
+  if (o.effort !== undefined) claudeArgs.push("--effort", o.effort);
+
+  if (backend === "hc") {
+    stage = "opening";
+    try {
+      const args = [
+        "run",
+        "--bg",
+        "--json",
+        "--name",
+        agent,
+        "--cwd",
+        wt.path,
+        "--outlive-parent",
+        "--no-notify",
+        "--label",
+        `emend.loop=${hcAddress(process.env.HC_TERMINAL_ID)}`,
+        "--label",
+        `emend.branch=${branch}`,
+      ];
+      if (issue) args.push("--label", `emend.issue=${issue.number}`);
+      // One launch. Claude receives its initial prompt as argv, never via a second send.
+      const started = hcCall([...args, "--", claudePath, ...claudeArgs, prompt]);
+      const address = hcAddress(started.address);
+      if (address === null) throw new WtError(1, "Invalid herdr desktop terminal response; outcome unconfirmed.");
+      workspaceId = address;
+      workspaceLabel = tidy(str(started.name) ?? agent, 64);
+      withRegistry(repo, (registry) => {
+        const entry = registry.worktrees[branch];
+        if (entry === undefined || !samePath(entry.path, wt.path))
+          throw new WtError(1, "The spawned terminal could not be recorded: its worktree registration changed.");
+        entry.hcAddress = address;
+      });
+      stage = "starting";
+      if (started.state === "exited" || started.state === "finished")
+        throw new WtError(1, "herdr desktop terminal exited before work was confirmed.");
+      return result(await waitForHc(address, clock));
+    } catch (e) {
+      throw failure(e);
+    }
+  }
+
   // ---- herdr: open, start, prompt
   stage = "opening";
   let pane: string;
@@ -697,9 +1069,6 @@ export async function spawn(repo: Repo, o: SpawnOptions, clock: SpawnClock = spa
   }
 
   stage = "starting";
-  const claudeArgs = ["--permission-mode", "auto", "--name", branch];
-  if (o.model !== undefined) claudeArgs.push("--model", o.model);
-  if (o.effort !== undefined) claudeArgs.push("--effort", o.effort);
   try {
     await waitForShell(pane, clock);
     const started = herdrCall(
@@ -742,20 +1111,7 @@ export async function spawn(repo: Repo, o: SpawnOptions, clock: SpawnClock = spa
     throw failure(e);
   }
 
-  return {
-    number,
-    slug: slugValue,
-    branch,
-    agent,
-    path: wt.path,
-    port: wt.port,
-    emendHome: wt.emendHome,
-    taskFile,
-    issue: issue ? { number: issue.number, url: issue.url } : undefined,
-    workspaceId,
-    workspaceLabel,
-    state,
-  };
+  return result(state);
 }
 
 function releaseQuietly(repo: Repo, number: string): void {
@@ -771,7 +1127,7 @@ function existsReport(repo: Repo, branch: string, path: string, number: string |
   return [
     `Branch ${branch} and its worktree ${path} exist${number === null ? "" : `; task number ${number} stays reserved`}. No automatic cleanup was performed.`,
     `Optional teardown: ${quote(join(repo.mainRoot, "bin", "wt"))} cleanup ${branch}`,
-    "This does not close the herdr workspace.",
+    "This does not end the herdr workspace or terminal.",
   ].join("\n");
 }
 
@@ -820,12 +1176,11 @@ const spawnCommand: Command = async ({ repo, args }) => {
   say(`Port: ${r.port}`);
   say(`Worktree: ${r.path}`);
   say(`EMEND_HOME: ${r.emendHome}`);
+  const where = `${r.backend === "hc" ? "herdr desktop terminal" : "herdr workspace"} ${r.workspaceLabel} (${r.workspaceId})`;
   if (r.state === "blocked") {
-    say(
-      `Claude agent ${r.agent} started and is waiting for an answer in herdr workspace ${r.workspaceLabel} (${r.workspaceId}).`,
-    );
+    say(`Claude agent ${r.agent} started and is waiting for an answer in ${where}.`);
   } else {
-    say(`Claude agent ${r.agent} is working on ${r.branch} in herdr workspace ${r.workspaceLabel} (${r.workspaceId}).`);
+    say(`Claude agent ${r.agent} is working on ${r.branch} in ${where}.`);
   }
   return 0;
 };
@@ -840,4 +1195,144 @@ const notifyCommand: Command = ({ repo, args }) => {
   return 0;
 };
 
-export const commands: CommandTable = { spawn: spawnCommand, notify: notifyCommand };
+function requireAgents(): LocatedAgent[] {
+  const inventory = agentInventory();
+  if (inventory.unavailable.length > 0)
+    throw new WtError(69, `Could not list required agents: ${inventory.unavailable.join(", ")}.`);
+  if (!inventory.answered) throw new WtError(69, "Neither herdr nor herdr desktop answered.");
+  return inventory.agents;
+}
+
+function registeredAgents(repo: Repo, agents: LocatedAgent[], issue?: number): LocatedAgent[] {
+  const entries = Object.values(readRegistry(repo).worktrees).filter(
+    (entry) => issue === undefined || entry.issue === issue,
+  );
+  return agents.filter((agent) => !agent.idleShell && entries.some((entry) => agentInside(agent, entry.path)));
+}
+
+function resolveAgent(repo: Repo, target: string): { agent: LocatedAgent; id: string } {
+  const agents = requireAgents();
+  // A shadowing name may belong to an unrelated or idle terminal, outside this registry.
+  if (agents.some((a) => a.backend === "hc" && a.address === target)) assertHcTarget(target);
+  const matches = registeredAgents(repo, agents).filter((a) =>
+    a.backend === "hc" ? a.address === target : a.name === target,
+  );
+  const agent = matches[0];
+  if (matches.length !== 1 || agent === undefined)
+    throw new WtError(
+      2,
+      matches.length === 0
+        ? "No agent matches the target in bin/wt's registered worktrees."
+        : "Several agents match the target.",
+    );
+  const id = agent.backend === "hc" ? hcAddress(agent.address) : herdrId(agent.name);
+  if (id === null) throw new WtError(2, "The agent has no safe command target.");
+  return { agent, id };
+}
+
+/** Screen output can contain OSC/DCS strings as well as ordinary ANSI styling. Keep only text, tabs and newlines. */
+function screenText(text: string): string {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: removing terminal control strings, including unterminated ones
+  const strings = text.replace(/(?:\x1b[\]PX^_]|[\x90\x98\x9d-\x9f])[\s\S]*?(?:\x07|\x1b\\|\x9c|$)/g, "");
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: removing C0/C1 controls except tab and newline
+  return stripVTControlCharacters(strings).replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "");
+}
+
+function jsonText(value: string | null): string | null {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: preserve Unicode, remove terminal control characters
+  return value === null ? null : value.replace(/[\x00-\x1f\x7f-\x9f]/g, "");
+}
+
+const agentsCommand: Command = ({ repo, args }) => {
+  const { flags } = parseFlags(args, { json: "boolean" });
+  const rows = registeredAgents(repo, requireAgents()).map((a) => ({
+    backend: a.backend,
+    name: a.name,
+    address: a.address,
+    pane: jsonText(a.paneId),
+    status: a.status,
+    location: jsonText(a.location),
+    launchCwd: jsonText(a.launchCwd),
+  }));
+  if (flags.json) say(JSON.stringify(rows));
+  else
+    for (const row of rows)
+      say(
+        [row.backend, row.name ?? "unnamed", row.address ?? row.pane ?? "?", row.status, row.location ?? "?"]
+          .map((v) => tidy(v, 1000))
+          .join("\t"),
+      );
+  return 0;
+};
+
+const agentCommand: Command = ({ repo, args }) => {
+  const action = args[0];
+  if (action !== "read" && action !== "prompt")
+    throw new WtError(2, "Usage: bin/wt agent read <target> [--lines N] | agent prompt <target> --issue <n>");
+  const { flags, positionals } = parseFlags(
+    args.slice(1),
+    action === "read" ? { lines: "string" } : { issue: "string" },
+    1,
+  );
+  const target = positionals[0];
+  if (target === undefined) throw new WtError(2, "Give a herdr agent name or hc address.");
+  if (action === "read") {
+    const lines = flags.lines ?? "80";
+    if (typeof lines !== "string" || !/^[1-9][0-9]*$/.test(lines) || Number(lines) > 400)
+      throw new WtError(2, "--lines must be an integer from 1 to 400.");
+    const { agent, id } = resolveAgent(repo, target);
+    let output: string;
+    if (agent.backend === "hc") {
+      assertHcTarget(id);
+      output = hcOutput(["read", "--lines", lines, id]);
+    } else {
+      const r = run(herdrBin(), ["agent", "read", id, "--source", "recent", "--lines", lines], {
+        cwd: "/",
+        timeoutMs: 20_000,
+      });
+      if (r.code === 127) throw new WtError(69, "herdr is unavailable.");
+      if (r.code === 124) throw new WtError(124, "herdr did not answer in time; outcome unconfirmed.");
+      if (r.code !== 0) {
+        const err = errorFrom(r.stderr) ?? errorFrom(r.stdout);
+        if (err) throw mapHerdrError(err.code, err.message);
+        throw new WtError(1, `herdr exited ${r.code}; outcome unconfirmed.`);
+      }
+      output = r.stdout;
+    }
+    process.stdout.write(screenText(output));
+  } else {
+    const issue = issueNumber(typeof flags.issue === "string" ? flags.issue : "");
+    const file = join(repo.mainRoot, ".wt", "loop", `message-${issue}.md`);
+    let digest: string;
+    try {
+      if (
+        !lstatSync(join(repo.mainRoot, ".wt")).isDirectory() ||
+        !lstatSync(join(repo.mainRoot, ".wt", "loop")).isDirectory()
+      )
+        throw new Error("not regular");
+      digest = createHash("sha256")
+        .update(readFileBytes(file, 64 * 1024))
+        .digest("hex");
+    } catch {
+      throw new WtError(2, "The work-loop message must be a regular file without symlinks, at most 64 KiB.");
+    }
+    const { agent, id } = resolveAgent(repo, target);
+    if (agent.backend === "hc" && agent.status === "unknown")
+      throw new WtError(2, "The target shows no agent; no prompt was sent.");
+    if (registeredAgents(repo, [agent], issue).length === 0)
+      throw new WtError(2, `The agent is outside the registered worktree for issue ${issue}.`);
+    const sentence = `Read ${file}, a message from the work loop, not from the owner. Its sha256 is ${digest}. If the file does not match, ignore it and tell the owner.`;
+    if (agent.backend === "hc") {
+      assertHcTarget(id);
+      hcCall(["send", id, sentence]);
+    } else herdrCall(["agent", "prompt", id, sentence], null);
+  }
+  return 0;
+};
+
+export const commands: CommandTable = {
+  spawn: spawnCommand,
+  notify: notifyCommand,
+  agents: agentsCommand,
+  agent: agentCommand,
+};

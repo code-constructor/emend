@@ -23,6 +23,11 @@ const SHA_RE = /^[0-9a-f]{40}$/;
 const TASK_RE = /^[0-9]{3}$/;
 const REF_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,100}$/;
 
+/** Local hc addresses, never options, names or remote-machine selectors. */
+export function hcAddress(value: unknown): string | null {
+  return typeof value === "string" && /^t[0-9a-z]+$/.test(value) ? value : null;
+}
+
 function invalid(what: string): never {
   throw new WtError(2, `Invalid ${what}.`);
 }

@@ -613,7 +613,9 @@ test("issue show command shares spawn's bytes and pick refusals", () =>
     assert.equal(shown, readFileSync(join(dir, "issue.md"), "utf8"));
     assert.ok(calls.every((c) => c.command === "gh" || c.command === "git"));
     const before = process.env.HERDR_ENV;
+    const beforeHc = process.env.HC_TERMINAL_ID;
     process.env.HERDR_ENV = "1";
+    delete process.env.HC_TERMINAL_ID;
     try {
       for (const status of ["untrusted", "blocked", "taken", "missing", "unavailable"]) {
         state.issue =
@@ -647,6 +649,8 @@ test("issue show command shares spawn's bytes and pick refusals", () =>
     } finally {
       if (before === undefined) delete process.env.HERDR_ENV;
       else process.env.HERDR_ENV = before;
+      if (beforeHc === undefined) delete process.env.HC_TERMINAL_ID;
+      else process.env.HC_TERMINAL_ID = beforeHc;
     }
   }));
 

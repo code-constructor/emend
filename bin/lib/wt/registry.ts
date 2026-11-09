@@ -17,7 +17,7 @@ import {
 import net from "node:net";
 import { join } from "node:path";
 import type { Repo } from "./repo.ts";
-import { WtError } from "./validate.ts";
+import { hcAddress, WtError } from "./validate.ts";
 
 export const PORT_MIN = 3637;
 export const PORT_MAX = 3656;
@@ -49,6 +49,8 @@ export interface WorktreeEntry {
   createdAt: string;
   /** Commit that landed this branch on local main (set by `land`). */
   landedAs?: string;
+  /** The terminal returned by this worktree's hc spawn. Older entries have no terminal ownership. */
+  hcAddress?: string;
 }
 
 export interface Registry {
@@ -175,6 +177,10 @@ function parseRegistry(text: string): Registry {
   if (!isRecord(data) || data.version !== 1 || !isRecord(data.worktrees) || !isRecord(data.reservations)) {
     throw new WtError(1, "The worktree registry has an unexpected shape. Nothing was changed.");
   }
+  for (const entry of Object.values(data.worktrees)) {
+    if (isRecord(entry) && Object.hasOwn(entry, "hcAddress") && hcAddress(entry.hcAddress) === null)
+      throw new WtError(1, "The worktree registry has an invalid hc address. Nothing was changed.");
+  }
   return data as unknown as Registry;
 }
 
@@ -189,6 +195,7 @@ export function readRegistry(repo: Repo): Registry {
 }
 
 function writeRegistryFile(repo: Repo, registry: Registry): void {
+  parseRegistry(JSON.stringify(registry));
   const final = registryPath(repo);
   const tmp = `${final}.${process.pid}.tmp`;
   const fd = openSync(tmp, "w", 0o600);

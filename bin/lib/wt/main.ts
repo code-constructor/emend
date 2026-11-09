@@ -21,6 +21,8 @@ const OWNERS: Record<string, string> = {
   issue: "issues.ts",
   spawn: "herdr.ts",
   notify: "herdr.ts",
+  agents: "herdr.ts",
+  agent: "herdr.ts",
   repo: "github.ts",
   fetch: "github.ts",
   push: "github.ts",
@@ -45,10 +47,14 @@ Local:
   gc [--prune]                                     report or remove orphans
   repo                                            print origin's GitHub owner/name
 
-herdr:
+herdr / herdr desktop:
   spawn --brief <text> | --brief-file <path> --slug <slug> [--mode github|local] [--model <m>] [--effort <e>]
   spawn --issue <n> [--mode github] [--model <m>] [--effort <e>]
   notify ...
+  agents [--json]                                  agents in registered worktrees, from both backends
+  agent read <target> [--lines N]                   registered worker output (1..400 lines, default 80)
+  agent prompt <target> --issue <n>                 send a hashed message reference to that issue's worker
+                                                   target: herdr agent name or hc address (never hc name)
 
 Remote:
   issues [--json]                                  the ready GitHub issue queue
@@ -69,7 +75,7 @@ History:
 
 No arguments: an action menu on a terminal with fzf, otherwise "list".
 Exit codes: 0 done, 1 failed or unconfirmed, 2 invalid input, 3 already exists,
-69 dependency, remote or slot unavailable, 124 herdr timeout.
+69 dependency, remote or slot unavailable, 124 herdr or herdr desktop timeout.
 `;
 
 function fail(code: 1 | 2 | 69, message: string): never {

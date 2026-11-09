@@ -1,6 +1,6 @@
 ---
 name: e-spawn
-description: Hand a change request or a GitHub issue to a new session in its own worktree and herdr workspace, without leaving this session. Use when the owner types /e-spawn with a plain description of what to build, or with an issue as #<n>.
+description: Hand a change request or a GitHub issue to a new session in its own worktree and herdr workspace or herdr desktop terminal, without leaving this session. Use when the owner types /e-spawn with a plain description of what to build, or with an issue as #<n>.
 ---
 
 # /e-spawn
@@ -29,8 +29,8 @@ is blocked, or is already taken, and creates nothing; relay its message.
 
 1. Run this in the main checkout. If `git rev-parse --show-toplevel` differs from `<main>`, say that
    `/e-spawn` runs from the main checkout only, and stop.
-2. Do not check herdr yourself. `<main>/bin/wt spawn` checks it and creates nothing when herdr is
-   missing.
+2. Do not check herdr yourself. `<main>/bin/wt spawn` checks for herdr (`HERDR_ENV=1`) or herdr
+   desktop (`HC_TERMINAL_ID`) and creates nothing when neither, or both, are found.
 
 ## 2. Restate and infer
 
@@ -88,8 +88,8 @@ Wait for the completion notification, then read the output. Setup takes time.
 ## 5. Report
 
 - Exit 0: open with the last line of the output as it stands. It says whether the agent is working
-  or waiting for an answer. Then give the task or the issue, the branch, the port and the workspace,
-  from the lines `Task:` or `Issue:`, `Branch:`, `Port:` and `Worktree:` and from the last line.
+  or waiting for an answer. Then give the task or the issue, the branch, the port and the workspace
+  or terminal, from the lines `Task:` or `Issue:`, `Branch:`, `Port:` and `Worktree:` and from the last line.
 - Any other exit: relay the message as it stands, including any cleanup command it prints. Never run
   that cleanup yourself.
 
