@@ -53,7 +53,11 @@ moves to "Not changed".
   `pnpm verify`, and name it under Evidence in the PR body. A fix you cannot prove stays open.
 - An open blocking finding stops the work: run `<main>/bin/wt notify blocked`, name the finding and
   why the fixes did not hold, and wait for the owner.
-- Never start a round past the budget.
+- When another round seems worth it, ask the owner before you start it: run
+  `<main>/bin/wt notify question`, say what the round would fix, and offer two choices, stop here
+  or one more round. Without a yes, stop. Log a granted round as `extra-1`, `extra-2` and so on,
+  and ask again after each one.
+- Never start a round past the budget without the owner's yes.
 
 ## Log
 
@@ -65,5 +69,6 @@ blocking findings still open:
 
 `2026-11-09 10:12 e-work check-1 3f2a91c blocking 1/1 defect 2/2 preference 3 follow-up 1 open 0`
 
-Round names: `1`, `check-1`, `check-2`, `final`, `final-skipped`, `final-check`, `owner-check`. The
-work loop reads only lines in this format, and from them only the round names and numbers.
+Round names: `1`, `check-1`, `check-2`, `final`, `final-skipped`, `final-check`, `owner-check`, and
+`extra-1`, `extra-2` for rounds the owner granted. The work loop reads only lines in this format,
+and from them only the round names and numbers.

@@ -94,11 +94,11 @@ Use the survey's `items` for PR lookups. For each worker, and each journal issue
   Then take the first signal below that holds and that the journal does not show as sent: a
   `steered <signal> <n>` line with the same `<n>`, which is the review log's line count, or the head
   for `stalled`. Send at most one message per pass, and journal `steered <signal> <n>`.
-  - **budget:** the log's last line is `check-2` or `final-check` and shows `open` above 0. Quote
-    the bullet in the rule's "At the budget" that begins "An open blocking finding".
+  - **budget:** the log's last line is `check-2`, `final-check` or `extra-<n>` and shows `open`
+    above 0. Quote the bullet in the rule's "At the budget" that begins "An open blocking finding".
   - **over-budget:** the log shows `check-3` or later, a second `final` or a second `final-check`;
-    `owner-check` lines never count. Quote the rule's "Budget" section, and tell the owner the
-    issue number.
+    `owner-check` and `extra-<n>` lines never count. Quote the rule's "Budget" section, and tell
+    the owner the issue number.
   - **polish:** the log's last line shows `open 0`, it is more than 30 minutes old, and the worker
     has no PR. Ask it to check its "Done when" and to close out once its rounds are done, as
     `/e-work` step 5 says.
