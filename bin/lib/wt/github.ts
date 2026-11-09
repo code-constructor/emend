@@ -1,4 +1,5 @@
 import { isatty } from "node:tty";
+import { stripVTControlCharacters } from "node:util";
 import {
   checkPublicChange,
   checkPublicPush,
@@ -9,7 +10,8 @@ import {
 } from "../../../scripts/check-public.ts";
 import type { Command, CommandTable } from "./command.ts";
 import { localDiagnostic, repoDiagnostic } from "./diagnostics.ts";
-import { checkIssue, githubRepository } from "./issues.ts";
+import { htmlEntityNames, legacyEntities, legacyEntityNames, namedEntities } from "./entities.ts";
+import { checkIssue, githubRepository, originRepository } from "./issues.ts";
 import { type RunResult, run } from "./proc.ts";
 import { requirePublic, requirePublicText } from "./public.ts";
 import { fetchOrigin, gitTry, type Repo, requireGlobalIdentity } from "./repo.ts";
@@ -34,9 +36,15 @@ export { pushDiagnostic } from "./diagnostics.ts";
 const GH_TIMEOUT_MS = 90_000;
 const NO_OPEN_PR = "No open pull request for this branch.";
 
-/** Runs gh in the main checkout (every gh call targets the same repository from there). */
-function ghTry(repo: Repo, args: string[], input?: string): RunResult {
-  return run("gh", args, { cwd: repo.mainRoot, input, timeoutMs: GH_TIMEOUT_MS });
+/** Pin GitHub calls to origin and github.com, never gh defaults or caller overrides. */
+function ghTry(repo: Repo, args: string[], input?: string, identity?: string): RunResult {
+  const pinned =
+    args[0] === "pr"
+      ? [...args, "--repo", `github.com/${identity ?? originRepository(repo).nameWithOwner}`]
+      : args[0] === "api"
+        ? [...args, "--hostname", "github.com"]
+        : args;
+  return run("gh", pinned, { cwd: repo.mainRoot, input, timeoutMs: GH_TIMEOUT_MS });
 }
 
 /** Maps a failed gh call to an exit code: 69 for a missing tool, no login or no network, 1 otherwise. */
@@ -237,19 +245,31 @@ function callerBranch(repo: Repo): string {
 
 type PrState = "OPEN" | "MERGED" | "CLOSED";
 
-/** Exact, fully paginated branch lookup. Search-backed `pr list` can lag and match head prefixes. */
+/** Optional worktree lookups can report a skipped privacy check without exposing the name. */
+export class PrLookupPrivacyError extends WtError {}
+
+/**
+ * Exact, fully paginated lookup. Search-backed `pr list` can lag and match head prefixes.
+ * Supplying localHead selects a worktree's PR; otherwise ambiguous matches are refused.
+ */
 export function prForBranch(
   repo: Repo,
   branch: string,
   states: readonly PrState[] = ["OPEN"],
   extraFields: string[] = [],
   timeoutMs = GH_TIMEOUT_MS,
+  localHead?: string | null,
+  repository?: ReturnType<typeof originRepository>,
 ): Pr | null {
   branchName(branch);
-  const fields = [BASE_FIELDS, ...extraFields].join(",");
-  const remote = gitTry(repo, ["remote", "get-url", "origin"]);
-  if (remote.code !== 0) throw new WtError(2, "Could not read git origin's repository identity.");
-  const identity = githubRepository(remote.stdout);
+  try {
+    requirePublicText(repo, { branch });
+  } catch (error) {
+    if (error instanceof WtError) throw new PrLookupPrivacyError(error.code, error.message);
+    throw error;
+  }
+  const fields = [BASE_FIELDS, ...extraFields, ...(localHead === undefined ? [] : ["headRefOid"])].join(",");
+  const identity = repository ?? originRepository(repo);
   const name = identity.nameWithOwner.slice(identity.owner.length + 1);
   const query = `query($owner: String!, $name: String!, $head: String!, $cursor: String) {
     viewer { login }
@@ -278,8 +298,9 @@ export function prForBranch(
         `name=${name}`,
         "-f",
         `head=${branch}`,
-        cursor === null ? "-F" : "-f",
-        `cursor=${cursor ?? "null"}`,
+        ...(cursor === null ? [] : ["-f", `cursor=${cursor}`]),
+        "--hostname",
+        "github.com",
       ],
       { cwd: repo.mainRoot, timeoutMs },
     );
@@ -322,6 +343,16 @@ export function prForBranch(
     cursor = page.endCursor;
     seen.add(cursor);
   }
+  if (localHead !== undefined) {
+    // Reused worktree branches prefer their tip, then a current PR, then the newest historical PR.
+    const prs = matches.map(toPr).sort((a, b) => b.number - a.number);
+    return (
+      prs.find((pr) => localHead !== null && pr.data.headRefOid === localHead) ??
+      prs.find((pr) => pr.data.state === "OPEN") ??
+      prs[0] ??
+      null
+    );
+  }
   if (matches.length > 1) {
     const kind = states.length === 1 ? `${states[0]?.toLowerCase()} ` : "";
     throw new WtError(1, `More than one ${kind}pull request matches this branch.`);
@@ -329,8 +360,8 @@ export function prForBranch(
   return matches[0] ? toPr(matches[0]) : null;
 }
 
-function requireOpenPr(repo: Repo, extraFields: string[] = []): Pr {
-  const pr = prForBranch(repo, callerBranch(repo), ["OPEN"], extraFields);
+function requireOpenPr(repo: Repo, extraFields: string[] = [], identity?: ReturnType<typeof originRepository>): Pr {
+  const pr = prForBranch(repo, callerBranch(repo), ["OPEN"], extraFields, GH_TIMEOUT_MS, undefined, identity);
   if (!pr) throw new WtError(1, NO_OPEN_PR);
   return pr;
 }
@@ -361,7 +392,10 @@ function resolvePr(repo: Repo, prArg: string | undefined, extraFields: string[] 
 const CLOSING_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
     nameWithOwner
+    mergeQueue(branch: "main") { id }
     pullRequest(number: $number) {
+      body createdAt lastEditedAt
+      autoMergeRequest { enabledAt }
       closingIssuesReferences(first: 20) {
         nodes { number repository { nameWithOwner } }
         pageInfo { hasNextPage }
@@ -370,17 +404,37 @@ const CLOSING_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
   }
 }`;
 const CLOSING_MISMATCH = "GitHub's closing issues do not match this branch. Fix the PR body with bin/wt pr edit.";
-
-/** GitHub's parsed closing set is authoritative. Creation/editing may precede its own-issue link. */
-function githubClosingGuard(repo: Repo, branch: string, number: number, requireOwn: boolean): void {
-  function refuse(): never {
-    throw new WtError(1, CLOSING_MISMATCH);
+const CLOSING_UNREADABLE = "Could not read GitHub's closing issues.";
+/** A readable mismatch must keep its diagnostic when the caller handles query failures. */
+class ClosingMismatchError extends WtError {
+  readonly pr: Record<string, unknown> | undefined;
+  constructor(message: string, pr: unknown) {
+    super(1, message);
+    // Preserve readable body metadata even when the closing set itself cannot be trusted.
+    if (typeof pr === "object" && pr !== null && !Array.isArray(pr)) this.pr = pr as Record<string, unknown>;
   }
-  const remote = gitTry(repo, ["remote", "get-url", "origin"]);
-  if (remote.code !== 0) refuse();
+}
+
+// GitHub documents no parsing bound; field reports range from seconds to over an hour.
+// The window compares the local clock with GitHub's timestamps and narrows the race.
+// The post-merge check covers only the PR's closing set; the squash message rests on the pre-merge text scan.
+const CLOSING_SETTLE_MS = 10 * 60 * 1000;
+
+interface ClosingState {
+  pr: Record<string, unknown>;
+  repository: string;
+  mergeQueue: unknown;
+  issues: { number: number; repository: string }[];
+}
+
+/** Read the body and parsed closing set together, pinned to the original repository through a merge. */
+function readGithubClosing(repo: Repo, number: number, identity?: ReturnType<typeof originRepository>): ClosingState {
+  function refuse(): never {
+    throw new WtError(1, CLOSING_UNREADABLE);
+  }
   let expected: string;
   try {
-    expected = githubRepository(remote.stdout).nameWithOwner.toLowerCase();
+    expected = (identity ?? originRepository(repo)).nameWithOwner.toLowerCase();
   } catch {
     refuse();
   }
@@ -392,10 +446,10 @@ function githubClosingGuard(repo: Repo, branch: string, number: number, requireO
       "graphql",
       "-f",
       `query=${CLOSING_QUERY}`,
-      "-F",
-      "owner={owner}",
-      "-F",
-      "name={repo}",
+      "-f",
+      `owner=${expected.split("/")[0]}`,
+      "-f",
+      `name=${expected.split("/")[1]}`,
       "-F",
       `number=${number}`,
     ],
@@ -404,17 +458,100 @@ function githubClosingGuard(repo: Repo, branch: string, number: number, requireO
   const response = asObject(parseJson(result, what), what);
   if (response.errors !== undefined) refuse();
   const repository = asObject(asObject(response.data, what).repository, what);
-  if (typeof repository.nameWithOwner !== "string" || repository.nameWithOwner.toLowerCase() !== expected) refuse();
-  const connection = asObject(asObject(repository.pullRequest, what).closingIssuesReferences, what);
-  if (asObject(connection.pageInfo, what).hasNextPage !== false || !Array.isArray(connection.nodes)) refuse();
-  const issue = issueFromBranch(branch);
-  if (connection.nodes.length > 20 || (issue !== null && requireOwn && connection.nodes.length === 0)) refuse();
+  if (typeof repository.nameWithOwner !== "string" || !/^[a-z0-9_.-]+\/[a-z0-9_.-]+$/iu.test(repository.nameWithOwner))
+    refuse();
+  if (repository.nameWithOwner.toLowerCase() !== expected)
+    throw new ClosingMismatchError(
+      "GitHub's closing query returned a different repository than origin.",
+      repository.pullRequest,
+    );
+  const pr = asObject(repository.pullRequest, what);
+  const connection = asObject(pr.closingIssuesReferences, what);
+  const hasNextPage = asObject(connection.pageInfo, what).hasNextPage;
+  if (typeof hasNextPage !== "boolean" || !Array.isArray(connection.nodes)) refuse();
+  if (hasNextPage || connection.nodes.length > 20)
+    throw new ClosingMismatchError("GitHub's closing query returned more than 20 closing issues.", pr);
+  const issues: ClosingState["issues"] = [];
   for (const node of connection.nodes) {
     const ref = asObject(node, what);
     const owner = asObject(ref.repository, what).nameWithOwner;
-    if (issue === null || ref.number !== issue || typeof owner !== "string" || owner.toLowerCase() !== expected)
+    if (
+      typeof ref.number !== "number" ||
+      !Number.isSafeInteger(ref.number) ||
+      ref.number <= 0 ||
+      typeof owner !== "string" ||
+      !/^[a-z0-9_.-]+\/[a-z0-9_.-]+$/iu.test(owner)
+    )
       refuse();
+    issues.push({ number: ref.number, repository: owner });
   }
+  return { pr, repository: expected, mergeQueue: repository.mergeQueue, issues };
+}
+
+function foreignClosingIssues(closing: ClosingState, branch: string): string[] {
+  const issue = issueFromBranch(branch);
+  return closing.issues
+    .filter((ref) => ref.number !== issue || ref.repository.toLowerCase() !== closing.repository)
+    .map((ref) => `${ref.repository}#${ref.number}`);
+}
+
+/** GitHub's parsed closing set is authoritative. Creation/editing may precede its own-issue link. */
+function githubClosingGuard(
+  repo: Repo,
+  branch: string,
+  number: number,
+  phase: "merge" | "created" | "edited",
+  identity?: ReturnType<typeof originRepository>,
+  now: () => number = Date.now,
+): Record<string, unknown> {
+  function refuseMismatch(message: string): never {
+    throw new WtError(
+      1,
+      phase === "merge"
+        ? `${message} Nothing was merged.`
+        : `Pull request #${number} was ${phase}, but its closing check failed. ${message} Check it before retrying.`,
+    );
+  }
+  let closing: ClosingState;
+  try {
+    closing = readGithubClosing(repo, number, identity);
+  } catch (error) {
+    if (error instanceof ClosingMismatchError) refuseMismatch(error.message);
+    throw new WtError(
+      error instanceof WtError ? error.code : 1,
+      phase === "merge"
+        ? `${CLOSING_UNREADABLE} Nothing was merged.`
+        : `Pull request #${number} was ${phase}, but its closing check could not be read. Check it before retrying.`,
+    );
+  }
+  if (foreignClosingIssues(closing, branch).length) refuseMismatch(CLOSING_MISMATCH);
+  if (phase === "merge") {
+    // GitHub returns null for no queue or one the token cannot see, so refusal relies on token visibility.
+    // The QUEUED path still stops the workflow if the merge is queued after submission.
+    if (closing.mergeQueue === undefined)
+      throw new WtError(1, "Could not read the repository's merge queue. Nothing was merged.");
+    if (closing.mergeQueue !== null) throw new WtError(1, "Merge queues are not supported. Nothing was merged.");
+    if (closing.pr.autoMergeRequest === undefined)
+      throw new WtError(1, "Could not read whether auto-merge is enabled. Nothing was merged.");
+    if (closing.pr.autoMergeRequest !== null)
+      throw new WtError(1, "Auto-merge is enabled on this PR. Nothing was merged.");
+    requireSettledClosing(closing.pr, now);
+    if (issueFromBranch(branch) !== null && closing.issues.length === 0) refuseMismatch(CLOSING_MISMATCH);
+  }
+  return closing.pr;
+}
+
+function requireSettledClosing(pr: Record<string, unknown>, now: () => number): void {
+  const edited = pr.lastEditedAt ?? pr.createdAt;
+  const time = typeof edited === "string" ? Date.parse(edited) : Number.NaN;
+  const retry = time + CLOSING_SETTLE_MS;
+  if (!Number.isFinite(retry) || !Number.isFinite(new Date(retry).getTime()))
+    throw new WtError(1, "Could not read when the pull request body last changed. Nothing was merged.");
+  if (now() < retry)
+    throw new WtError(
+      1,
+      `GitHub may not have parsed the body yet. Retry at ${new Date(retry).toISOString()} (UTC). Nothing was merged.`,
+    );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -432,13 +569,15 @@ export function prCreate(repo: Repo, o: { title: string; body: string; draft: bo
   const args = ["pr", "create", "--head", branch, "--base", "main", `--title=${title}`];
   if (o.draft) args.push("--draft");
   const out = gh(repo, [...args, "--body-file", "-"], "gh pr create", o.body);
-  const printed = /^https:\/\/github\.com\/[a-z0-9_.-]+\/[a-z0-9_.-]+\/pull\/([1-9][0-9]*)\/?$/iu.exec(out.trim());
-  if (!printed?.[1])
+  const printed = /^https:\/\/github\.com\/([a-z0-9_.-]+\/[a-z0-9_.-]+)\/pull\/([1-9][0-9]*)\/?$/iu.exec(out.trim());
+  if (!printed?.[1] || !printed[2])
     throw new WtError(
       1,
       "Pull request creation succeeded, but gh did not print a valid PR URL. Check it before retrying.",
     );
-  const number = prNumber(printed[1]);
+  if (originRepository(repo).nameWithOwner.toLowerCase() !== printed[1].toLowerCase())
+    throw new WtError(1, "Pull request creation returned a URL for a different repository. Check it before retrying.");
+  const number = prNumber(printed[2]);
   let confirmed: Pr | null;
   try {
     confirmed = prForBranch(repo, branch);
@@ -454,7 +593,7 @@ export function prCreate(repo: Repo, o: { title: string; body: string; draft: bo
       1,
       `Pull request #${number} was created, but its exact branch lookup could not confirm it. Check it before retrying.`,
     );
-  githubClosingGuard(repo, branch, number, false);
+  githubClosingGuard(repo, branch, number, "created");
   return out;
 }
 
@@ -466,7 +605,8 @@ const REFERENCE_PARTS = new RegExp(
   `^${MARKS}(?:(#)|(GH-)|(${REPOSITORY})#|${GITHUB_URL}(${REPOSITORY})/issues/)([0-9]+)/?${MARKS}$`,
   "iu",
 );
-const KEYWORD = "(?<![A-Za-z0-9])(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)(?![A-Za-z0-9])";
+const CLOSING_WORDS = ["close", "closes", "closed", "fix", "fixes", "fixed", "resolve", "resolves", "resolved"];
+const KEYWORD = `(?<![A-Za-z0-9])(?:${CLOSING_WORDS.join("|")})(?![A-Za-z0-9])`;
 interface ClosingOperand {
   end: number;
   reference: RegExpExecArray | null;
@@ -475,7 +615,7 @@ interface ClosingOperand {
 }
 
 /** Pair delimiters once; malformed or nested links must not make us repeatedly search a suffix. */
-function closingDelimiters(text: string): Map<number, number> {
+function closingDelimiters(text: string, escapedParentheses = false): Map<number, number> {
   const ends = new Map<number, number>();
   const squares: number[] = [];
   const parentheses: number[] = [];
@@ -493,19 +633,50 @@ function closingDelimiters(text: string): Map<number, number> {
     single[i] = char === "'" ? outside : inSingle;
     double[i] = char === '"' ? outside : inDouble;
   }
+  let escaped = false;
   for (let i = 0; i < text.length; i++) {
     const char = text[i] ?? "";
     const angleEnd = plain[i + 1] ?? -1;
     if (char === "<" && angleEnd !== -1) ends.set(i, angleEnd);
     if (char === "[") squares.push(i);
-    if (char === "(") parentheses.push(i);
-    const stack = char === "]" ? squares : char === ")" ? parentheses : null;
+    const pairParenthesis = !escapedParentheses || !escaped;
+    if (char === "(" && pairParenthesis) parentheses.push(i);
+    const stack = char === "]" ? squares : char === ")" && pairParenthesis ? parentheses : null;
     if (stack) {
       const start = stack.pop();
       if (start !== undefined) ends.set(start, i);
     }
+    escaped = char === "\\" && !escaped;
   }
   return ends;
+}
+
+/** Strip inline markup without repeatedly searching nested links or quoted HTML tags. */
+function closingWithoutMarkup(text: string, dropReferences: boolean): string {
+  // Definition-shaped lines and reference labels may be literal. Scan both choices.
+  if (dropReferences) text = text.replace(/^[ \t]{0,3}\[[^\]\r\n]+\]:[^\r\n]*/gmu, "");
+  // A backslash-escaped parenthesis belongs to the destination, not its delimiters.
+  const ends = closingDelimiters(text, true);
+  const plain: string[] = [];
+  for (let i = 0; i < text.length; i++) {
+    if (text.startsWith("<!--", i)) {
+      const end = text.indexOf("-->", i + 4);
+      if (end === -1) break;
+      // Skip the whole comment, so every searched character is visited at most once.
+      i = end + 2;
+      continue;
+    }
+    const char = text[i] as string;
+    const tagEnd = char === "<" ? ends.get(i) : undefined;
+    const destinationEnd =
+      char === "]" && (text[i + 1] === "(" || (dropReferences && text[i + 1] === "[")) ? ends.get(i + 1) : undefined;
+    if (tagEnd !== undefined) i = tagEnd;
+    else if (destinationEnd !== undefined) i = destinationEnd;
+    else if (!"*_~`[]".includes(char)) {
+      plain.push(char);
+    }
+  }
+  return plain.join("");
 }
 
 function closingReference(text: string): RegExpExecArray | null {
@@ -576,8 +747,10 @@ function closingReferenceIndex(text: string, own: (ref: RegExpExecArray) => bool
   const bad = new Uint32Array(text.length + 1);
   const explicit = new Uint32Array(text.length + 1);
   const qualified: { at: number; ref: RegExpExecArray }[] = [];
+  // Repeated number signs and Unicode dashes are ambiguous references, never accepted own refs.
+  // Try a hash run only at its start; retrying at every hash would be quadratic without trailing digits.
   const tokens =
-    /#\s*[0-9]+\/?|GH-[0-9]+\/?|(?:https?:\/\/(?:www\.)?|www\.)?github\.com\/[a-z0-9_.-]+\/[a-z0-9_.-]+\/issues\/[0-9]+\/?/giu;
+    /(?<!#)#+\s*[0-9]+\/?|GH\p{Dash_Punctuation}[0-9]+\/?|(?:https?:\/\/(?:www\.)?|www\.)?github\.com\/[a-z0-9_.-]+\/[a-z0-9_.-]+\/issues\/[0-9]+\/?/giu;
   for (const token of text.matchAll(tokens)) {
     let start = token.index;
     let bareWord = false;
@@ -668,18 +841,43 @@ function closingPosition(text: string, at: number, afterReference: boolean): { a
   return { at, joined };
 }
 
-/** Only registered issue worktrees may close their issue; PR bodies must explicitly close it. */
-export function closingGuard(repo: Repo, branch: string, body: string, requireOwn = true): void {
-  const branchIssue = issueFromBranch(branch);
-  const metadata = worktreeIssue(repo.callerTop ?? repo.mainRoot);
-  if (/^emend-[0-9]+-/u.test(branch) && (branchIssue === null || metadata !== branchIssue))
-    throw new WtError(2, "Worktree issue does not match the branch. Use spawn --issue to register an issue worktree.");
-  const issue = metadata === branchIssue ? branchIssue : null;
+const maxLegacyName = Math.max(...[...legacyEntityNames].map((name) => name.length));
+
+/** Decode once; HTML also accepts legacy names and numeric references with unbounded digits and no semicolon. */
+export function decodeClosingReferences(body: string, legacy = false): string {
+  return body.replace(
+    legacy
+      ? /&#(?:([0-9]+)|[xX]([0-9a-fA-F]+));?|&([A-Za-z][A-Za-z0-9]*)(;?)/gu
+      : /&#(?:([0-9]{1,7})|[xX]([0-9a-fA-F]{1,6}));|&([A-Za-z][A-Za-z0-9]*)(;?)/gu,
+    (reference, decimal, hex, name: string | undefined, semicolon: string | undefined) => {
+      if (name !== undefined) {
+        if (semicolon && htmlEntityNames.has(name)) return namedEntities[name] ?? "\ufffd";
+        if (legacy) {
+          // Browser text uses the longest legacy prefix, even in an otherwise unknown name.
+          // Bound probes by the longest known name, not by an untrusted token's length.
+          for (let end = Math.min(name.length, maxLegacyName); end > 0; end--) {
+            const prefix = name.slice(0, end);
+            if (legacyEntityNames.has(prefix))
+              return (legacyEntities[prefix] ?? "\ufffd") + name.slice(end) + (semicolon ?? "");
+          }
+        }
+        return reference;
+      }
+      // Keep invalid-code-point handling in both readings; CommonMark keeps its digit/semicolon rules.
+      const code = Number.parseInt(decimal ?? hex, decimal === undefined ? 16 : 10);
+      return code > 0 && code <= 0x10ffff && !(code >= 0xd800 && code <= 0xdfff)
+        ? String.fromCodePoint(code)
+        : "\ufffd";
+    },
+  );
+}
+
+function normalizeClosingText(decoded: string): string {
   // Unicode canonical reordering can be quadratic on a long, out-of-order combining-mark run.
   // Decompose only one code point at a time until the run bound is known to hold.
   const compatibilityMarks = new Map<string, boolean>();
   let marks = 0;
-  for (const point of body) {
+  for (const point of decoded) {
     let mark = /\p{M}/u.test(point);
     if (!mark) {
       let compatible = compatibilityMarks.get(point);
@@ -692,15 +890,67 @@ export function closingGuard(repo: Repo, branch: string, body: string, requireOw
     marks = mark ? marks + 1 : 0;
     if (marks > 32) throw new WtError(2, "Text contains more than 32 consecutive combining marks.");
   }
-  const text = body.normalize("NFKC").replace(/&#(?:0*35|x0*23);|&num;/giu, "#");
+  return decoded.normalize("NFKC");
+}
+
+/**
+ * closingGuard is an early warning that runs before GitHub sees the text. It is not the boundary:
+ * GitHub's own closing set (githubClosingGuard, closingIssuesReferences) is authoritative and runs
+ * right before every merge, pinned to the head. Renderer differences in a PR body that the readings
+ * miss are caught there. The squash message is guarded only by these readings (as written, decoded
+ * and stripped of markup): GitHub reads it as plain text at merge time, and no API reports its
+ * closing set beforehand, so the extra readings only make the guard stricter. Keep the readings cheap
+ * and conservative; do not model CommonMark or HTML in full.
+ */
+export function closingGuard(repo: Repo, branch: string, body: string, requireOwn = true): void {
+  const branchIssue = issueFromBranch(branch);
+  const metadata = worktreeIssue(repo.callerTop ?? repo.mainRoot);
+  if (/^emend-[0-9]+-/u.test(branch) && (branchIssue === null || metadata !== branchIssue))
+    throw new WtError(2, "Worktree issue does not match the branch. Use spawn --issue to register an issue worktree.");
+  const issue = metadata === branchIssue ? branchIssue : null;
+  const normalized = new Map<string, string>();
+  const normalize = (text: string): string => {
+    let result = normalized.get(text);
+    if (result === undefined) {
+      result = normalizeClosingText(text);
+      normalized.set(text, result);
+    }
+    return result;
+  };
+  const decoded = normalize(decodeClosingReferences(body));
+  const html = normalize(decodeClosingReferences(body, true));
+  const seen = new Set<string>();
+  const scan = (text: string, own = false) => {
+    text = text.replace(/\p{White_Space}/gu, " ");
+    if (seen.has(text)) return;
+    seen.add(text);
+    scanClosingText(repo, issue, text, own);
+  };
+  // The required own-issue instruction still comes from the CommonMark reading.
+  scan(decoded, requireOwn);
+  // Commit text is literal; neither decoding nor normalization may erase its closing instructions.
+  scan(body);
+  scan(html);
+  for (const source of new Set([body, decoded, html])) {
+    for (const dropReferences of [false, true]) {
+      const stripped = closingWithoutMarkup(source, dropReferences);
+      // Strip raw markup before decoding, as well as stripping already-decoded markup.
+      if (source === body) {
+        scan(normalize(decodeClosingReferences(stripped)));
+        scan(normalize(decodeClosingReferences(stripped, true)));
+      }
+      if (source === decoded || source === html) scan(stripped);
+    }
+  }
+}
+
+function scanClosingText(repo: Repo, issue: number | null, text: string, requireOwn: boolean): void {
   let origin: string | undefined;
   const own = (match: RegExpExecArray): boolean => {
     if (issue === null) return false;
     const explicit = match[3] ?? match[4];
     if (explicit !== undefined && origin === undefined) {
-      const remote = gitTry(repo, ["remote", "get-url", "origin"]);
-      if (remote.code !== 0) throw new WtError(2, "Could not read git origin's repository identity.");
-      origin = githubRepository(remote.stdout).nameWithOwner.toLowerCase();
+      origin = originRepository(repo).nameWithOwner.toLowerCase();
     }
     return (explicit === undefined || explicit.toLowerCase() === origin) && match[5] === String(issue);
   };
@@ -819,7 +1069,8 @@ export function prEdit(repo: Repo, o: { pr?: string; title?: string; body?: stri
   if (title !== null) args.push(`--title=${title}`);
   if (o.body !== undefined) args.push("--body-file", "-");
   const out = gh(repo, args, "gh pr edit", o.body);
-  githubClosingGuard(repo, branch, pr.number, false);
+  // This read may precede GitHub parsing the edit; the merge re-reads under the settle window.
+  githubClosingGuard(repo, branch, pr.number, "edited");
   return out;
 }
 
@@ -873,7 +1124,7 @@ function checkMergeBase(repo: Repo, n: number, sha: string): void {
 }
 
 /** Deletes only the remote head branch. The local branch is never touched; a failure is one stderr line. */
-function deleteRemoteBranch(repo: Repo, head: unknown, mergedHead: string): void {
+function deleteRemoteBranch(repo: Repo, head: unknown, mergedHead: string, identity: string): void {
   const keep = (why: string) => process.stderr.write(`remote branch kept: ${why}\n`);
   let branch: string;
   try {
@@ -882,6 +1133,29 @@ function deleteRemoteBranch(repo: Repo, head: unknown, mergedHead: string): void
     keep("the head branch name is not one bin/wt deletes");
     return;
   }
+  let destination: ReturnType<typeof readPushRemote>;
+  try {
+    destination = readPushRemote(repo.mainRoot);
+  } catch {
+    keep("origin must have exactly one push destination equal to its fetch destination");
+    return;
+  }
+  let repository: string;
+  try {
+    repository = githubRepository(destination.url).nameWithOwner;
+  } catch {
+    keep("origin's push destination is not a GitHub repository");
+    return;
+  }
+  if (repository.toLowerCase() !== identity.toLowerCase()) {
+    keep("origin no longer identifies the merged repository");
+    return;
+  }
+  const advertised = gitTry(repo, ["ls-remote", "--quiet", "--", "origin", `refs/heads/${branch}`], {
+    timeoutMs: 5000,
+  });
+  // GitHub may already have deleted it. An unreadable remote is not proof that the branch is gone.
+  if (advertised.code === 0 && advertised.stdout === "") return;
   // The lease keeps a branch that moved after the merge: only the merged head is deleted.
   const r = gitTry(repo, [
     "push",
@@ -895,20 +1169,24 @@ function deleteRemoteBranch(repo: Repo, head: unknown, mergedHead: string): void
 
 /**
  * Squash-merges the PR. Requires base `main`, a same-repository head, state OPEN and a head commit equal to
- * `matchHead`. Returns `MERGED <mergeCommit>` or `QUEUED`.
+ * `matchHead`. Returns `MERGED <mergeCommit>`; uncertain outcomes print their state and throw a warning.
  */
-export function prMerge(repo: Repo, o: { pr?: string; matchHead: string; subject: string; body: string }): string {
+export function prMerge(
+  repo: Repo,
+  o: { pr?: string; matchHead: string; subject: string; body: string },
+  now: () => number = Date.now,
+): string {
   const sha = commitSha(o.matchHead);
   const subject = oneLine(o.subject, "subject");
   requirePublicText(repo, { message: `${subject}\n\n${o.body}`, branch: repo.callerBranch ?? undefined });
-  const n = o.pr !== undefined ? prNumber(o.pr) : requireOpenPr(repo).number;
-  const r = ghTry(repo, [
-    "pr",
-    "view",
-    String(n),
-    "--json",
-    "number,baseRefName,headRefName,isCrossRepository,state,headRefOid,title,body",
-  ]);
+  const identity = originRepository(repo);
+  const n = o.pr !== undefined ? prNumber(o.pr) : requireOpenPr(repo, [], identity).number;
+  const r = ghTry(
+    repo,
+    ["pr", "view", String(n), "--json", "number,baseRefName,headRefName,isCrossRepository,state,headRefOid,title,body"],
+    undefined,
+    identity.nameWithOwner,
+  );
   if (r.code !== 0) {
     if (/no pull requests? found|could not resolve to a pullrequest/i.test(r.stderr))
       throw new WtError(1, "That pull request does not exist.");
@@ -929,15 +1207,24 @@ export function prMerge(repo: Repo, o: { pr?: string; matchHead: string; subject
   closingGuard(repo, branch, `${prText(pr, "title")}\n\n${prText(pr, "body")}`, false);
   closingGuard(repo, branch, `${subject}\n\n${o.body}`, false);
   checkMergeBase(repo, n, sha);
-  githubClosingGuard(repo, branch, n, true);
+  const closingPr = githubClosingGuard(repo, branch, n, "merge", identity, now);
+  const closingBody = prText(closingPr, "body");
+  requirePublicText(repo, { title: prText(pr, "title"), body: closingBody, branch });
+  closingGuard(repo, branch, `${prText(pr, "title")}\n\n${closingBody}`, false);
 
   const merge = ghTry(
     repo,
     ["pr", "merge", String(n), "--squash", "--match-head-commit", sha, `--subject=${subject}`, "--body-file", "-"],
     o.body,
+    identity.nameWithOwner,
   );
   // gh can fail after the merge succeeded (for example when the merge is queued or the read races), so read the state back.
-  const after = ghTry(repo, ["pr", "view", String(n), "--json", "state,mergeCommit"]);
+  const after = ghTry(
+    repo,
+    ["pr", "view", String(n), "--json", "state,mergeCommit,headRefOid"],
+    undefined,
+    identity.nameWithOwner,
+  );
   if (after.code !== 0) {
     if (merge.code !== 0) ghFailure(repo, merge, "gh pr merge");
     throw new WtError(
@@ -953,11 +1240,59 @@ export function prMerge(repo: Repo, o: { pr?: string; matchHead: string; subject
         : undefined;
     if (typeof oid !== "string" || !/^[0-9a-f]{40}$/.test(oid))
       throw new WtError(1, "The pull request is merged, but its merge commit could not be read.");
-    deleteRemoteBranch(repo, pr.headRefName, sha);
+    const warnings: string[] = [];
+    if (typeof state.headRefOid !== "string" || !/^[0-9a-f]{40}$/.test(state.headRefOid))
+      warnings.push("Warning: the merged head could not be read. Check the merged changes with the owner.");
+    else if (state.headRefOid !== sha)
+      warnings.push("Warning: the merged head is not the approved one. Check the merged changes with the owner.");
+    const alreadyMerged = /^\W*Pull request\b.*\bwas already merged\W*$/mu;
+    if (
+      alreadyMerged.test(stripVTControlCharacters(merge.stdout)) ||
+      alreadyMerged.test(stripVTControlCharacters(merge.stderr))
+    )
+      warnings.push(
+        "Warning: gh reported that the PR was already merged. This squash message was not used. Check the result.",
+      );
+    else if (merge.code !== 0 && state.headRefOid === sha)
+      warnings.push("Warning: gh pr merge reported an error, but the PR is merged. Check the result.");
+    else if (merge.code === 0 && merge.stderr !== "")
+      warnings.push("Warning: gh pr merge reported a warning, but the PR is merged. Check the result.");
+    let closingAfterPr: Record<string, unknown> | undefined;
+    try {
+      const closingAfter = readGithubClosing(repo, n, identity);
+      closingAfterPr = closingAfter.pr;
+      const foreign = foreignClosingIssues(closingAfter, branch);
+      if (foreign.length)
+        warnings.push(`Warning: the merge may have closed ${foreign.join(", ")}. Check and reopen each issue.`);
+    } catch (error) {
+      if (error instanceof ClosingMismatchError) {
+        closingAfterPr = error.pr;
+        warnings.push(`Warning: ${error.message} Check the PR's closed issues and reopen any foreign ones.`);
+      } else {
+        warnings.push(
+          "Warning: the post-merge closing check could not run. Check the PR's closed issues and reopen any foreign ones.",
+        );
+      }
+    }
+    if (closingAfterPr && closingAfterPr.lastEditedAt !== closingPr.lastEditedAt)
+      warnings.push(
+        "Warning: the PR body was edited during the merge. Check its closed issues and reopen any foreign ones.",
+      );
+    if (warnings.length) {
+      print(`MERGED ${oid}`);
+      throw new WtError(1, warnings.join("\n"));
+    }
+    deleteRemoteBranch(repo, pr.headRefName, sha, identity.nameWithOwner);
     return `MERGED ${oid}`;
   }
   if (merge.code !== 0) ghFailure(repo, merge, "gh pr merge");
-  if (state.state === "OPEN") return "QUEUED";
+  if (state.state === "OPEN") {
+    print("QUEUED");
+    throw new WtError(
+      1,
+      "Warning: the eventual queued merge is not checked. The owner must check the PR's closed issues after it merges.",
+    );
+  }
   throw new WtError(1, "The pull request was closed without a merge.");
 }
 
@@ -1063,7 +1398,18 @@ const prCommand: Command = ({ repo, args }) => {
   }
 };
 
+const repoCommand: Command = ({ repo, args }) => {
+  parseFlags(args, {}, 0);
+  try {
+    print(originRepository(repo).nameWithOwner);
+  } catch (error) {
+    if (error instanceof WtError) throw new WtError(69, error.message);
+    throw error;
+  }
+};
+
 export const commands: CommandTable = {
+  repo: repoCommand,
   fetch: fetchCommand,
   push: pushCommand,
   pr: prCommand,

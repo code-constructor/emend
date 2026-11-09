@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
-import childProcess from "node:child_process";
+import childProcess, { type SpawnSyncOptions } from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
+import { join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { run, runBytes } from "./proc.ts";
+import { makeTestEnv, runLauncher, runWt } from "./test-support.ts";
 
 test("run returns output and exit code without a shell", () => {
   const r = run(process.execPath, ["-e", "process.stdout.write(process.argv[1]); process.exit(3)", "$HOME;x"], {
@@ -58,8 +61,8 @@ test("run reports a missing program as 127 and a timeout as 124", () => {
 });
 
 test("regression: every process helper strips the private terms environment", (t) => {
-  const previous = process.env.EMEND_PRIVATE_TERMS;
-  process.env.EMEND_PRIVATE_TERMS = "fixturecorp";
+  const parent = { EMEND_PRIVATE_TERMS: "fixturecorp" };
+  t.mock.property(process, "env", parent);
   const spy = t.mock.method(childProcess, "spawnSync", (...args: unknown[]) => {
     const options = args[2] as { env: NodeJS.ProcessEnv; encoding: string };
     assert.equal(Object.hasOwn(options.env, "EMEND_PRIVATE_TERMS"), false);
@@ -73,12 +76,10 @@ test("regression: every process helper strips the private terms environment", (t
       assert.equal(result.code, 0);
     }
     assert.equal(spy.mock.callCount(), 2);
-    assert.equal(process.env.EMEND_PRIVATE_TERMS, "fixturecorp");
+    assert.deepEqual(parent, { EMEND_PRIVATE_TERMS: "fixturecorp" });
   } finally {
     spy.mock.restore();
     syncBuiltinESMExports();
-    if (previous === undefined) delete process.env.EMEND_PRIVATE_TERMS;
-    else process.env.EMEND_PRIVATE_TERMS = previous;
   }
 });
 
@@ -130,3 +131,112 @@ for (const execute of [run, runBytes]) {
     }
   });
 }
+
+for (const execute of [run, runBytes]) {
+  for (const command of ["gh", "git"]) {
+    test(`${execute.name} gives ${command} a plain-output environment`, (t) => {
+      const parent = {
+        GH_FORCE_TTY: "120",
+        CLICOLOR_FORCE: "1",
+        FORCE_COLOR: "3",
+        NO_COLOR: "0",
+        CLICOLOR: "1",
+        GH_NO_UPDATE_NOTIFIER: "0",
+        GH_REPO: "synthetic/wrong-repository",
+        GH_HOST: "example.invalid",
+        EMEND_PRIVATE_TERMS: "fixturecorp",
+        GIT_CONFIG_PARAMETERS: "'user.name=Synthetic User'",
+        GIT_DIFF_OPTS: "--unified=0",
+        GIT_DIR: "/synthetic/git-dir",
+        GIT_WORK_TREE: "/synthetic/work-tree",
+        GIT_COMMON_DIR: "/synthetic/common-dir",
+        GIT_INDEX_FILE: "/synthetic/index",
+        GIT_OBJECT_DIRECTORY: "/synthetic/objects",
+        GIT_ALTERNATE_OBJECT_DIRECTORIES: "/synthetic/alternate-objects",
+        GIT_NAMESPACE: "synthetic-namespace",
+        GIT_CEILING_DIRECTORIES: "/synthetic/ceiling",
+      };
+      const original = { ...parent };
+      t.mock.property(process, "env", parent);
+      const spy = t.mock.method(
+        childProcess,
+        "spawnSync",
+        (receivedCommand: string, args: string[], options: SpawnSyncOptions) => {
+          assert.equal(receivedCommand, command);
+          assert.deepEqual(args, ["--version"]);
+          assert.ok(options.env);
+          for (const key of [
+            "GH_FORCE_TTY",
+            "CLICOLOR_FORCE",
+            "FORCE_COLOR",
+            "GH_REPO",
+            "GH_HOST",
+            "EMEND_PRIVATE_TERMS",
+            "GIT_CONFIG_PARAMETERS",
+            "GIT_DIFF_OPTS",
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_COMMON_DIR",
+            "GIT_INDEX_FILE",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            "GIT_NAMESPACE",
+            "GIT_CEILING_DIRECTORIES",
+          ])
+            assert.equal(Object.hasOwn(options.env, key), false, `${key} must not reach ${command}`);
+          assert.equal(options.env.NO_COLOR, "1");
+          assert.equal(options.env.CLICOLOR, "0");
+          assert.equal(options.env.GH_NO_UPDATE_NOTIFIER, "1");
+          return { status: 0, stdout: options.encoding === "buffer" ? Buffer.alloc(0) : "", stderr: "" };
+        },
+      );
+      syncBuiltinESMExports();
+      try {
+        assert.equal(execute(command, ["--version"], { cwd: "/" }).code, 0);
+        assert.equal(spy.mock.callCount(), 1);
+        assert.deepEqual(parent, original);
+      } finally {
+        spy.mock.restore();
+        syncBuiltinESMExports();
+      }
+    });
+  }
+}
+
+test("round 18 repo launcher resolves the working directory despite an inherited GIT_DIR", async () => {
+  const env = makeTestEnv({ ports: false });
+  try {
+    const working = join(env.root, "working");
+    const other = join(env.root, "other");
+    for (const [root, origin] of [
+      [working, "https://github.com/owner/working.git"],
+      [other, "https://github.com/owner/other.git"],
+    ] as const) {
+      assert.deepEqual(await runWt("git", ["init", "--quiet", root], { cwd: env.root }), {
+        code: 0,
+        stdout: "",
+        stderr: "",
+      });
+      assert.deepEqual(await runWt("git", ["remote", "add", "origin", origin], { cwd: root }), {
+        code: 0,
+        stdout: "",
+        stderr: "",
+      });
+    }
+    const options = { cwd: working, env: { GIT_DIR: join(other, ".git") } };
+    // Prove the inherited override selects the other origin when git is called directly.
+    assert.deepEqual(await runWt("git", ["remote", "get-url", "origin"], options), {
+      code: 0,
+      stdout: "https://github.com/owner/other.git\n",
+      stderr: "",
+    });
+    const launcher = fileURLToPath(new URL("../../wt", import.meta.url));
+    assert.deepEqual(await runLauncher(launcher, ["repo"], options), {
+      code: 0,
+      stdout: "owner/working\n",
+      stderr: "",
+    });
+  } finally {
+    env.cleanup();
+  }
+});

@@ -302,7 +302,10 @@ test("R7.H: PR edit and merge check a different remote head name before side eff
     writeFileSync(join(fx.main, ".private-terms"), "alice example");
     const realGit = realpathSync(join(env.fakeBin, "git"));
     rmSync(join(env.fakeBin, "git"));
-    installFake(env, "git", [{ code: 128, stderr: "unexpected git call" }]);
+    installFake(env, "git", [
+      { match: ["remote", "get-url", "origin"], stdout: "https://github.com/owner/repo.git" },
+      { code: 128, stderr: "unexpected git call" },
+    ]);
     for (const action of ["edit", "merge"]) {
       installFake(env, "gh", [
         {
@@ -320,7 +323,7 @@ test("R7.H: PR edit and merge check a different remote head name before side eff
       );
       assert.equal(fakeCalls(env, "gh").length, 1);
       assert.deepEqual(fakeCalls(env, "gh")[0]?.slice(0, 3), ["pr", "view", "7"]);
-      assert.deepEqual(fakeCalls(env, "git"), []);
+      assert.ok(fakeCalls(env, "git").every((args) => args.slice(-3).join(" ") === "remote get-url origin"));
     }
     rmSync(join(env.fakeBin, "git"));
     symlinkSync(realGit, join(env.fakeBin, "git"));
@@ -598,11 +601,19 @@ function closingRule(nodes: unknown[] = [], more = false): FakeRule {
   return {
     match: ["api", "graphql"],
     queryIncludes: "closingIssuesReferences(first: 20)",
+    graphqlRepository: "owner/repo",
     stdout: JSON.stringify({
       data: {
         repository: {
           nameWithOwner: "owner/repo",
-          pullRequest: { closingIssuesReferences: { nodes, pageInfo: { hasNextPage: more } } },
+          mergeQueue: null,
+          pullRequest: {
+            body: "Description",
+            createdAt: "2026-01-01T00:00:00Z",
+            lastEditedAt: null,
+            autoMergeRequest: null,
+            closingIssuesReferences: { nodes, pageInfo: { hasNextPage: more } },
+          },
         },
       },
     }),
@@ -639,6 +650,8 @@ test("pr create passes head, base, title and the body on stdin", () =>
       "--draft",
       "--body-file",
       "-",
+      "--repo",
+      "github.com/owner/repo",
     ]);
     assert.deepEqual(capturedBodies(bodies), ["## Summary\n\nDoes it.\n"]);
   }));
@@ -774,7 +787,16 @@ test("pr edit changes the title and sends the body on stdin", () =>
     const bodies = captureBodies(ctx.env);
     prEdit(ctx.repo, { title: "New title", body: "New body" });
     const edit = fakeCalls(ctx.env, "gh").find((a) => a[1] === "edit") as string[];
-    assert.deepEqual(edit, ["pr", "edit", "7", "--title=New title", "--body-file", "-"]);
+    assert.deepEqual(edit, [
+      "pr",
+      "edit",
+      "7",
+      "--title=New title",
+      "--body-file",
+      "-",
+      "--repo",
+      "github.com/owner/repo",
+    ]);
     assert.deepEqual(capturedBodies(bodies), ["New body"]);
     expectCode(() => prEdit(ctx.repo, {}), 2);
     expectCode(() => prEdit(ctx.repo, { title: "two\nlines" }), 2);
@@ -831,8 +853,8 @@ const MERGE_VIEW_ARGS = [
   "--json",
   "number,baseRefName,headRefName,isCrossRepository,state,headRefOid,title,body",
 ];
-const READ_BACK_ARGS = ["pr", "view", "7", "--json", "state,mergeCommit"];
-const MERGED_STATE = JSON.stringify({ state: "MERGED", mergeCommit: { oid: MERGE_SHA } });
+const READ_BACK_ARGS = ["pr", "view", "7", "--json", "state,mergeCommit,headRefOid"];
+const mergedState = () => JSON.stringify({ state: "MERGED", mergeCommit: { oid: MERGE_SHA }, headRefOid: headSha });
 
 function mergeRules(view: Record<string, unknown>, rest: FakeRule[] = []): FakeRule[] {
   return [
@@ -950,7 +972,7 @@ test("pr merge happy path squashes with the reviewed head", () =>
       "gh",
       mergeRules({}, [
         { match: ["pr", "merge", "7"], stdout: "merged\n" },
-        { match: READ_BACK_ARGS, stdout: MERGED_STATE },
+        { match: READ_BACK_ARGS, stdout: mergedState() },
       ]),
     );
     const bodies = captureBodies(ctx.env);
@@ -966,6 +988,8 @@ test("pr merge happy path squashes with the reviewed head", () =>
       "--subject=Add the thing",
       "--body-file",
       "-",
+      "--repo",
+      "github.com/owner/repo",
     ]);
     assert.deepEqual(capturedBodies(bodies), ["Squash body"]);
   }));
@@ -983,7 +1007,7 @@ test("pr merge deletes the remote head branch after MERGED and never the local o
       "gh",
       mergeRules({}, [
         { match: ["pr", "merge", "7"], stdout: "merged\n" },
-        { match: READ_BACK_ARGS, stdout: MERGED_STATE },
+        { match: READ_BACK_ARGS, stdout: mergedState() },
       ]),
     );
     const local = gitIn(ctx.fx.main, "rev-parse", `refs/heads/${BRANCH}`);
@@ -1001,7 +1025,7 @@ test("pr merge keeps the remote branch when it moved after the merged head", () 
       "gh",
       mergeRules({}, [
         { match: ["pr", "merge", "7"], stdout: "merged\n" },
-        { match: READ_BACK_ARGS, stdout: MERGED_STATE },
+        { match: READ_BACK_ARGS, stdout: mergedState() },
       ]),
     );
     const lines: string[] = [];
@@ -1031,7 +1055,7 @@ test("pr merge keeps the remote branch on QUEUED", () =>
         { match: READ_BACK_ARGS, stdout: JSON.stringify({ state: "OPEN", mergeCommit: null }) },
       ]),
     );
-    assert.equal(prMerge(ctx.repo, MERGE_ARGS), "QUEUED");
+    assert.throws(() => prMerge(ctx.repo, MERGE_ARGS), /eventual queued merge is not checked/);
     assert.ok(remoteHas(ctx));
   }));
 
@@ -1046,7 +1070,7 @@ test("pr merge still reports MERGED when the remote branch cannot be deleted", (
       "gh",
       mergeRules({}, [
         { match: ["pr", "merge", "7"], stdout: "merged\n" },
-        { match: READ_BACK_ARGS, stdout: MERGED_STATE },
+        { match: READ_BACK_ARGS, stdout: mergedState() },
       ]),
     );
     const lines: string[] = [];
@@ -1076,7 +1100,7 @@ test("pr merge reports a plain deletion failure under a colored git config", () 
       "gh",
       mergeRules({}, [
         { match: ["pr", "merge", "7"], stdout: "merged\n" },
-        { match: READ_BACK_ARGS, stdout: MERGED_STATE },
+        { match: READ_BACK_ARGS, stdout: mergedState() },
       ]),
     );
     const lines: string[] = [];
@@ -1107,7 +1131,7 @@ test("pr merge --pr works from a matching linked worktree", () =>
         "gh",
         mergeRules({ headRefName: "feat-b" }, [
           { match: ["pr", "merge", "7"], stdout: "merged\n" },
-          { match: READ_BACK_ARGS, stdout: MERGED_STATE },
+          { match: READ_BACK_ARGS, stdout: mergedState() },
         ]),
       );
       assert.equal(prMerge(resolveRepo(wt), MERGE_ARGS), `MERGED ${MERGE_SHA}`);
@@ -1125,20 +1149,29 @@ test("pr merge defaults to the caller's PR and prints QUEUED for a queued merge"
         { match: READ_BACK_ARGS, stdout: JSON.stringify({ state: "OPEN", mergeCommit: null }) },
       ]),
     ]);
-    assert.equal(prMerge(ctx.repo, { ...MERGE_ARGS, pr: undefined }), "QUEUED");
+    assert.throws(() => prMerge(ctx.repo, { ...MERGE_ARGS, pr: undefined }), /eventual queued merge is not checked/);
   }));
 
-test("pr merge reports MERGED when gh failed only after merging", () =>
+test("pr merge warns with MERGED when gh failed after merging", (t) =>
   mscenario((ctx) => {
     installFake(
       ctx.env,
       "gh",
       mergeRules({}, [
         { match: ["pr", "merge", "7"], stderr: "failed to delete local branch\n", code: 1 },
-        { match: READ_BACK_ARGS, stdout: MERGED_STATE },
+        { match: READ_BACK_ARGS, stdout: mergedState() },
       ]),
     );
-    assert.equal(prMerge(ctx.repo, MERGE_ARGS), `MERGED ${MERGE_SHA}`);
+    const stdout: string[] = [];
+    t.mock.method(process.stdout, "write", (chunk: string | Uint8Array) => {
+      stdout.push(String(chunk));
+      return true;
+    });
+    assert.throws(() => prMerge(ctx.repo, MERGE_ARGS), {
+      code: 1,
+      message: "Warning: gh pr merge reported an error, but the PR is merged. Check the result.",
+    });
+    assert.deepEqual(stdout, [`MERGED ${MERGE_SHA}\n`]);
   }));
 
 test("pr merge says the merge may have happened when the read-back fails", () =>
@@ -1183,7 +1216,7 @@ function branchOnLocalMain(ctx: Ctx): Repo {
 function mergeOkRules(): FakeRule[] {
   return mergeRules({ headRefOid: headSha }, [
     { match: ["pr", "merge", "7"], stdout: "merged\n" },
-    { match: READ_BACK_ARGS, stdout: MERGED_STATE },
+    { match: READ_BACK_ARGS, stdout: mergedState() },
   ]);
 }
 
@@ -1248,8 +1281,8 @@ test("gh missing exits 69", () =>
     expectCode(() => prCreate(ctx.repo, { title: "T", body: "B", draft: false }), 69);
   }));
 
-test("the command table has only fetch, push and pr", () => {
-  assert.deepEqual(Object.keys(commands).sort(), ["fetch", "pr", "push"]);
+test("the command table has only repo, fetch, push and pr", () => {
+  assert.deepEqual(Object.keys(commands).sort(), ["fetch", "pr", "push", "repo"]);
 });
 
 // Synthetic fixtures are assembled so the source passes the repository's own hygiene checks.
@@ -1744,7 +1777,7 @@ test("R9.6: remote deletion errors redact private text before reporting a kept b
       "gh",
       mergeRules({}, [
         { match: ["pr", "merge", "7"], stdout: "merged\n" },
-        { match: READ_BACK_ARGS, stdout: MERGED_STATE },
+        { match: READ_BACK_ARGS, stdout: mergedState() },
       ]),
     );
     const lines: string[] = [];
@@ -1880,7 +1913,7 @@ test("pr merge accepts a subject file and strips one final newline", () =>
       "gh",
       mergeRules({}, [
         { match: ["pr", "merge", "7"], stdout: "merged\n" },
-        { match: READ_BACK_ARGS, stdout: MERGED_STATE },
+        { match: READ_BACK_ARGS, stdout: mergedState() },
       ]),
     );
     const subject = join(ctx.env.root, "subject.txt");
@@ -1928,5 +1961,43 @@ for (const state of ["open", "merged"] as const) {
         });
       },
       { withBin: true, branch: null },
+    ));
+}
+
+for (const failure of ["foreign issue", "failed read"] as const) {
+  test(`merge launcher preserves stdout and exits 1 after a post-merge ${failure}`, () =>
+    scenario(
+      async (ctx) => {
+        publishHead(ctx);
+        const post = closingRule([{ number: 57, repository: { nameWithOwner: "owner/repo" } }]);
+        if (failure === "failed read") Object.assign(post, { code: 1, stdout: "", stderr: "synthetic read failure" });
+        installFake(
+          ctx.env,
+          "gh",
+          mergeRules({}, [
+            { ...closingRule(), times: 1 },
+            post,
+            { match: ["pr", "merge", "7"], stdout: "merged\n" },
+            { match: READ_BACK_ARGS, stdout: mergedState() },
+          ]),
+        );
+        const result = await runWt(
+          join(ctx.fx.main, "bin/wt"),
+          ["pr", "merge", "--pr", "7", "--match-head", headSha, "--subject", "Fix pane", "--body", "Description"],
+          { cwd: ctx.fx.main },
+        );
+        assert.equal(result.code, 1);
+        assert.equal(result.stdout, `MERGED ${MERGE_SHA}\n`);
+        assert.match(result.stderr, /Warning:/);
+        if (failure === "foreign issue") {
+          assert.match(result.stderr, /owner\/repo#57/);
+          assert.match(result.stderr, /Check and reopen/);
+        } else assert.match(result.stderr, /post-merge closing check could not run/);
+        assert.equal(
+          fakeCalls(ctx.env, "gh").filter((args) => args.some((a) => a.includes("closingIssuesReferences"))).length,
+          2,
+        );
+      },
+      { withBin: true },
     ));
 }

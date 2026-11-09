@@ -30,8 +30,25 @@ export interface RunBytesResult {
   stderr: string;
 }
 
-function childEnv(): NodeJS.ProcessEnv {
+function childEnv(cmd: string): NodeJS.ProcessEnv {
   const env = { ...process.env, ...FIXED };
+  if (cmd === "gh" || cmd === "git") {
+    // Select the repository from cwd, including git calls made internally by gh.
+    delete env.GIT_DIR;
+    delete env.GIT_WORK_TREE;
+    delete env.GIT_COMMON_DIR;
+    delete env.GIT_INDEX_FILE;
+    delete env.GIT_OBJECT_DIRECTORY;
+    delete env.GIT_ALTERNATE_OBJECT_DIRECTORIES;
+    delete env.GIT_NAMESPACE;
+    delete env.GIT_CEILING_DIRECTORIES;
+    // Status text and JSON must stay plain even when the parent forces terminal output.
+    delete env.GH_FORCE_TTY;
+    delete env.CLICOLOR_FORCE;
+    delete env.FORCE_COLOR;
+    env.NO_COLOR = "1";
+    env.CLICOLOR = "0";
+  }
   // GIT_DIFF_OPTS would override the diff context bin/wt pins.
   delete env.GIT_DIFF_OPTS;
   delete env.EMEND_PRIVATE_TERMS;
@@ -40,12 +57,15 @@ function childEnv(): NodeJS.ProcessEnv {
     if (/^GIT_CONFIG_(?:PARAMETERS|COUNT|GLOBAL|SYSTEM|NOSYSTEM|KEY_.*|VALUE_.*)$/.test(key)) delete env[key];
   // Repository selection must come from the checkout's origin, never a caller override.
   delete env.GH_REPO;
+  // Host selection must stay on github.com, never a caller override.
+  delete env.GH_HOST;
   return env;
 }
 
 /**
  * Runs a program without a shell, with the caller's environment plus FIXED (no prompts, no pager),
- * excluding Git config overrides, GIT_DIFF_OPTS, GH_REPO and EMEND_PRIVATE_TERMS.
+ * excluding Git config overrides, GIT_DIFF_OPTS, GH_REPO, GH_HOST and EMEND_PRIVATE_TERMS.
+ * Git and gh children also discard repository-selection overrides and disable forced color/terminal output.
  * Exit 127 means not found; 124 means it ran past the timeout.
  */
 export function run(cmd: string, args: string[], opts: RunOptions): RunResult {
@@ -53,7 +73,7 @@ export function run(cmd: string, args: string[], opts: RunOptions): RunResult {
   const r = spawnSync(cmd, args, {
     cwd: opts.cwd,
     input: opts.input,
-    env: childEnv(),
+    env: childEnv(cmd),
     encoding: "utf8",
     timeout: opts.timeoutMs,
     killSignal: "SIGKILL",
@@ -82,7 +102,7 @@ export function runBytes(
   const r = spawnSync(cmd, args, {
     cwd: opts.cwd,
     input: opts.input,
-    env: childEnv(),
+    env: childEnv(cmd),
     encoding: "buffer",
     timeout: opts.timeoutMs,
     killSignal: "SIGKILL",
