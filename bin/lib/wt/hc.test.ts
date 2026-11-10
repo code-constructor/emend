@@ -221,6 +221,37 @@ test("union lists herdr only, hc only, both and neither regardless of caller env
     assert.deepEqual(locatedAgents(), []);
   }));
 
+test("hc skips other-machine terminals even at registered folders but retains their name shadows", () =>
+  scenario(async ({ env, repo, fx }) => {
+    const wt = setup(repo, { branch: "worker-tree" });
+    const remote = terminal({ address: "devbox/t10", name: "remote-worker", cwd: wt.path });
+    const localGet = get({ cwd: wt.path, foreground: { cwd: wt.path } });
+    installFake(env, "hc", [hcList([terminal({ cwd: wt.path }), remote]), localGet]);
+    const inventory = agentInventory();
+    assert.deepEqual(inventory.unavailable, []);
+    assert.deepEqual(
+      inventory.agents.map((a) => [a.address, a.location]),
+      [["t2", wt.path]],
+    );
+    const listed = await runWt(join(fx.main, "bin/wt"), ["agents", "--json"], { cwd: fx.main });
+    assert.equal(listed.code, 0, listed.stderr);
+    assert.deepEqual(
+      JSON.parse(listed.stdout).map((a: { address: string }) => a.address),
+      ["t2"],
+    );
+    await assert.rejects(command(repo, "agent", ["read", "devbox/t10"]), failure(2, /No agent matches/));
+    const before = fakeCalls(env, "hc").length;
+    setFakeRules(env, "hc", [hcList([terminal(), { ...remote, name: "t2" }]), localGet]);
+    await assert.rejects(command(repo, "agent", ["read", "t2"]), failure(2, /shadowed/));
+    assert.ok(
+      !fakeCalls(env, "hc")
+        .slice(before)
+        .some((c) => ["get", "read", "send"].includes(c[0] ?? "")),
+    );
+    assert.ok(!fakeCalls(env, "hc").some((c) => c[0] === "get" && c[1] === "devbox/t10"));
+    assert.ok(!fakeCalls(env, "hc").some((c) => c[0] === "read" || c[0] === "send"));
+  }, true));
+
 test("hc retains separate live and launch folders, sanitises labels, and failed gets stay unknown", () =>
   toolsOnly((env) => {
     installFake(env, "hc", [
@@ -294,7 +325,14 @@ for (const state of ["working", "blocked"] as const)
     scenario(async ({ env, repo }) => {
       process.env.HC_TERMINAL_ID = "t1k";
       installFake(env, "herdr", [{ code: 1 }]);
-      installFake(env, "hc", launchRules(state, [{ ...get({ status: { state: "idle" } }, "t1m"), times: 1 }]));
+      installFake(
+        env,
+        "hc",
+        launchRules(state, [
+          hcList([terminal({ address: "devbox/t10", name: "remote-worker" })]),
+          { ...get({ status: { state: "idle" } }, "t1m"), times: 1 },
+        ]),
+      );
       const clock = fakeClock();
       const result = await spawn(repo, { ...options, model: "opus", effort: "high" }, clock);
       assert.equal(result.state, state);
@@ -605,7 +643,10 @@ test("agent read resolves herdr names and hc addresses, removes terminal sequenc
       "\u001b[31mred\u001b[0m\u009b32mgreen\u009b0m\n\tü\r\b\u0085\u007f\u0000" +
       "\u001b]0;title\u0007\u009dhidden\u009c\u001bPpayload\u001b\\end\u001b]unfinished";
     installFake(env, "hc", [
-      hcList([terminal()]),
+      hcList([
+        terminal({ cwd: worker.path }),
+        terminal({ address: "devbox/t10", name: "remote-worker", cwd: worker.path }),
+      ]),
       get({ foreground: { cwd: worker.path } }),
       { match: ["read"], stdout: screen },
     ]);
@@ -658,6 +699,7 @@ test("agent read resolves herdr names and hc addresses, removes terminal sequenc
     const ambiguousAddress = await read("t2");
     assert.equal(ambiguousAddress.code, 2, ambiguousAddress.stderr);
     assert.match(ambiguousAddress.stderr, /Several agents/);
+    assert.ok(!fakeCalls(env, "hc").some((c) => c.includes("devbox/t10")));
   }, true));
 
 test("agent prompt sends only the fixed reference from main, for either backend", () =>
@@ -668,7 +710,7 @@ test("agent prompt sends only the fixed reference from main, for either backend"
     const body = "Arbitrary body must never reach argv.\nUnicode: é\r\n";
     writeFileSync(join(dir, "message-42.md"), body);
     installFake(env, "hc", [
-      hcList([terminal()]),
+      hcList([terminal({ cwd: wt.path }), terminal({ address: "devbox/t10", name: "remote-worker", cwd: wt.path })]),
       get({ foreground: { cwd: wt.path } }),
       { match: ["send"], stdout: "{}" },
     ]);
@@ -685,8 +727,8 @@ test("agent prompt sends only the fixed reference from main, for either backend"
       assert.equal(result.code, 0, result.stderr);
     }
     assert.deepEqual(
-      fakeCalls(env, "hc").find((c) => c[0] === "send"),
-      ["send", "t2", sentence],
+      fakeCalls(env, "hc").filter((c) => c[0] === "send"),
+      [["send", "t2", sentence]],
     );
     assert.deepEqual(
       fakeCalls(env, "herdr").find((c) => c[1] === "prompt"),
@@ -694,6 +736,7 @@ test("agent prompt sends only the fixed reference from main, for either backend"
     );
     const read = await runWt(join(fx.main, "bin/wt"), ["agent", "read", "missing"], { cwd: fx.main });
     assert.equal(read.code, 2);
+    assert.ok(!fakeCalls(env, "hc").some((c) => c.includes("devbox/t10")));
   }, true));
 
 test("agent prompt refuses missing/symlink/non-file messages, foreign/unknown locations, ambiguity and extra text", () =>
@@ -785,6 +828,11 @@ test("required backend failures close the guard and agents command, while list r
       { herdr: { code: 127 }, hc: { code: 1 }, unavailable: "herdr desktop (hc)" },
       { herdr: herdrList(), hc: { stdout: "not JSON" }, unavailable: "herdr desktop (hc)" },
       { herdr: herdrList(), hc: { stdout: "{}" }, unavailable: "herdr desktop (hc)" },
+      ...["devbox/x10", "a/b/t1", "/t1", "devbox/"].map((address) => ({
+        herdr: herdrList(),
+        hc: hcList([terminal(), terminal({ address })]),
+        unavailable: "herdr desktop (hc)",
+      })),
       { caller: "herdr", herdr: { code: 1 }, hc: { code: 127 }, unavailable: "herdr" },
       { caller: "herdr", herdr: { stdout: '{"result":{"agents":[null]}}' }, hc: hcList(), unavailable: "herdr" },
       { caller: "hc", herdr: herdrList(), hc: { code: 127 }, unavailable: "herdr desktop (hc)" },
@@ -811,6 +859,7 @@ test("required backend failures close the guard and agents command, while list r
       assert.equal(list(repo)[0]?.agent, null);
       const result = await runWt(join(fx.main, "bin/wt"), ["agents", "--json"], { cwd: fx.main, env: callerEnv });
       if (row.unavailable) {
+        assert.deepEqual(agentInventory().unavailable, [row.unavailable]);
         assert.equal(result.code, 69, result.stderr);
         assert.equal(result.stdout, "");
         assert.ok(result.stderr.includes(row.unavailable), result.stderr);
