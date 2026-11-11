@@ -1,6 +1,6 @@
 import type { ReviewView, RevisionView } from "@emend/contract";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useLocation, useNavigate, useParams } from "@tanstack/react-router";
+import { Link, useLocation, useNavigate, useParams, useRouter } from "@tanstack/react-router";
 import {
   type ComponentProps,
   type MouseEvent,
@@ -246,12 +246,14 @@ function resolveOpenDoc(
   );
 }
 function LoadedReview({
+  routeId,
   review,
   published,
   titleRef,
   collapsed,
   setCollapsed,
 }: {
+  routeId: string;
   review: ReviewView;
   published: number;
   titleRef: Ref<HTMLHeadingElement>;
@@ -259,9 +261,21 @@ function LoadedReview({
   setCollapsed: (collapsed: boolean) => void;
 }) {
   // Read search and hash from one location: route matches can lag during navigation.
-  const location = useLocation();
-  const search = useMemo(() => validateReviewSearch(location.search), [location.search]);
-  const hash = location.hash;
+  const router = useRouter();
+  const liveLocation = useLocation();
+  const ownsAddress = useCallback(
+    (pathname: string) => {
+      const [, rawParams, foundRoute] = router.getMatchedRoutes(pathname);
+      return foundRoute?.id === "/r/$reviewId" && rawParams.reviewId === routeId && rawParams["**"] === undefined;
+    },
+    [router, routeId],
+  );
+  const isOwnLocation = ownsAddress(liveLocation.pathname);
+  const [lastOwnLocation, setLastOwnLocation] = useState(() => (isOwnLocation ? liveLocation : undefined));
+  if (isOwnLocation && lastOwnLocation !== liveLocation) setLastOwnLocation(liveLocation);
+  const location = isOwnLocation ? liveLocation : lastOwnLocation;
+  const search = useMemo(() => validateReviewSearch(location?.search ?? {}), [location?.search]);
+  const hash = location?.hash ?? "";
   const [initialRevision] = useState(review.newestRevision);
   const seq = search.rev ?? initialRevision;
   const query = useQuery(revisionQuery(review.id, seq));
@@ -339,6 +353,8 @@ function LoadedReview({
             ? "Comments"
             : "Files",
     seq,
+    // No own address yet means leaving: unmount without writing history; the trail only needs a history index.
+    location ?? liveLocation,
   );
   const readingFolds = useMemo(
     () => ({ reviewId: review.id, revision: seq, choices: trail.entry.folds }),
@@ -554,6 +570,14 @@ function LoadedReview({
   };
   // Data/DOM changes may fulfill an existing intent, but only navigation creates one.
   useEffect(() => {
+    // The router exposes the next page's address before this review unmounts.
+    // Replacing here would overwrite that page's history entry.
+    if (!isOwnLocation) return;
+    // Navigation may start after render, before this effect writes.
+    const replaceAddress = (search: ReviewSearch, hash: string) => {
+      if (!ownsAddress(router.latestLocation.pathname)) return;
+      void navigate({ to: "/r/$reviewId", params: { reviewId: routeId }, search, hash, replace: true });
+    };
     const current = currentIntent;
     let created = false;
     if (requested && requested !== previous.current?.requested) {
@@ -627,7 +651,7 @@ function LoadedReview({
     if (docsVisible && !missingDoc && (search.doc !== openDoc?.path || search.view !== docView(openDoc, search.view))) {
       const next: ReviewSearch = { ...search, doc: openDoc?.path, view: docView(openDoc, search.view) };
       intent.navigation = readingIntent(next, hash, seq).navigation;
-      void navigate({ search: next, hash, replace: true });
+      replaceAddress(next, hash);
       return;
     }
     const thread = revision.threads.find((thread) => thread.id === intent.threadId);
@@ -651,7 +675,7 @@ function LoadedReview({
         intent.elementId = nextHash;
         if (search.tab !== next.tab || search.doc !== next.doc || search.view !== next.view || hash !== nextHash) {
           intent.navigation = readingIntent(next, nextHash, seq).navigation;
-          void navigate({ search: next, hash: nextHash, replace: true });
+          replaceAddress(next, nextHash);
           return;
         }
       }
@@ -674,7 +698,7 @@ function LoadedReview({
         if (search.tab !== next.tab || search.doc !== next.doc || search.view !== next.view || hash !== nextHash) {
           // The redirect continues this intent; it does not create another one.
           intent.navigation = readingIntent(next, nextHash, seq).navigation;
-          void navigate({ search: next, hash: nextHash, replace: true });
+          replaceAddress(next, nextHash);
           return;
         }
       }
@@ -720,7 +744,7 @@ function LoadedReview({
       if (paneMode === "tabs" && hasDiff && tab !== "diff") {
         const next = { ...search, tab: "diff" as const };
         intent.navigation = readingIntent(next, hash, seq).navigation;
-        void navigate({ search: next, hash, replace: true });
+        replaceAddress(next, hash);
         return;
       }
       if (navigateDiff.current?.({ elementId: intent.elementId })) complete(intent.jumpThread);
@@ -999,6 +1023,7 @@ export function ReviewPage() {
     return (
       <LoadedReview
         key={reviewId}
+        routeId={reviewId}
         review={query.data}
         published={published}
         titleRef={titleRef}

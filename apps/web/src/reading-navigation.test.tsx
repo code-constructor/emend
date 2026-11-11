@@ -8,7 +8,7 @@ import { createMemoryHistory } from "@tanstack/react-router";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { Window } from "happy-dom";
 import { type Element as BridgeElement, Window as BridgeWindow } from "happy-dom";
-import type { ComponentProps, ReactNode } from "react";
+import { type ComponentProps, Profiler, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, onTestFinished, test, vi } from "vitest";
 import { App } from "./App.tsx";
 import type { InboxData } from "./api/queries.ts";
@@ -23,6 +23,7 @@ import { draftKey, editDraftKey, saveDraft } from "./lib/drafts.ts";
 import { layoutKey, layoutStore } from "./lib/layout-store.ts";
 import * as readingPosition from "./lib/reading-position.ts";
 import { cancelThreadActionFocus } from "./lib/thread-action-focus.ts";
+import * as webRouter from "./router.tsx";
 import { validateReviewSearch } from "./router.tsx";
 
 const loading = vi.hoisted(() => ({
@@ -172,6 +173,7 @@ beforeEach(() => {
       if (path === `/api/v1/reviews/${id}/threads` && init?.method === "POST")
         return Response.json({ threadId: id, commentId: id }, { status: 201 });
       if (path === "/api/v1/session") return new Response(null, { status: 204 });
+      if (path === "/api/v1/devices") return Response.json({ items: [] });
       if (path === "/api/v1/reviews")
         return Response.json({ serverTime: new Date(Date.now()).toISOString(), items: [review] });
       if (path === `/api/v1/reviews/${id}`) return Response.json(currentReview);
@@ -567,6 +569,203 @@ function prepareFrame(path: string) {
   fireEvent.load(frame);
   return { frame, post };
 }
+
+test.each([
+  { pixels: 390, link: "Inbox", pathname: "/", heading: "Inbox" },
+  { pixels: 1280, link: "emend", pathname: "/", heading: "Inbox" },
+  { pixels: 1280, link: "Devices", pathname: "/devices", heading: "Devices" },
+])(
+  "$link header link leaves a doc review in one click at $pixels px and Back restores its doc",
+  async ({ pixels, link, pathname, heading }) => {
+    width = pixels;
+    docsFixture();
+    currentRevision.main = gardenDoc.path;
+    const { history } = mount("");
+    const paths = [history.location.pathname];
+    onTestFinished(history.subscribe(({ location }) => paths.push(location.pathname)));
+    await screen.findByText("Water the seedlings");
+    await waitFor(() => expect(searchParams(history).get("doc")).toBe(gardenDoc.path));
+    expect(history.location.pathname).toBe(`/r/${id}`);
+    const search = history.location.search;
+
+    await act(async () => fireEvent.click(screen.getByRole("link", { name: link })));
+    expect(history.location.pathname).toBe(pathname);
+    await screen.findByRole("heading", { name: heading, level: 1 });
+    expect(history.location.pathname).toBe(pathname);
+    expect(history.location.search).toBe("");
+    expect(
+      vi
+        .mocked(fetch)
+        .mock.calls.some(([path]) => typeof path === "string" && path.startsWith("/api/v1/reviews/undefined")),
+    ).toBe(false);
+    expect(paths).not.toContain("/r/undefined");
+
+    await act(async () => history.back());
+    await screen.findByText("Water the seedlings");
+    expect(history.location.pathname).toBe(`/r/${id}`);
+    expect(history.location.search).toBe(search);
+    expect(searchParams(history).get("doc")).toBe(gardenDoc.path);
+    expect(paths).not.toContain("/r/undefined");
+  },
+);
+
+test("leaving as a doc commits keeps the inbox address ahead of pending effects", async () => {
+  docsFixture();
+  currentRevision.main = gardenDoc.path;
+  const reply = Promise.withResolvers<Response>();
+  revisionReply = reply.promise;
+  const history = createMemoryHistory({ initialEntries: [`/r/${id}`] });
+  let searchAtClick: string | undefined;
+  // The commit callback runs after the doc enters the DOM and before passive effects.
+  render(
+    <Profiler
+      id="leave-on-doc-commit"
+      onRender={() => {
+        if (searchAtClick !== undefined || !screen.queryByText("Water the seedlings")) return;
+        searchAtClick = history.location.search;
+        screen.getByRole("link", { name: "emend" }).click();
+      }}
+    >
+      <App queryClient={client} history={history} />
+    </Profiler>,
+  );
+  await screen.findByRole("heading", { name: review.title, level: 1 });
+  expect(history.location.search).toBe("");
+  const paths: string[] = [];
+  onTestFinished(history.subscribe(({ location }) => paths.push(location.pathname)));
+  await act(async () => reply.resolve(Response.json(currentRevision)));
+  await waitFor(() => expect(searchAtClick).toBeDefined());
+  expect(searchAtClick).toBe("");
+  expect(history.location.pathname).toBe("/");
+  expect(history.location.search).toBe("");
+  await screen.findByRole("heading", { name: "Inbox", level: 1 });
+  expect(history.location.pathname).toBe("/");
+  expect(history.location.search).toBe("");
+  expect(paths).not.toContain("/r/undefined");
+  expect(
+    vi
+      .mocked(fetch)
+      .mock.calls.some(([path]) => typeof path === "string" && path.startsWith("/api/v1/reviews/undefined")),
+  ).toBe(false);
+  await act(async () => history.back());
+  await screen.findByText("Water the seedlings");
+  expect(history.location.pathname).toBe(`/r/${id}`);
+  expect(searchParams(history).get("doc")).toBe(gardenDoc.path);
+});
+
+test("a review first loaded during departure keeps the inbox address and Back returns to its doc", async () => {
+  width = 390;
+  docsFixture();
+  currentRevision.main = gardenDoc.path;
+  const reply = Promise.withResolvers<Response>();
+  const original = vi.mocked(fetch).getMockImplementation();
+  vi.mocked(fetch).mockImplementation((path, init) => {
+    if (path === `/api/v1/reviews/${id}`) return reply.promise.then((response) => response.clone());
+    if (!original) throw new Error("Missing synthetic fetch");
+    return original(path, init);
+  });
+  const arrival = Promise.withResolvers<void>();
+  const createRouter = webRouter.createWebRouter;
+  vi.spyOn(webRouter, "createWebRouter").mockImplementation((history) => {
+    const router = createRouter(history);
+    const inbox = router.routesById["/"];
+    const beforeLoad = inbox.options.beforeLoad;
+    // Keep the outgoing route mounted while the inbox navigation is pending.
+    inbox.options.beforeLoad = () => arrival.promise;
+    onTestFinished(() => {
+      inbox.options.beforeLoad = beforeLoad;
+    });
+    return router;
+  });
+  const { history } = mount("");
+  await screen.findByText("Loading review…");
+  const paths: string[] = [];
+  onTestFinished(history.subscribe(({ location }) => paths.push(location.pathname)));
+
+  await act(async () => fireEvent.click(screen.getByRole("link", { name: "Inbox" })));
+  expect(history.location.pathname).toBe("/");
+  expect(history.location.search).toBe("");
+  await act(async () => reply.resolve(Response.json(currentReview)));
+  await screen.findByText("Water the seedlings");
+  expect(history.location.pathname).toBe("/");
+  expect(history.location.search).toBe("");
+  await act(async () => arrival.resolve());
+  await screen.findByRole("heading", { name: "Inbox", level: 1 });
+  expect(history.location.pathname).toBe("/");
+  expect(history.location.search).toBe("");
+  expect(paths).not.toContain("/r/undefined");
+  expect(
+    vi
+      .mocked(fetch)
+      .mock.calls.some(([path]) => typeof path === "string" && path.startsWith("/api/v1/reviews/undefined")),
+  ).toBe(false);
+
+  await act(async () => history.back());
+  await screen.findByText("Water the seedlings");
+  expect(history.location.pathname).toBe(`/r/${id}`);
+  expect(searchParams(history).get("doc")).toBe(gardenDoc.path);
+});
+
+test("a review sub-path keeps its address and empty search when leaving an open doc", async () => {
+  docsFixture();
+  currentRevision.main = gardenDoc.path;
+  const { history } = mount("");
+  await screen.findByText("Water the seedlings");
+  await waitFor(() => expect(searchParams(history).get("doc")).toBe(gardenDoc.path));
+  expect(history.location.pathname).toBe(`/r/${id}`);
+
+  const paths: string[] = [];
+  onTestFinished(history.subscribe(({ location }) => paths.push(location.pathname)));
+  await act(async () => history.push(`/r/${id}/extra`));
+  expect(history.location.pathname).toBe(`/r/${id}/extra`);
+  expect(history.location.search).toBe("");
+  await screen.findByRole("heading", { name: "Page not found" });
+  expect(history.location.pathname).toBe(`/r/${id}/extra`);
+  expect(history.location.search).toBe("");
+  expect(paths).not.toContain(`/r/${id}`);
+});
+
+test("the sidebar opens another review on its own doc and Back restores the first review's doc", async () => {
+  width = 1280;
+  docsFixture();
+  currentRevision.main = gardenDoc.path;
+  currentRevision.docs = [gardenDoc];
+  const other = "22222222-2222-4222-8222-222222222222";
+  const otherReview = { ...review, id: other, title: "Another garden" };
+  const otherRevision = { ...currentRevision, main: plainDoc.path, docs: [plainDoc] };
+  const original = vi.mocked(fetch).getMockImplementation();
+  vi.mocked(fetch).mockImplementation(async (path, init) => {
+    if (path === "/api/v1/reviews")
+      return Response.json({ serverTime: new Date(Date.now()).toISOString(), items: [review, otherReview] });
+    if (path === `/api/v1/reviews/${other}`) return Response.json(otherReview);
+    if (path === `/api/v1/reviews/${other}/revisions/1`) return Response.json(otherRevision);
+    if (!original) throw new Error("Missing synthetic fetch");
+    return original(path, init);
+  });
+  const { history } = mount("");
+  await screen.findByText("Water the seedlings");
+  await waitFor(() => expect(searchParams(history).get("doc")).toBe(gardenDoc.path));
+  expect(history.location.pathname).toBe(`/r/${id}`);
+  const search = history.location.search;
+  const sidebar = within(screen.getByRole("complementary", { name: "Inbox" }));
+  const next = await sidebar.findByRole("link", { name: /Another garden/ });
+
+  await act(async () => fireEvent.click(next));
+  await screen.findByRole("heading", { name: "Another garden", level: 1 });
+  await screen.findByRole("tab", { name: "Docs 1" });
+  expect(history.location.pathname).toBe(`/r/${other}`);
+  expect(searchParams(history).get("doc")).toBe(plainDoc.path);
+  await screen.findByText("Another doc");
+  expect(screen.queryByText("Document not found. Showing all docs.")).toBeNull();
+  expect(screen.queryByText("Water the seedlings")).toBeNull();
+
+  await act(async () => history.back());
+  await screen.findByText("Water the seedlings");
+  expect(history.location.pathname).toBe(`/r/${id}`);
+  expect(history.location.search).toBe(search);
+  expect(searchParams(history).get("doc")).toBe(gardenDoc.path);
+  expect(screen.queryByText("Document not found. Showing all docs.")).toBeNull();
+});
 
 test.each(["row", "rail"])(
   "inbox %s opens the declared main doc and selects a newly published revision",
