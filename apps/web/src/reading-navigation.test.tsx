@@ -17,6 +17,7 @@ import type { ParsedDiff } from "./components/diff/FileDiff.tsx";
 import { parsePair } from "./components/diff/parse.worker.ts";
 import type { DiffParser } from "./components/diff/parse-client.ts";
 import * as diffPresentation from "./components/diff/presentation.ts";
+import { OUTLINE_WIDTH } from "./components/reading/WriteupOutline.tsx";
 import { blockLink } from "./components/threads/ThreadCard.tsx";
 import { claimDraft } from "./lib/composer-owner.ts";
 import { draftKey, editDraftKey, saveDraft } from "./lib/drafts.ts";
@@ -218,17 +219,17 @@ test("writeup doc links keep the older revision when their href has no rev", asy
 });
 
 test.each([
-  { pixels: 1280, mode: "standard", pane: "split", key: "click", path: "seed.txt" },
-  { pixels: 1280, mode: "standard", pane: "split", key: "click", path: "pnpm-lock.yaml" },
-  { pixels: 1280, mode: "standard", pane: "tabs", key: "Enter", path: "large.txt" },
-  { pixels: 1280, mode: "focus", pane: "tabs", key: "Enter", path: "seed.txt" },
-  { pixels: 768, mode: "standard", pane: "tabs", key: " ", path: "seed.txt" },
-  { pixels: 390, mode: "standard", pane: "tabs", key: "click", path: "seed.txt" },
+  { pixels: 1280, contents: false, compact: false, pane: "split", key: "click", path: "seed.txt" },
+  { pixels: 1280, contents: false, compact: false, pane: "split", key: "click", path: "pnpm-lock.yaml" },
+  { pixels: 1280, contents: false, compact: false, pane: "tabs", key: "Enter", path: "large.txt" },
+  { pixels: 1280, contents: true, compact: true, pane: "tabs", key: "Enter", path: "seed.txt" },
+  { pixels: 768, contents: false, compact: false, pane: "tabs", key: " ", path: "seed.txt" },
+  { pixels: 390, contents: false, compact: false, pane: "tabs", key: "click", path: "seed.txt" },
 ] as const)(
-  "note refs navigate and mark a hidden, viewed file at $pixels px in $mode/$pane via $key",
-  async ({ pixels, mode, pane, key, path }) => {
+  "note refs navigate and mark a hidden, viewed file at $pixels px with contents=$contents compact=$compact in $pane via $key",
+  async ({ pixels, contents, compact, pane, key, path }) => {
     width = pixels;
-    layoutStore.update({ reading: mode, pane: { desktop: pane, tablet: pane }, notes: false });
+    layoutStore.update({ contents, compact, pane: { desktop: pane, tablet: pane }, notes: false });
     const note = {
       id: crypto.randomUUID(),
       side: "new" as const,
@@ -2570,47 +2571,136 @@ test("Tabs retains the selected doc while Diff is visible and gives each panel a
   expect(reading.scrollTop).toBe(90);
 });
 
-test.each([1280, 900, 390])(
-  "Focus switch belongs only to the active desktop/tablet Writeup at %s px",
-  async (pixels) => {
-    width = pixels;
-    mount();
-    await screen.findByRole("heading", { name: "Topic 1: Plant a seed" });
-    if (pixels === 390) {
-      expect(screen.queryByRole("radiogroup", { name: "Reading mode" })).toBeNull();
-      act(() => layoutStore.update({ reading: "focus" }));
-      expect(screen.queryByRole("navigation", { name: "Writeup outline" })).toBeNull();
-      return;
-    }
-    const mode = within(screen.getByRole("radiogroup", { name: "Reading mode" }));
-    expect(mode.getByRole("radio", { name: "Standard" }).getAttribute("aria-checked")).toBe("true");
-    fireEvent.click(mode.getByRole("radio", { name: "Focus" }));
-    expect(JSON.parse(localStorage.getItem(layoutKey) ?? "{}").reading).toBe("focus");
-    expect(screen.getByRole("navigation", { name: "Writeup outline" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("tab", { name: "Docs 2" }));
-    await waitFor(() => expect(screen.queryByRole("radiogroup", { name: "Reading mode" })).toBeNull());
+test.each([1280, 900, 390])("reading switches toggle independently on their tabs at %s px", async (pixels) => {
+  width = pixels;
+  if (pixels === 1280) {
+    const bounds = HTMLElement.prototype.getBoundingClientRect;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains("em-panes")) return new DOMRect(0, 0, 1600, 800);
+      if (this.querySelector(":scope > [data-reading-scroll]")) return new DOMRect(0, 0, 1200, 800);
+      return bounds.call(this);
+    });
+  }
+  if (pixels === 390) {
+    layoutStore.update({ contents: true, compact: true });
+    currentRevision.threads = [placedWriteupThread()];
+  }
+  mount();
+  await screen.findByRole("heading", { name: "Topic 1: Plant a seed" });
+  const tabBar = document.querySelector(".em-review-tabs");
+  expect(tabBar?.textContent ?? "").not.toContain("Focus");
+  if (pixels === 390) {
+    expect(screen.queryByRole("button", { name: "Contents" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Compact comments" })).toBeNull();
     expect(screen.queryByRole("navigation", { name: "Writeup outline" })).toBeNull();
-    fireEvent.click(screen.getByRole("tab", { name: /^Comments/ }));
-    await screen.findByText("No comments yet.");
-    expect(screen.queryByRole("radiogroup", { name: "Reading mode" })).toBeNull();
-    if (pixels === 900) {
-      fireEvent.click(screen.getByRole("tab", { name: "Diff" }));
-      await waitFor(() => expect(screen.getByTestId("reading-pane").hidden).toBe(true));
-      expect(screen.queryByRole("radiogroup", { name: "Reading mode" })).toBeNull();
-    }
-    fireEvent.click(screen.getByRole("tab", { name: "Writeup" }));
-    await screen.findByRole("navigation", { name: "Writeup outline" });
-    expect(screen.getByRole("radio", { name: "Focus" }).getAttribute("aria-checked")).toBe("true");
-    fireEvent.click(screen.getByRole("radio", { name: "Standard" }));
-    expect(screen.queryByRole("navigation", { name: "Writeup outline" })).toBeNull();
-    expect(JSON.parse(localStorage.getItem(layoutKey) ?? "{}").reading).toBe("standard");
-  },
-);
+    expect(document.getElementById(`thread-${id}`)).toBeTruthy();
+    expect(document.querySelector(".em-thread-pill")).toBeNull();
+    fireEvent.click(screen.getByRole("link", { name: "Docs" }));
+    await screen.findByRole("heading", { name: "Docs" });
+    expect(screen.queryByRole("button", { name: "Contents" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Compact comments" })).toBeNull();
+    return;
+  }
+  const contents = screen.getByRole("button", { name: "Contents", pressed: false });
+  const compact = screen.getByRole("button", { name: "Compact comments", pressed: false });
+  const saved = () => JSON.parse(localStorage.getItem(layoutKey) ?? "{}");
+  const reading = screen.getByTestId("reading-pane");
+  const contentsOffWidth = Number.parseFloat(reading.style.flexBasis);
+  fireEvent.click(contents);
+  if (pixels === 1280) {
+    expect(contentsOffWidth).toBe(504);
+    expect(Number.parseFloat(reading.style.flexBasis)).toBe(contentsOffWidth + OUTLINE_WIDTH);
+  }
+  expect(contents.getAttribute("aria-pressed")).toBe("true");
+  expect(compact.getAttribute("aria-pressed")).toBe("false");
+  expect(saved()).toMatchObject({ contents: true, compact: false });
+  expect(screen.getByRole("navigation", { name: "Writeup outline" })).toBeTruthy();
+  fireEvent.click(compact);
+  expect(contents.getAttribute("aria-pressed")).toBe("true");
+  expect(compact.getAttribute("aria-pressed")).toBe("true");
+  expect(saved()).toMatchObject({ contents: true, compact: true });
+  fireEvent.click(contents);
+  if (pixels === 1280) expect(Number.parseFloat(reading.style.flexBasis)).toBe(contentsOffWidth);
+  expect(contents.getAttribute("aria-pressed")).toBe("false");
+  expect(compact.getAttribute("aria-pressed")).toBe("true");
+  expect(saved()).toMatchObject({ contents: false, compact: true });
+  expect(screen.queryByRole("navigation", { name: "Writeup outline" })).toBeNull();
+  fireEvent.click(screen.getByRole("tab", { name: "Docs 2" }));
+  await screen.findByRole("heading", { name: "Docs" });
+  expect(screen.queryByRole("button", { name: "Contents" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Compact comments" })).toBeNull();
+  expect(tabBar?.children).toHaveLength(1);
+  fireEvent.click(screen.getByRole("link", { name: "seed.md seed.md" }));
+  await screen.findByRole("heading", { name: "seed.md" });
+  expect(screen.queryByRole("button", { name: "Contents" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Compact comments", pressed: true }));
+  expect(saved()).toMatchObject({ contents: false, compact: false });
+  expect(screen.getByRole("button", { name: "Compact comments", pressed: false })).toBeTruthy();
+  fireEvent.click(screen.getByRole("tab", { name: /^Comments/ }));
+  await screen.findByText("No comments yet.");
+  expect(screen.queryByRole("button", { name: "Contents" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Compact comments" })).toBeNull();
+  if (pixels === 1280) act(() => layoutStore.update({ pane: { desktop: "tabs", tablet: "tabs" } }));
+  fireEvent.click(screen.getByRole("tab", { name: "Diff" }));
+  await waitFor(() => expect(screen.getByTestId("reading-pane").hidden).toBe(true));
+  expect(screen.queryByRole("button", { name: "Contents" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Compact comments" })).toBeNull();
+  fireEvent.click(screen.getByRole("tab", { name: "Writeup" }));
+  await screen.findByRole("button", { name: "Contents", pressed: false });
+  expect(screen.getByRole("button", { name: "Compact comments", pressed: false })).toBeTruthy();
+});
+
+test.each<RevisionView["docs"][number]>([
+  { kind: "source", path: "seed.txt", language: "text", lines: [[{ text: "Plant a seed" }]] },
+  htmlDoc,
+])("reading switches stay hidden for $kind docs", async (doc) => {
+  currentRevision.docs.push(doc);
+  layoutStore.update({ contents: true, compact: true });
+  mount(`?tab=docs&doc=${doc.path}&rev=1`);
+  await screen.findByRole("heading", { name: doc.path.split("/").at(-1) });
+  expect(screen.queryByRole("button", { name: "Contents" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Compact comments" })).toBeNull();
+  expect(document.querySelector(".em-review-tabs")?.children).toHaveLength(1);
+  fireEvent.click(screen.getByRole("link", { name: "All docs" }));
+  await screen.findByRole("heading", { name: "Docs" });
+  expect(screen.queryByRole("button", { name: "Contents" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Compact comments" })).toBeNull();
+  expect(document.querySelector(".em-review-tabs")?.children).toHaveLength(1);
+  fireEvent.click(screen.getByRole("tab", { name: "Writeup" }));
+  await screen.findByRole("button", { name: "Contents", pressed: true });
+  expect(screen.getByRole("button", { name: "Compact comments", pressed: true })).toBeTruthy();
+});
+
+test.each([
+  { contents: true, compact: false },
+  { contents: false, compact: true },
+  { contents: true, compact: true },
+])("reading switches survive remount with contents=$contents compact=$compact", async ({ contents, compact }) => {
+  const view = mount();
+  await screen.findByRole("button", { name: "Contents", pressed: false });
+  if (contents) fireEvent.click(screen.getByRole("button", { name: "Contents" }));
+  if (compact) fireEvent.click(screen.getByRole("button", { name: "Compact comments" }));
+  view.unmount();
+  mount();
+  await screen.findByRole("button", { name: "Contents", pressed: contents });
+  expect(screen.getByRole("button", { name: "Compact comments", pressed: compact })).toBeTruthy();
+  expect(JSON.parse(localStorage.getItem(layoutKey) ?? "{}")).toMatchObject({ contents, compact });
+});
+
+test("legacy reading preference starts with both switches pressed", async () => {
+  localStorage.setItem(layoutKey, '{"reading":"focus"}');
+  currentRevision.threads = [placedWriteupThread()];
+  mount();
+  await screen.findByRole("button", { name: "Contents", pressed: true });
+  expect(screen.getByRole("button", { name: "Compact comments", pressed: true })).toBeTruthy();
+  expect(screen.getByRole("navigation", { name: "Writeup outline" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "1 comment", expanded: false })).toBeTruthy();
+});
 
 test.each(["hash", "Show in place", "initial hash"])(
-  "Focus %s opens a pill and its folded topic before scrolling the marked card",
+  "compact %s opens a pill and its folded topic before scrolling the marked card",
   async (navigation) => {
-    layoutStore.update({ reading: "focus" });
+    layoutStore.update({ compact: true });
     currentRevision.topics = currentRevision.topics.map((topic) => ({ ...topic, attention: "skim" }));
     currentRevision.threads = [placedWriteupThread()];
     const scrolled: { id: string; hidden: boolean; jumped: boolean }[] = [];
@@ -2642,9 +2732,9 @@ test.each(["hash", "Show in place", "initial hash"])(
   },
 );
 
-test("Focus disconnects its observer while Tabs hides the mounted reading pane and resumes it", async () => {
+test("Contents disconnects its observer while Tabs hides the mounted reading pane and resumes it", async () => {
   width = 900;
-  layoutStore.update({ reading: "focus" });
+  layoutStore.update({ contents: true });
   const observers: {
     root?: Element | Document | null;
     disconnect: ReturnType<typeof vi.fn<() => void>>;
@@ -2681,8 +2771,8 @@ test("Focus disconnects its observer while Tabs hides the mounted reading pane a
   expect(observers.filter((entry) => entry.root === pane).length).toBeGreaterThan(1);
 });
 
-test("Focus repeats an explicit Show in place intent with the same URL after Hide", async () => {
-  layoutStore.update({ reading: "focus" });
+test("compact comments repeat an explicit Show in place intent with the same URL after Hide", async () => {
+  layoutStore.update({ compact: true });
   currentRevision.threads = [placedWriteupThread()];
   const block = currentRevision.writeup.sections[0]?.blocks[0];
   if (!block) throw new Error("Missing synthetic block");
@@ -2707,7 +2797,7 @@ test("Focus repeats an explicit Show in place intent with the same URL after Hid
 });
 
 test("an external _blank link is left to the browser while a same-review link still follows in place", async () => {
-  layoutStore.update({ reading: "focus" });
+  layoutStore.update({ compact: true });
   currentRevision.threads = [placedWriteupThread()];
   const block = currentRevision.writeup.sections[0]?.blocks[0];
   if (!block) throw new Error("Missing synthetic block");
@@ -2743,10 +2833,10 @@ test("an external _blank link is left to the browser while a same-review link st
 });
 
 test.each(["tab", "doc", "revision", "no thread", "other thread"])(
-  "Focus keeps a hidden pill closed after an unrelated %s navigation",
+  "compact comments keep a hidden pill closed after an unrelated %s navigation",
   async (navigation) => {
     width = 900;
-    layoutStore.update({ reading: "focus" });
+    layoutStore.update({ compact: true });
     currentRevision.threads = [placedWriteupThread()];
     currentReview.revisions.push({ seq: 2, createdAt: "2026-01-02T00:00:00.000Z" });
     const { history } = mount(`?tab=writeup&rev=1#thread-${id}`);
@@ -2762,7 +2852,7 @@ test.each(["tab", "doc", "revision", "no thread", "other thread"])(
               ? "?tab=writeup&rev=1#thread-22222222-2222-4222-8222-222222222222"
               : "?tab=writeup&rev=1";
     await act(async () => history.push(`/r/${id}${next}`));
-    await waitFor(() => expect(document.querySelector(".em-focus-pill")?.textContent).toBe("1 comment"));
+    await waitFor(() => expect(document.querySelector(".em-thread-pill")?.textContent).toBe("1 comment"));
     expect(document.getElementById(`thread-${id}`)).toBeNull();
     if (navigation === "tab") {
       await waitFor(() => expect(screen.getByTestId("reading-pane").hidden).toBe(true));
@@ -2772,8 +2862,8 @@ test.each(["tab", "doc", "revision", "no thread", "other thread"])(
   },
 );
 
-test("a fulfilled Focus jump does not reopen a hidden pill when the block remounts in the same navigation", async () => {
-  layoutStore.update({ reading: "focus" });
+test("a fulfilled compact comment jump does not reopen a hidden pill when the block remounts in the same navigation", async () => {
+  layoutStore.update({ compact: true });
   currentRevision.threads = [placedWriteupThread()];
   const scroll = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => {});
   const { history } = mount("?tab=comments&rev=1");

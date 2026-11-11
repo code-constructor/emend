@@ -767,6 +767,7 @@ function LoadedReview({
     hasDocs,
     hasDiff,
     hasWriteup,
+    compactDoc: openDoc?.kind === "markdown",
     threadCounts: revision ? threadCounts(revision.threads) : undefined,
     filesCount: diffFiles.length,
     viewedCount: diffFiles.filter((file) => file.viewed === "viewed").length,
@@ -779,6 +780,7 @@ function LoadedReview({
           inbox={<ReviewInbox collapsed={collapsed} onCollapsedChange={setCollapsed} />}
           tab={tab}
           hasDiff={hasDiff}
+          hasWriteup={hasWriteup}
           readingLayout={docsVisible && openDoc?.kind === "html" ? "original" : undefined}
           phoneTabs={<PhoneTabs {...tabProps} />}
           tabs={<ReviewTabs {...tabProps} docsCount={revision?.docs.length ?? 0} idBase={readingId} />}
