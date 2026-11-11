@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmod,
   lstat,
@@ -14,19 +15,193 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
-import { LIMITS } from "@emend/contract";
+import { LIMITS, type PublishManifest } from "@emend/contract";
 import { expect, test, vi } from "vitest";
 import { collectChanges } from "./collect.ts";
+import { projectKey } from "./key.ts";
 import { resolvePublish } from "./resolve.ts";
+import * as roots from "./root.ts";
 import { readSides, readWorktree } from "./sides.ts";
 import * as worktree from "./worktree.ts";
 import { hashWorktreeFile, statWorktree } from "./worktree.ts";
 
 vi.mock("./worktree.ts", async (original) => ({ ...(await original<typeof import("./worktree.ts")>()) }));
+vi.mock("./root.ts", async (original) => ({ ...(await original<typeof import("./root.ts")>()) }));
 
 const exec = promisify(execFile);
+
+const projectManifest = (base?: string): PublishManifest => ({
+  version: 1,
+  title: "Synthetic",
+  ...(base ? { base, head: base } : {}),
+  topics: [],
+  files: [{ path: "plan.md", role: "doc" }],
+  writeup: { overview: "", tldr: "", decisions: null, topics: {} },
+});
+
+test.each(["folder", "remote"])("a 230-character %s name is shortened for pubs and code reviews", async (kind) => {
+  const longName = "x".repeat(230);
+  const f = await fixture("sha1", "base\n", kind === "folder" ? longName : "repo");
+  try {
+    if (kind === "remote") await f.run("config", "remote.origin.url", `https://example.test/org/${longName}.git`);
+    await writeFile(join(f.root, "plan.md"), "# Synthetic plan");
+    const identity = kind === "remote" ? `https://example.test/org/${longName}` : await realpath(join(f.root, ".git"));
+    for (const base of [undefined, f.base]) {
+      const result = await resolvePublish(
+        projectManifest(base),
+        { key: "plan" },
+        f.state,
+        "instance",
+        f.root,
+        () => {},
+      );
+      expect(result.request.repo).toEqual({
+        key: createHash("sha256").update(identity).digest("hex"),
+        name: "x".repeat(200),
+      });
+    }
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("a pub falls back to the folder for an invalid remote while a code review still refuses it", async () => {
+  const f = await fixture();
+  try {
+    await f.run("config", "remote.origin.url", "https://example.invalid:99999/x");
+    await writeFile(join(f.root, "plan.md"), "# Synthetic plan");
+    const collect = (base?: string) =>
+      resolvePublish(projectManifest(base), { key: "plan" }, f.state, "instance", f.root, () => {});
+    expect((await collect()).request.repo).toEqual({
+      key: createHash("sha256")
+        .update(await realpath(join(f.root, ".git")))
+        .digest("hex"),
+      name: "repo",
+    });
+    await expect(collect(f.base)).rejects.toThrow("invalid origin URL");
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test.each([
+  { kind: "separate", folder: "metadata" },
+  { kind: "separate", folder: "metadata.git" },
+  { kind: "separate", folder: "metadata/.git" },
+  { kind: "bare", folder: "orchard" },
+  { kind: "bare", folder: "orchard.git" },
+])(
+  "a $kind git directory named $folder uses the right folder for its name and keeps its key",
+  async ({ kind, folder }) => {
+    const f = await fixture("sha1", "base\n", kind === "separate" ? "orchard" : "repo");
+    try {
+      const common = join(f.root, "..", folder);
+      const root = kind === "bare" ? join(f.root, "..", "pr-42") : f.root;
+      if (kind === "bare") {
+        await f.run("clone", "--bare", f.root, common);
+        await f.run("--git-dir", common, "config", "--unset", "remote.origin.url");
+        await f.run("--git-dir", common, "worktree", "add", "-b", "linked", root);
+      } else {
+        await mkdir(dirname(common), { recursive: true });
+        await f.run("init", "--separate-git-dir", common);
+      }
+      await writeFile(join(root, "plan.md"), "# Synthetic plan");
+      for (const base of [undefined, f.base]) {
+        const result = await resolvePublish(
+          projectManifest(base),
+          { key: "plan" },
+          f.state,
+          "instance",
+          root,
+          () => {},
+        );
+        expect(result.request.repo).toEqual({
+          key: createHash("sha256")
+            .update(await realpath(common))
+            .digest("hex"),
+          name: "orchard",
+        });
+      }
+    } finally {
+      await f.cleanup();
+    }
+  },
+);
+
+test.each(["remote", "local", "linked"])(
+  "reviews and pubs use the %s repository's name and stable key",
+  async (kind) => {
+    const f = await fixture();
+    try {
+      const root = kind === "linked" ? `${f.root}-linked` : f.root;
+      if (kind === "linked") await f.run("worktree", "add", "-b", "linked", root);
+      if (kind === "remote") await f.run("config", "remote.origin.url", "https://example.test/org/remote-project.git");
+      await writeFile(join(root, "plan.md"), "# Synthetic plan");
+      for (const code of [true, false]) {
+        const manifest: PublishManifest = {
+          version: 1,
+          title: "Synthetic",
+          ...(code ? { base: f.base, head: f.base } : {}),
+          topics: [],
+          files: [{ path: "plan.md", role: "doc" }],
+          writeup: { overview: "", tldr: "", decisions: null, topics: {} },
+        };
+        const collect = (project?: string) =>
+          resolvePublish(manifest, { key: "plan", project }, f.state, "instance", root, () => {});
+        const identity =
+          kind === "remote" ? "https://example.test/org/remote-project" : await realpath(join(f.root, ".git"));
+        const result = await collect();
+        expect(result.request.repo).toEqual({
+          key: createHash("sha256").update(identity).digest("hex"),
+          name: kind === "remote" ? "remote-project" : basename(f.root),
+        });
+        const repoUrl = code && kind === "remote" ? "https://example.test/org/remote-project" : undefined;
+        expect(result.request.repoUrl).toBe(repoUrl);
+        const explicit = await collect("Synthetic project");
+        expect(explicit.request.repo).toEqual({ key: projectKey("Synthetic project"), name: "Synthetic project" });
+        expect(explicit.request.repoUrl).toBe(repoUrl);
+      }
+    } finally {
+      await f.cleanup();
+    }
+  },
+);
+
+test("a pub uses its working directory's repository even when its doc is in an external doc root", async () => {
+  const f = await fixture();
+  try {
+    const docs = `${f.root}-docs`;
+    await mkdir(docs);
+    await mkdir(f.state);
+    await writeFile(join(f.state, "config.json"), JSON.stringify({ docRoots: [docs] }));
+    await writeFile(join(docs, "plan.md"), "# Synthetic plan");
+    const manifest: PublishManifest = {
+      version: 1,
+      title: "Synthetic",
+      topics: [],
+      files: [{ path: "plan.md", role: "doc", source: join(docs, "plan.md") }],
+      writeup: { overview: "", tldr: "", decisions: null, topics: {} },
+    };
+    const collect = (cwd: string, project?: string) =>
+      resolvePublish(manifest, { key: "plan", project }, f.state, "instance", cwd, () => {});
+    expect((await collect(f.root)).request.repo?.name).toBe(basename(f.root));
+    // A sandbox may place a .git marker above the temporary folders.
+    const noRepo = vi.spyOn(roots, "worktreeRoot").mockResolvedValue(null);
+    try {
+      expect((await collect(docs)).request.repo).toBeNull();
+      expect((await collect(docs, "Synthetic project")).request.repo).toEqual({
+        key: projectKey("Synthetic project"),
+        name: "Synthetic project",
+      });
+    } finally {
+      noRepo.mockRestore();
+    }
+  } finally {
+    await f.cleanup();
+  }
+});
 test("worktree stat and hashing refuse nested metadata before opening", async () => {
   const root = await mkdtemp(join(tmpdir(), "emend-worktree-metadata-"));
   try {
@@ -124,9 +299,9 @@ test("a later doc reserves bytes before 255 MiB of real collected diff sides", a
     await f.cleanup();
   }
 }, 15000);
-async function fixture(format = "sha1", content = "base\n") {
+async function fixture(format = "sha1", content = "base\n", name = "repo") {
   const dir = await mkdtemp(join(tmpdir(), "emend-worktree-listing-"));
-  const root = join(dir, "repo");
+  const root = join(dir, name);
   const run = (...args: string[]) =>
     exec("git", ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false", ...args], {
       cwd: root,

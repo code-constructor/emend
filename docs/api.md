@@ -203,7 +203,7 @@ their normal focus behavior; no unconditional focus refetch is required.
 
 `ReviewState = "open" | "approved" | "settled"`. `settled` is the stored and wire value for a
 retired review; clients label it "Retired".
-`InboxItem = { id, title, origin: { id, name }, repo: string | null, branch: string | null,
+`InboxItem = { id, title, origin: { id, name }, repo: string | null, project: string | null, branch: string | null,
 state: ReviewState, newestRevision, unsentCount, openThreads, agentWaiting, pendingSend,
 updatedAt, movedTo: string | null, list: "active" | "snoozed" | "done", snoozed: boolean,
 snoozedUntil: string | null, activeUntil: string | null, releasedAt: string | null, pickedUpAt: string | null,
@@ -212,6 +212,8 @@ kind: "review" | "publish" }`. `repo` is the repository key, and
 `approved` once `APPROVED_ACTIVE_HOURS` (12) hours have passed since approval or it does not fit
 Active's cap; an approved review is `active` until then if it has a place. An open review is
 `snoozed` while its snooze is in effect, `active` otherwise.
+`project` is the name the review's newest publish sent with its `repo`; for any review not published
+since this field was added, it falls back to its repository row's name unless that is `.git`; it is null when none.
 `activeUntil` is when an approved review in Active moves to Done; it is null otherwise. The server
 sends no event when an approval's window ends. A client estimates the server's clock from
 `serverTime` and the time elapsed since the response, refetches when `activeUntil` passes on that
@@ -489,6 +491,7 @@ to make a read fit a per-Send or per-revision limit. The limits below apply to t
 | `AgentReviewItem.url` | HTTP(S) URL of at most `pathChars` (4096) characters |
 | `InboxItem.title` | `titleChars` (200), including publish's nonblank requirement |
 | `InboxItem.repo` | Nullable `Sha256`: exactly 64 lowercase hex characters, the published repository key, not the repository name |
+| `InboxItem.project` | Nullable, otherwise 1 through `titleChars` (200) characters |
 | `InboxItem.branch` | Nullable, otherwise 1 through `pathChars` (4096) characters, as in `PublishRequest` |
 | `RevisionView.topics` | `topicsPerReview + 1` (201): up to 200 declared topics plus the reserved Other changes entry, as in publish |
 | `RevisionView.files`, `RevisionView.docs` | Each at most `filesPerRevision` (10000), the publish file limit |
@@ -650,7 +653,7 @@ Unknown keys, including owner ids, moved-to URLs, content keys, media types, `pl
 
 | Bundle field | Row fields |
 | --- | --- |
-| `review` | `id, originInstanceId, reviewKey: Sha256, repo: {key: Sha256, name} or null, branch, title, state, approvedRevision: UUID or null, createdAt, updatedAt` |
+| `review` | `id, originInstanceId, reviewKey: Sha256, repo: {key: Sha256, name} or null, project?: string or null, branch, title, state, approvedRevision: UUID or null, createdAt, updatedAt` |
 | `revisions` | `id, reviewId, seq, base, head, main, writeupEmpty, createdAt` |
 | `topics` | `id, revisionId` plus `TopicMeta` (optional door and blastRadius) |
 | `files` | `id, revisionId, path, oldPath, role, status, topicSlug, ord, oldBlob, newBlob, renderedBlob, flag, parentDocId, title?, view?: DocView`; nullable sides, status, topic, flag, parent |
@@ -661,6 +664,10 @@ Unknown keys, including owner ids, moved-to URLs, content keys, media types, `pl
 | `comments` | `id, reviewId, threadId, author, body, outcome, sendId, createdAt, updatedAt`; user outcome is null; agent outcome is required and sendId null |
 | `sends` | `id, reviewId, revisionId, kind, mode, instruction, deliveryId, setAsideAt, createdAt`; Go requires mode; Approve has null mode/instruction |
 | `deliveries` | `id, reviewId, leaseUntil, confirmedAt, createdAt` |
+
+`review.project` is optional and nullable, otherwise 1 through `titleChars` (200) characters.
+The hub keeps it when non-null; null or absent values fall back to `review.repo.name`, except `.git`, or null.
+This value is stored on the copied review; a copy whose stored project is null links no repository row.
 
 All ids are unique across the bundle and all references stay within it. The hub computes each
 thread’s creation placement from its target, refusing an unplaceable original target with
@@ -721,6 +728,10 @@ and sign-out; loopback HTTP on the same server receives cookies without `Secure`
 `PublishRequest = { reviewId?, reviewKey, repo: { key, name } | null, branch: string | null,
 title, base: commit | null, head: commit | "worktree" | null, main?, topics, writeup, links?, repoUrl?,
 files }`.
+The CLI sends `repo` for pubs too: the repository holding the working directory, or the
+`--project` name. A publish with a non-null `repo` sets the review's project to `repo.name`;
+a null `repo` keeps its current project. The repository row is linked once when the review
+is created, and a publish never renames a repository row.
 `main` follows the manifest's type and doc-membership validation below; the CLI carries it unchanged.
 The keys are lowercase 64-character SHA-256 hex; `reviewId` is a UUID. Repo names obey
 `titleChars`, branches `pathChars`, and title, commits and writeup obey the manifest limits.

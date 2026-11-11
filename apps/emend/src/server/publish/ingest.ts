@@ -72,6 +72,7 @@ async function findReview(ownerId: string, instanceId: string, input: PublishReq
       originInstanceId: instanceId,
       reviewKey: input.reviewKey,
       repoId,
+      project: input.repo?.name ?? null,
       branch: input.branch,
       title: input.title,
     })
@@ -602,6 +603,7 @@ async function computePublish(
             snoozedUntil: null,
             title: input.title,
             branch: input.branch,
+            project: input.repo?.name ?? review.project,
             updatedAt: Date.now(),
           })
           .where(and(eq(reviews.ownerId, ownerId), eq(reviews.id, review.id)));

@@ -8,10 +8,42 @@ import { promisify } from "node:util";
 import { LIMITS, type PublishManifest, PublishRequest } from "@emend/contract";
 import { afterEach, expect, onTestFinished, test, vi } from "vitest";
 import { run } from "../../main.ts";
+import { projectKey } from "../publish/key.ts";
 import { commandFixture, provenTestServer } from "../test-support.ts";
-import { manifestJsonError, publishCommand, publishTimeoutMs } from "./publish.ts";
+import { manifestJsonError, parsePublishArgs, publishCommand, publishTimeoutMs } from "./publish.ts";
 
 afterEach(() => vi.unstubAllGlobals());
+
+test("help lists the project option for both publish forms", async () => {
+  const stdout: string[] = [];
+  const stderr = vi.fn();
+  expect(await run(["--help"], { stdout: (line) => stdout.push(line), stderr, env: {} })).toBe(0);
+  const forms = stdout
+    .join("")
+    .split("\n")
+    .filter((line) => line.includes("emend publish"));
+  expect(forms).toHaveLength(2);
+  expect(forms.every((line) => line.endsWith("[--project NAME]"))).toBe(true);
+  expect(stderr).not.toHaveBeenCalled();
+});
+
+test.each([["plan.md"], ["--manifest", "review.json"]])("project option works with %j", (...args) => {
+  expect(parsePublishArgs([...args, "--project", "  Synthetic project  "]).project).toBe("Synthetic project");
+  expect(parsePublishArgs([...args, "--project", "x".repeat(200)]).project).toHaveLength(200);
+  for (const name of [
+    "",
+    "   ",
+    "x".repeat(201),
+    "bad\u0000name",
+    "bad\u001fname",
+    "bad\u007fname",
+    "\nname",
+    "name\t",
+  ])
+    expect(() => parsePublishArgs([...args, "--project", name])).toThrow("invalid project name");
+  expect(() => parsePublishArgs([...args, "--project", "One", "--project", "Two"])).toThrow("duplicate publish option");
+  expect(() => parsePublishArgs([...args, "--project"])).toThrow("usage:");
+});
 
 test.each([
   ["Unexpected token ] in JSON at position 9", " (line 2, column 8)"],
@@ -128,7 +160,9 @@ test("publish stdout is exactly one JSON line and unchanged docs upload nothing 
         blobs.add(String(url));
         return new Response(null, { status: 204 });
       }
-      PublishRequest.parse(JSON.parse(String(init?.body)));
+      const request = PublishRequest.parse(JSON.parse(String(init?.body)));
+      if (revision === 1)
+        expect(request.repo).toEqual({ key: projectKey("Synthetic project"), name: "Synthetic project" });
       return Response.json({
         reviewId,
         revision: ++revision,
@@ -143,7 +177,7 @@ test("publish stdout is exactly one JSON line and unchanged docs upload nothing 
       const stderr: string[] = [];
       await publishCommand(
         state,
-        ["--manifest", path, "--key", "plan"],
+        ["--manifest", path, "--key", "plan", ...(i === 2 ? ["--project", "Synthetic project"] : [])],
         { stdout: (s) => stdout.push(s), stderr: (s) => stderr.push(s), env: { EMEND_HOME: state } },
         dir,
       );

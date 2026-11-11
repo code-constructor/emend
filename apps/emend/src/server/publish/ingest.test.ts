@@ -5,7 +5,17 @@ import { LIMITS, type PublishRequest } from "@emend/contract";
 import { renderDoc, renderWriteup } from "@emend/core";
 import { and, eq } from "drizzle-orm";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { changedBlocks, files, instances, placements, reviews, revisions, threads, writeups } from "../../db/schema.ts";
+import {
+  changedBlocks,
+  files,
+  instances,
+  placements,
+  repos,
+  reviews,
+  revisions,
+  threads,
+  writeups,
+} from "../../db/schema.ts";
 import { testDb } from "../../db/test-support.ts";
 import { BlobStore } from "../../store/blobs.ts";
 import { WorkTimeout, workerExecutor } from "./executor.ts";
@@ -40,6 +50,103 @@ function publish(
 ) {
   return ingest(ownerId, instanceId, body, { db: f.db, blobs, baseUrl: "http://127.0.0.1:3636", executor });
 }
+
+const reviewRow = (id: string) =>
+  f.db.read((q) =>
+    q
+      .select()
+      .from(reviews)
+      .where(and(eq(reviews.ownerId, f.ownerId), eq(reviews.id, id)))
+      .get(),
+  );
+const repoRows = () => f.db.read((q) => q.select().from(repos).where(eq(repos.ownerId, f.ownerId)));
+
+test("a project is set on create and updated without renaming or changing the linked repo", async () => {
+  const repo = { key: "b".repeat(64), name: "First project" };
+  const first = await publish({ ...input(), repo });
+  const originalRepos = await repoRows();
+  const repoId = originalRepos[0]?.id;
+  expect(await reviewRow(first.reviewId)).toMatchObject({ project: repo.name, repoId });
+  await publish({ ...input(), repo: { key: "c".repeat(64), name: "Next project" } });
+  expect(await reviewRow(first.reviewId)).toMatchObject({ project: "Next project", repoId });
+  expect(await repoRows()).toEqual(originalRepos);
+  await publish(input());
+  expect(await reviewRow(first.reviewId)).toMatchObject({ project: "Next project", repoId });
+});
+
+test("an existing review without a repo can gain a project without linking or inserting a repo", async () => {
+  const first = await publish(input());
+  expect(await reviewRow(first.reviewId)).toMatchObject({ project: null, repoId: null });
+  await publish({ ...input(), repo: { key: "b".repeat(64), name: "Orchard" } });
+  expect(await reviewRow(first.reviewId)).toMatchObject({ project: "Orchard", repoId: null });
+  expect(await repoRows()).toEqual([]);
+});
+
+test.each([false, true])(
+  "a new review cannot change another review's project (other instance=%s)",
+  async (otherInstance) => {
+    const repo = { key: "b".repeat(64), name: ".git" };
+    const first = await publish({ ...input(), repo });
+    const originalRepos = await repoRows();
+    const instance = otherInstance ? randomUUID() : f.instanceId;
+    if (otherInstance) await f.db.query((q) => q.insert(instances).values({ id: instance, name: "Other machine" }));
+    const nextInput = { ...input(), reviewKey: "c".repeat(64), repo: { ...repo, name: "Other project" } };
+    const second = await publish(nextInput, instance);
+    expect(await reviewRow(first.reviewId)).toMatchObject({ project: ".git" });
+    expect(await reviewRow(second.reviewId)).toMatchObject({ project: "Other project", repoId: originalRepos[0]?.id });
+    expect(await repoRows()).toEqual(originalRepos);
+    await publish({ ...input(), repo: { ...repo, name: "Own project" } });
+    expect(await reviewRow(first.reviewId)).toMatchObject({ project: "Own project" });
+    expect(await reviewRow(second.reviewId)).toMatchObject({ project: "Other project" });
+    expect(await repoRows()).toEqual(originalRepos);
+  },
+);
+
+test("publishing never renames or links another owner's repo with the same key", async () => {
+  const key = "b".repeat(64);
+  await publish({ ...input(), repo: { key, name: ".git" } }, f.instanceId, f.otherOwnerId);
+  const otherRepo = () => f.db.read((q) => q.select().from(repos).where(eq(repos.ownerId, f.otherOwnerId)).get());
+  const foreign = await otherRepo();
+  const first = await publish({ ...input(), repo: { key, name: "Own project" } });
+  const own = (await repoRows())[0];
+  expect(own).toMatchObject({ key, name: "Own project" });
+  expect(own?.id).not.toBe(foreign?.id);
+  expect(await otherRepo()).toEqual(foreign);
+  expect(await reviewRow(first.reviewId)).toMatchObject({ repoId: own?.id, project: "Own project" });
+});
+
+test.each([false, true])(
+  "a failure after the project write rolls back reviews, repos and revisions (existing review=%s)",
+  async (existing) => {
+    const repo = { key: "b".repeat(64), name: "Original project" };
+    if (existing) await publish({ ...input(), repo });
+    const storedReviews = () => f.db.read((q) => q.select().from(reviews).where(eq(reviews.ownerId, f.ownerId)));
+    const storedRevisions = () => f.db.read((q) => q.select().from(revisions).where(eq(revisions.ownerId, f.ownerId)));
+    const before = await storedReviews();
+    const originalRepos = await repoRows();
+    const originalRevisions = await storedRevisions();
+    expect(before).toHaveLength(existing ? 1 : 0);
+    expect(originalRepos).toHaveLength(existing ? 1 : 0);
+    expect(originalRevisions).toHaveLength(existing ? 1 : 0);
+    await f.db.query((q) =>
+      q.exec(
+        "CREATE TRIGGER synthetic_publish_failure AFTER UPDATE ON reviews WHEN NEW.project = 'New project' BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END",
+      ),
+    );
+    try {
+      for (const key of [repo.key, "c".repeat(64)]) {
+        await expect(publish({ ...input(), repo: { key, name: "New project" } })).rejects.toMatchObject({
+          cause: { message: "synthetic failure" },
+        });
+        expect(await storedReviews()).toEqual(before);
+        expect(await repoRows()).toEqual(originalRepos);
+        expect(await storedRevisions()).toEqual(originalRevisions);
+      }
+    } finally {
+      await f.db.query((q) => q.exec("DROP TRIGGER synthetic_publish_failure"));
+    }
+  },
+);
 test.each([false, true])("first publish skips changes; revision 2 compares against it (empty=%s)", async (empty) => {
   const executor = vi.fn(executeWork);
   const firstDoc = await blobs.put(f.ownerId, Buffer.from("Original doc"), "text/markdown");

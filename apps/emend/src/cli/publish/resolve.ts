@@ -19,7 +19,7 @@ import { createGitSession, GitFailed } from "../git.ts";
 import { CliError } from "../http.ts";
 import { collectAssets } from "./assets.ts";
 import { collectChanges } from "./collect.ts";
-import { docsKey, normalizeRemote, reviewKey } from "./key.ts";
+import { docsKey, normalizeRemote, projectKey, reviewKey } from "./key.ts";
 import {
   checkPublishedFolders,
   NotRegularFile,
@@ -41,6 +41,7 @@ import { type BlobSource, readBlob } from "./upload.ts";
 export type PublishOptions = {
   manifest?: string;
   review?: string;
+  project?: string;
   key?: string | ((instanceId: string) => string);
   skipNodeModules?: boolean;
   titleFromMain?: (bytes: Uint8Array) => string | Promise<string>;
@@ -54,6 +55,13 @@ export type PublishOptions = {
   docArguments?: ReadonlyMap<string, string>;
 };
 const sha256 = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
+export function shortenRepoName(name: string): string {
+  let end = LIMITS.titleChars;
+  const before = name.charCodeAt(end - 1);
+  const after = name.charCodeAt(end);
+  if (before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff) end--;
+  return name.slice(0, end);
+}
 export async function publishContext(cwd: string, stateDir: string) {
   const git = createGitSession();
   const worktree = await worktreeRoot(cwd);
@@ -91,9 +99,11 @@ export async function resolvePublish(
   const branchName = code ? (await git(root, ["rev-parse", "--abbrev-ref", "HEAD"])).toString().trim() : "HEAD";
   const branch = branchName === "HEAD" ? null : branchName;
   if ((!code || !branch) && !options.review && !options.key) throw new CliError("pass --review or --key");
-  let repo: PublishRequest["repo"] = null;
+  let repo: PublishRequest["repo"] = options.project
+    ? { key: projectKey(options.project), name: options.project }
+    : null;
   let repoUrl: string | undefined;
-  if (code) {
+  if (worktree && (!options.project || code)) {
     let remote: string;
     try {
       remote = (await git(root, ["config", "--get", "remote.origin.url"])).toString().trim();
@@ -101,9 +111,26 @@ export async function resolvePublish(
       if (error instanceof GitFailed && error.exitCode === 1) remote = "";
       else throw error;
     }
-    const identity = remote ? normalizeRemote(remote) : (gitDirs.at(-1) ?? root);
-    repo = { key: sha256(identity), name: basename(identity) };
-    repoUrl = remote ? (remoteToRepoUrl(remote) ?? undefined) : undefined;
+    if (!options.project) {
+      let identity = gitDirs.at(-1) ?? root;
+      if (remote) {
+        try {
+          identity = normalizeRemote(remote);
+        } catch (error) {
+          if (!code && error instanceof CliError && error.message === "invalid origin URL") remote = "";
+          else throw error;
+        }
+      }
+      const name = remote
+        ? basename(identity)
+        : gitDirs.length === 1
+          ? basename(root)
+          : basename(identity) === ".git"
+            ? basename(dirname(identity))
+            : basename(identity).replace(/\.git$/, "");
+      repo = { key: sha256(identity), name: shortenRepoName(name || basename(root)) };
+    }
+    if (code) repoUrl = remote ? (remoteToRepoUrl(remote) ?? undefined) : undefined;
   }
   const changes = code ? await collectChanges(root, manifest.base ?? "", manifest.head ?? "", git, warn, gitDirs) : [];
   let grouped: ReturnType<typeof withOtherChanges>;
