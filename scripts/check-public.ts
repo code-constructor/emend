@@ -815,6 +815,7 @@ function matches(
   sourceExempt?: (at: number) => boolean,
   pieceSecrets = false,
   binaryView = false,
+  rawView = false,
 ): Match[] {
   const overlong = binaryView ? [] : combiningMarkRuns(text);
   if (overlong.length) return overlong;
@@ -870,8 +871,9 @@ function matches(
   }
   // Preserve main's %20/entity normalization as well as literal and fully decoded readings.
   // All views share the budget; without escapes in text or configuration they are identical.
-  const views: (boolean | "main")[] = TERM_ESCAPE.test(text) || terms.terms.some((term) => TERM_ESCAPE.test(term.value)) ||
-    terms.allowed.some((value) => TERM_ESCAPE.test(value)) ? [false, "main", true] : [false];
+  // Raw byte views follow their own escapes so configuration cannot multiply their normalization cost.
+  const views: (boolean | "main")[] = TERM_ESCAPE.test(text) || (!rawView && (terms.terms.some((term) => TERM_ESCAPE.test(term.value)) ||
+    terms.allowed.some((value) => TERM_ESCAPE.test(value)))) ? [false, "main", true] : [false];
   const sourceAllowed: { start: number; end: number }[] = [];
   for (const decodeEscapes of views) {
     const normalized = normalizeText(text, undefined, budget, decodeEscapes, binaryView);
@@ -986,7 +988,7 @@ export function checkText(
   text: string,
   location: string,
   terms: PrivateTerms,
-  options: { attribution?: boolean; lines?: boolean; columns?: boolean; lineExemptions?: boolean; generic?: boolean; imageDepth?: number; budget?: ScanBudget; pieceSecrets?: boolean; binaryView?: boolean } = {},
+  options: { attribution?: boolean; lines?: boolean; columns?: boolean; lineExemptions?: boolean; generic?: boolean; imageDepth?: number; budget?: ScanBudget; pieceSecrets?: boolean; binaryView?: boolean; rawView?: boolean } = {},
 ): string[] {
   if (!options.budget) {
     try { return checkText(text, location, terms, { ...options, budget: new ScanBudget() }); }
@@ -998,7 +1000,7 @@ export function checkText(
   const safe = safeLocation(location, terms);
   const starts = lineStarts(text);
   const decoded = options.generic === false ? undefined : decodedEscapeView(text, options.budget);
-  const hits = matches(text, terms, options.attribution ?? true, options.lineExemptions, starts, options.generic, false, options.budget, decoded ?? false, undefined, options.pieceSecrets, options.binaryView).map(
+  const hits = matches(text, terms, options.attribution ?? true, options.lineExemptions, starts, options.generic, false, options.budget, decoded ?? false, undefined, options.pieceSecrets, options.binaryView, options.rawView).map(
     (match) => {
       const index = preceding(starts, match.start);
       const line = options.lines || options.columns ? `:${index + 1}` : "";
@@ -1303,12 +1305,47 @@ function checkPng(buffer: Buffer, file: string, terms: PrivateTerms, depth: numb
 // Same per-asset and aggregate bounds as the publish contract.
 const ASSET_BYTES = 25 * 1024 * 1024;
 const EXPANDED_BYTES = 50 * 1024 * 1024;
+// Raw views measure 15–23 budget bytes per input byte on real PNGs/fonts with and without terms, about 28 on contrived content.
+const RAW_VIEW_COST = 32;
+const FONT_BULK_TAGS = new Set([
+  "glyf", "loca", "CFF ", "CFF2", "gvar", "hmtx", "vmtx", "hdmx", "kern", "kerx", "morx", "GPOS", "GSUB", "GDEF",
+  "CBDT", "CBLC", "EBDT", "EBLC", "sbix", "COLR", "cvt ", "fpgm", "prep", "HVAR", "VVAR",
+]);
+
+function fontStrictPrefix(tag: string, table: Buffer, budget: ScanBudget): number {
+  if (!FONT_BULK_TAGS.has(tag)) return table.length;
+  if (tag !== "CFF ") return 0;
+  // The header and the Name, Top DICT and String INDEXes hold the font's names; charstrings follow.
+  try {
+    let at = table[2] ?? 0;
+    if (table[0] !== 1 || at < 4) throw new Error();
+    for (let index = 0; index < 3; index++) {
+      const count = table.readUInt16BE(at);
+      if (!count) { at += 2; continue; }
+      const offSize = table[at + 2] ?? 0;
+      if (offSize < 1 || offSize > 4) throw new Error();
+      budget.spend(count + 1);
+      let last = 1;
+      for (let i = 0; i <= count; i++) {
+        const offset = table.readUIntBE(at + 3 + i * offSize, offSize);
+        if ((!i && offset !== 1) || offset < last) throw new Error();
+        last = offset;
+      }
+      at += 3 + (count + 1) * offSize + last - 1;
+      if (at > table.length) throw new Error();
+    }
+    return Math.max(at, Math.min(table.length, 64 * 1024));
+  } catch (error) {
+    if (error instanceof BudgetExceeded) throw error;
+    return table.length;
+  }
+}
 
 class BudgetExceeded extends PublicCheckError {
   constructor() { super(1, "check:public: scan expansion budget exceeded"); }
 }
 
-/** One owner for every expansion and decoded view in a top-level scan. */
+/** One owner for structural traversal, expansions and decoded views in a top-level scan. */
 export class ScanBudget {
   remaining: number;
   /** Deterministic terminator-search work, shared by nested inline assets and visible to tests. */
@@ -1414,6 +1451,8 @@ function checkSfnt(buffer: Buffer, file: string, terms: PrivateTerms, depth: num
   return hits;
 }
 
+type ByteRange = [number, number];
+
 /** Font tables and optional metadata share one bounded expansion budget. */
 function checkFont(buffer: Buffer, file: string, terms: PrivateTerms, depth: number, budget: ScanBudget): string[] {
   const hits: string[] = [];
@@ -1515,6 +1554,75 @@ function checkFont(buffer: Buffer, file: string, terms: PrivateTerms, depth: num
   return hits;
 }
 
+/** Only PNG/SFNT bulk is exempt; every other kind and malformed structure retains every byte. */
+function assetBulkRanges(buffer: Buffer, kind: string, budget: ScanBudget): ByteRange[] {
+  if (![".png", ".ttf", ".otf"].includes(kind)) return [];
+  const ranges: ByteRange[] = [];
+  try {
+    if (kind === ".png") {
+      let ended = false;
+      for (let at = PNG_MAGIC.length; at < buffer.length; ) {
+        budget.spend(12);
+        if (buffer.length - at < 12) throw new Error();
+        const length = buffer.readUInt32BE(at);
+        if (length > buffer.length - at - 12) throw new Error();
+        const tag = buffer.toString("latin1", at + 4, at + 8);
+        if (!ended && (tag === "IDAT" || tag === "fdAT") && length) ranges.push([at + 8, at + 8 + length]);
+        if (tag === "IEND") ended = true;
+        at += length + 12;
+      }
+      if (!ended) throw new Error();
+    } else if (kind === ".ttf" || kind === ".otf") {
+      if (buffer.length < 12) throw new Error();
+      const end = 12 + buffer.readUInt16BE(4) * 16, tags = new Set<string>();
+      if (end > buffer.length) throw new Error();
+      const tables: { tag: string; offset: number; length: number }[] = [];
+      for (let at = 12; at < end; at += 16) {
+        budget.spend(16);
+        const tag = buffer.toString("latin1", at, at + 4), offset = buffer.readUInt32BE(at + 8), length = buffer.readUInt32BE(at + 12);
+        if (tags.has(tag) || offset < end || offset + length > buffer.length) throw new Error();
+        tags.add(tag); tables.push({ tag, offset, length });
+      }
+      let previous = end;
+      for (const { tag, offset, length } of tables.sort((a, b) => a.offset - b.offset)) {
+        if (offset < previous) throw new Error();
+        previous = offset + length;
+        const prefix = fontStrictPrefix(tag, buffer.subarray(offset, offset + length), budget);
+        if (prefix < length) ranges.push([offset + prefix, offset + length]);
+      }
+    }
+    return ranges.sort((a, b) => a[0] - b[0]);
+  } catch (error) {
+    if (error instanceof BudgetExceeded) throw error;
+    return [];
+  }
+}
+
+/** Copy the complement once, preserving headers, gaps and tails with one NUL between regions. */
+function outsideBulk(buffer: Buffer, ranges: ByteRange[], budget: ScanBudget): Buffer {
+  if (!ranges.length) return buffer;
+  const tail: ByteRange = [buffer.length, buffer.length];
+  let length = 0, previous = 0, count = 0;
+  for (let i = 0; i <= ranges.length; i++) {
+    const [start, end] = ranges[i] ?? tail;
+    if (start > previous) { length += start - previous + (count ? 1 : 0); count++; }
+    previous = end;
+  }
+  if (length * 5 > budget.remaining) throw new BudgetExceeded();
+  const bytes = Buffer.allocUnsafe(length);
+  let at = 0;
+  previous = 0;
+  for (let i = 0; i <= ranges.length; i++) {
+    const [start, end] = ranges[i] ?? tail;
+    if (start > previous) {
+      if (at) bytes[at++] = 0;
+      at += buffer.copy(bytes, at, previous, start);
+    }
+    previous = end;
+  }
+  return bytes;
+}
+
 /** Scan distinct byte-order/alignment views once; ASCII UTF-8 and Latin-1 share one view. */
 function rawTermViews(buffer: Buffer, file: string, terms: PrivateTerms, budget: ScanBudget, fontData = false): string[] {
   const ascii = isAscii(buffer);
@@ -1526,7 +1634,7 @@ function rawTermViews(buffer: Buffer, file: string, terms: PrivateTerms, budget:
     if (!seen.has(text)) {
       seen.add(text);
       // Only font byte views skip text-shape refusals. Secret scanning remains in binarySecrets.
-      hits.push(...checkText(text, file, terms, { lines: true, generic: false, binaryView: fontData, budget }));
+      hits.push(...checkText(text, file, terms, { lines: true, generic: false, binaryView: fontData, rawView: true, budget }));
     }
   };
   scan(buffer.toString("utf8"));
@@ -2382,7 +2490,10 @@ export function checkBuffer(
     const hits = binary ? [] : [unknown];
     const extension = path.extname(file).toLowerCase();
     const fontData = binary && [".woff", ".woff2", ".ttf", ".otf"].includes(extension);
-    hits.push(...rawTermViews(buffer, file, terms, budget, fontData));
+    const skipped = buffer.length * RAW_VIEW_COST > budget.remaining;
+    const kind = buffer.subarray(0, PNG_MAGIC.length).equals(PNG_MAGIC) ? ".png" : binary ? extension : "";
+    const ranges = skipped ? assetBulkRanges(buffer, kind, budget) : [];
+    hits.push(...rawTermViews(outsideBulk(buffer, ranges, budget), file, terms, budget, fontData));
     if (binary) {
       if (buffer.length > ASSET_BYTES) hits.push(safeLocation(file, terms) + ": asset exceeds size limit");
       hits.push(...binarySecrets(buffer, file, terms, budget));
