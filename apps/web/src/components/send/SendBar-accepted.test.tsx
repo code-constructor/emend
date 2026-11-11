@@ -1,9 +1,10 @@
-import { APPROVED_ACTIVE_HOURS, type InboxItem, type ReviewView } from "@emend/contract";
+import { APPROVED_ACTIVE_HOURS, type InboxItem, type ReviewView, type RevisionView } from "@emend/contract";
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { type InboxData, inboxQuery, reviewQuery } from "../../api/queries.ts";
+import { type InboxData, inboxQuery, reviewQuery, revisionQuery } from "../../api/queries.ts";
 import { reconnectReviewEvents } from "../../lib/event-stream.ts";
+import { formatThreadCounts, threadCounts } from "../status/ThreadStateBadge.tsx";
 import { ToastProvider } from "../ui/Toast.tsx";
 import { HANDOFF_REFETCH_MS, HANDOFF_WAIT_MS } from "./HandOver.tsx";
 import { SendBar } from "./SendBar.tsx";
@@ -153,6 +154,134 @@ const lostText =
   "emend cannot reach its server right now, so a pick-up may not show here. If no agent has it yet, hand it over with the command below.";
 const normalText = "No agent has picked this up yet. emend keeps it until one does.";
 
+function revisionView(sent = false): RevisionView {
+  const target = { kind: "file", path: "example.ts" } as const;
+  return {
+    seq: 3,
+    base: null,
+    head: null,
+    main: null,
+    writeupEmpty: true,
+    writeup: { sections: [] },
+    docs: [],
+    files: [],
+    topics: [],
+    changedBlocks: [],
+    threads: [
+      {
+        id: reviewId,
+        target,
+        createdOn: 1,
+        state: sent ? "sent" : "open",
+        placement: { status: "placed", location: target },
+        comments: [{ id: reviewId, author: "user", body: "A comment", sent, sentOn: sent ? 3 : null }],
+      },
+    ],
+  };
+}
+
+function RevisionCounts() {
+  const { data } = useQuery(revisionQuery(reviewId, 3));
+  return <output>{data ? formatThreadCounts(threadCounts(data.threads)).text : "Loading threads"}</output>;
+}
+
+test("an accepted Send aborts a pending first revision fetch and loads post-Send threads", async () => {
+  const first = Promise.withResolvers<Response>();
+  const signals: (AbortSignal | null | undefined)[] = [];
+  const fallback = vi.mocked(fetch).getMockImplementation();
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    if (url === `/api/v1/reviews/${reviewId}/revisions/3`) {
+      signals.push(init?.signal);
+      return signals.length === 1 ? first.promise : Response.json(revisionView(true));
+    }
+    return fallback?.(url, init) as Promise<Response>;
+  });
+  await mount(<RevisionCounts />);
+  expect(screen.getByText("Loading threads")).toBeTruthy();
+  expect(signals).toHaveLength(1);
+  expect(signals[0]?.aborted).toBe(false);
+  server = { ...base, unsentCount: 0, pendingSend: true };
+  fireEvent.click(button("Send 1"));
+  await settle();
+  expect(posts).toBe(1);
+  expect(signals[0]?.aborted).toBe(true);
+  expect(signals).toHaveLength(2);
+  expect(screen.getByText("0 / 1 / 1")).toBeTruthy();
+  first.resolve(Response.json(revisionView()));
+  await settle();
+  expect(screen.getByText("0 / 1 / 1")).toBeTruthy();
+  expect(client.getQueryData(["revision", reviewId, 3])).toEqual(revisionView(true));
+});
+
+test.each(["Send", "Approve", "refused Send"])(
+  "only an accepted Send marks pending user comments sent across cached revisions (%s)",
+  async (action) => {
+    const target = { kind: "file", path: "example.ts" } as const;
+    const comments: RevisionView["threads"][number]["comments"] = [
+      { id: "pending", author: "user", body: "Pending", sent: false, sentOn: null },
+      { id: "sent", author: "user", body: "Already sent", sent: true, sentOn: 1 },
+      { id: "agent", author: "agent", body: "Answer", sent: false, sentOn: null },
+    ];
+    const pending = {
+      id: reviewId,
+      target,
+      createdOn: 1,
+      state: "resolved" as const,
+      placement: { status: "placed" as const, location: target },
+      comments,
+    };
+    const cached: RevisionView = {
+      seq: 1,
+      base: null,
+      head: null,
+      main: null,
+      writeupEmpty: true,
+      writeup: { sections: [] },
+      docs: [],
+      files: [],
+      topics: [],
+      changedBlocks: [],
+      threads: [
+        pending,
+        { ...pending, id: "answered", state: "answered", comments: comments.slice(1) },
+        { ...pending, id: "agent-only", comments: comments.slice(2) },
+      ],
+    };
+    for (const seq of [1, 2, 3]) client.setQueryData(["revision", reviewId, seq], { ...cached, seq });
+    const otherId = "22222222-2222-4222-8222-222222222222";
+    client.setQueryData(["revision", otherId, 1], cached);
+    if (action === "Approve") server = { ...base, unsentCount: 0 };
+    if (action === "refused Send")
+      postAnswer = () => Response.json({ error: { code: "stale_revision", message: "Stale" } }, { status: 409 });
+    await mount();
+    mode = "hang";
+    if (action === "Approve") approve("Approve revision 3");
+    else fireEvent.click(button("Send 1"));
+    await settle();
+    expect(posts).toBe(1);
+    for (const seq of [1, 2, 3]) {
+      const view = client.getQueryData<RevisionView>(["revision", reviewId, seq]);
+      expect(view).toEqual({
+        ...cached,
+        seq,
+        threads:
+          action === "Send"
+            ? [
+                {
+                  ...pending,
+                  state: "sent",
+                  comments: [{ ...comments[0], sent: true, sentOn: 3 }, ...comments.slice(1)],
+                },
+                ...cached.threads.slice(1),
+              ]
+            : cached.threads,
+      });
+    }
+    expect(client.getQueryData(["revision", otherId, 1])).toEqual(cached);
+    expect(client.getQueryData(["revision", reviewId, 4])).toBeUndefined();
+  },
+);
+
 test("a second Approve in the gap before the refetch lands sends nothing", async () => {
   server = { ...base, unsentCount: 0 };
   await mount();
@@ -194,8 +323,19 @@ test("a second Send after closing the window, while the refetch hangs, sends not
   expect(posts).toBe(1);
 });
 
-test("a refused Send heals a stale bar from the server", async () => {
-  await mount();
+test("a refused Send heals the stale bar and revision counts from the server", async () => {
+  let revisionGets = 0;
+  const fallback = vi.mocked(fetch).getMockImplementation();
+  vi.mocked(fetch).mockImplementation(async (url, init) => {
+    if (url === `/api/v1/reviews/${reviewId}/revisions/3`) {
+      revisionGets += 1;
+      return Response.json(revisionView(server.unsentCount === 0));
+    }
+    return fallback?.(url, init) as Promise<Response>;
+  });
+  await mount(<RevisionCounts />);
+  expect(screen.getByText("1 / 1 / 1")).toBeTruthy();
+  expect(revisionGets).toBe(1);
   server = { ...base, unsentCount: 0 };
   postAnswer = () => Response.json({ error: { code: "empty_send", message: "Nothing to send." } }, { status: 400 });
   fireEvent.click(button("Send 1"));
@@ -203,6 +343,8 @@ test("a refused Send heals a stale bar from the server", async () => {
   expect(screen.getByRole("alert").textContent).toBe("Nothing to send.");
   expect(button("Send").disabled).toBe(true);
   expect(screen.queryByRole("button", { name: "Send 1" })).toBeNull();
+  expect(revisionGets).toBe(2);
+  expect(screen.getByText("0 / 1 / 1")).toBeTruthy();
 });
 
 test("a slow but successful inbox does not say the server cannot be reached", async () => {
