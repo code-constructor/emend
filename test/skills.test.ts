@@ -385,6 +385,37 @@ test.each(["plugin/skills/emend-review/SKILL.md", "plugin/skills/emend-review/re
   },
 );
 
+test("review guidance lists the opening fields in display order", () => {
+  const text = read("plugin/skills/emend-review/SKILL.md");
+  const writing = text.split("## Write for the reviewer\n")[1]?.split("\n## ")[0] ?? "";
+  expect(writing).toContain("Write the opening fields below. The app shows them in this order, with these weights.");
+  expect([...writing.matchAll(/^- `([^`]+)`:/gm)].map((match) => match[1])).toEqual([
+    "tldr",
+    "overview",
+    "outOfScope",
+    "whereToLook",
+    "context",
+    "decisions",
+    "glossary",
+    "topics[slug]",
+  ]);
+});
+
+test("review guidance always names new or changed dependencies in whereToLook", () => {
+  const text = read("plugin/skills/emend-review/SKILL.md");
+  const whereToLook = text.split("- `whereToLook`:")[1]?.split("\n- ")[0]?.replace(/\s+/g, " ");
+  expect(whereToLook).toContain(
+    "Name the highest risk and the topic and file to inspect first. A new or changed dependency is always one of them.",
+  );
+});
+
+test("feedback guidance keeps Where to look current when edits are allowed", () => {
+  const text = read("plugin/skills/emend-feedback/SKILL.md").replace(/\s+/g, " ");
+  expect(text).toContain(
+    "Keep the TL;DR, Where to look, glossary, decisions and drift current when edits are allowed;",
+  );
+});
+
 test("the complete example is the synthetic manifest fixture, with no stripped or invented fields", () => {
   const blocks = [...read("plugin/skills/emend-review/references/manifest.md").matchAll(/```json\n([\s\S]*?)\n```/g)];
   expect(blocks).toHaveLength(1);
