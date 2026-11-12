@@ -1,6 +1,7 @@
 ---
 name: e-spawn
 description: Hand a change request or a GitHub issue to a new session in its own worktree and herdr workspace or herdr desktop terminal, without leaving this session. A plain description first becomes a tracking issue. Use when the owner types /e-spawn with a plain description of what to build, or with an issue as #<n>.
+disable-model-invocation: true
 ---
 
 # /e-spawn
