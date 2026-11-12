@@ -18,6 +18,51 @@ const file = (path: string, order: number, topic: string | null = null): FileVie
   hasNew: true,
 });
 
+test("topic totals are ready before any file has been parsed", () => {
+  const revision: RevisionView = {
+    seq: 1,
+    base: null,
+    head: null,
+    main: null,
+    writeupEmpty: true,
+    topics: [{ slug: "first", title: "First", importance: 10, summary: "" }],
+    files: [
+      { ...file("a.ts", 0, "first"), counts: { additions: 2, deletions: 1 } },
+      { ...file("b.ts", 1, "first"), counts: { additions: 3, deletions: 5 } },
+      { ...file("c.ts", 2), counts: { additions: 7, deletions: 9 } },
+      { ...file("d.ts", 3), flag: "binary" },
+    ],
+    docs: [],
+    threads: [],
+    writeup: { sections: [] },
+    changedBlocks: [],
+  };
+  const { container, rerender } = render(
+    <FilesView revision={revision} counts={new Map()} onViewed={vi.fn()} onNavigate={vi.fn()} />,
+  );
+  for (const [title, added, removed] of [
+    ["First", "+5", "−6"],
+    ["Other files", "+7", "−9"],
+  ] as const) {
+    const head = screen.getByRole("region", { name: title }).querySelector<HTMLElement>(".em-files-group__head");
+    expect(head).toBeTruthy();
+    if (!head) throw new Error("Missing topic header");
+    expect(within(head).getByText(added)).toBeTruthy();
+    expect(within(head).getByText(removed)).toBeTruthy();
+  }
+  for (const row of container.querySelectorAll(".em-files-row__counts")) expect(row.textContent).toBe("");
+  for (const files of [
+    revision.files.map(({ counts: _counts, ...file }) => file),
+    [{ ...file("doc.md", 0), role: "doc" as const }],
+    [],
+  ]) {
+    rerender(
+      <FilesView revision={{ ...revision, files }} counts={new Map()} onViewed={vi.fn()} onNavigate={vi.fn()} />,
+    );
+    expect(container.querySelector(".text-diff-add-fg, .text-diff-del-fg")).toBeNull();
+  }
+});
+
 test("Files groups match diff order, render counts, old-side threads, stale marks and hostile paths as text", () => {
   const hostile = "<img src=x onerror=alert(1)>/a.ts";
   const first = {
@@ -69,8 +114,9 @@ test("Files groups match diff order, render counts, old-side threads, stale mark
   expect(group.getByText("01")).toBeTruthy();
   expect(group.getByText("0/1")).toBeTruthy();
   expect(group.getByText("R")).toBeTruthy();
-  expect(group.getByText("+2")).toBeTruthy();
-  expect(group.getByText("−1")).toBeTruthy();
+  const row = group.getByRole("button", { name: `Open diff for ${hostile}, renamed, 2 added, 1 removed, 1 thread` });
+  expect(within(row).getByText("+2")).toBeTruthy();
+  expect(within(row).getByText("−1")).toBeTruthy();
   expect(group.getByText("1 thread")).toBeTruthy();
   const path = group.getByTitle(hostile);
   expect(path.querySelector("bdi")?.textContent).toBe(hostile);
@@ -94,7 +140,6 @@ test("Files groups match diff order, render counts, old-side threads, stale mark
   expect(screen.getByText("1 of 3 viewed")).toBeTruthy();
   expect(screen.getByRole("button", { name: "Open diff for misc.ts, modified" })).toBeTruthy();
   expect(screen.getByRole("progressbar").getAttribute("value")).toBe("1");
-  const row = group.getByRole("button", { name: `Open diff for ${hostile}, renamed, 2 added, 1 removed, 1 thread` });
   fireEvent.click(row);
   expect(onNavigate).toHaveBeenCalledWith(first);
   expect(row.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -112,5 +157,7 @@ test("Files groups match diff order, render counts, old-side threads, stale mark
       onNavigate={onNavigate}
     />,
   );
-  expect(within(screen.getByRole("region", { name: "Last" })).getByText("+4")).toBeTruthy();
+  expect(
+    within(screen.getByRole("button", { name: "Open diff for tail.ts, modified, 4 added, 0 removed" })).getByText("+4"),
+  ).toBeTruthy();
 });

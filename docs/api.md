@@ -313,7 +313,14 @@ these fields read as `main: null`, `writeupEmpty: false` and keep opening on Wri
 Without an explicit visible `tab` in the URL, the app opens the main page when set; otherwise
 it opens Writeup if it has text, the first doc in manifest order, Diff if any file has role
 `diff`, or Writeup when there is nothing. A main doc opens Docs scrolled to that document.
-`FileView = { id, path, oldPath, role, status, topic, order, mediaType, flag, hasOld, hasNew, viewed?, viewedOn?, notes?, view?: "source" }`.
+`FileView = { id, path, oldPath, role, status, topic, order, mediaType, flag, hasOld, hasNew, counts?, viewed?, viewedOn?, notes?, view?: "source" }`.
+
+`counts` is `{ additions, deletions }` lines, counted at publish with the same line diff the app uses.
+It is absent for flagged files, for docs, for a file whose diff exceeded the per-file time limit
+or the revision's counting budget, and for revisions published before the field existed.
+The app also uses counts from diffs it has loaded. It marks a total as partial while a changed
+text file has neither server nor loaded counts; the mark goes once every such file has loaded.
+
 `notes` is present only for files with agent notes. Each `AgentNoteView` adds a UUID `id` to
 `AgentNote` below. Notes are read-only revision content, separate from reviewer comments.
 `oldPath`, `status`, `topic` and `flag` are nullable. Files are in their stored order; assets

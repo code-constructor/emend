@@ -10,6 +10,9 @@ import {
 } from "lucide-react";
 import { type Ref, useEffect, useState } from "react";
 import { plural } from "../../lib/count.ts";
+import { reviewLineTotals } from "../../lib/diff-totals.ts";
+import { LineTotals } from "../diff/LineTotals.tsx";
+import type { DiffCounts } from "../diff/presentation.ts";
 import { AgentStatus, agentStatusOf } from "../status/AgentStatus.tsx";
 import { OriginBadge } from "../status/OriginBadge.tsx";
 import { SnoozeBadge, StateBadge } from "../status/StateBadge.tsx";
@@ -41,6 +44,7 @@ function safeLinks(links: PublishLink[] | undefined) {
 export function ReviewHeader({
   review,
   revision,
+  counts,
   seq,
   ready,
   phone,
@@ -50,6 +54,7 @@ export function ReviewHeader({
 }: {
   review: ReviewView;
   revision?: RevisionView;
+  counts: ReadonlyMap<string, DiffCounts>;
   seq: number;
   ready: number;
   phone: boolean;
@@ -70,6 +75,7 @@ export function ReviewHeader({
       .filter(Boolean)
       .join(" → ");
   const links = safeLinks(revision?.links);
+  const total = revision ? reviewLineTotals(revision, counts) : null;
   const metaItem = "inline-flex min-w-0 items-center gap-[5px] wrap-anywhere";
   return (
     <div
@@ -161,7 +167,7 @@ export function ReviewHeader({
           </>
         )}
       </div>
-      {(!phone || review.branch || revision?.files.length === 0) && (
+      {(!phone || review.branch || revision?.files.length === 0 || total) && (
         <div className="flex flex-wrap items-center gap-x-3.5 gap-y-1.5 font-mono text-12 leading-[1.2] font-stretch-mono text-fg-3">
           {review.branch && (
             <span className={metaItem}>
@@ -175,6 +181,7 @@ export function ReviewHeader({
               {commits}
             </span>
           )}
+          <LineTotals counts={total} />
           {revision?.files.length === 0 && (
             <span className={metaItem}>
               <Icon icon={FileText} size={13} />

@@ -16,6 +16,7 @@ import type { AppDeps } from "../app.ts";
 import { ApiError } from "../http/errors.ts";
 import { commentTargetReserve, envelopeBytes, jsonBytes } from "../mailbox/payload.ts";
 import { yieldToLoop } from "../pacing.ts";
+import { countDiffFiles, createDiffCountBudget } from "../publish/counts.ts";
 import { workerExecutor } from "../publish/executor.ts";
 import { IMAGE_HEAD_BYTES } from "../publish/image-size.ts";
 import { abortable } from "../publish/lifecycle.ts";
@@ -29,7 +30,13 @@ import { checkImportSignal } from "./lifecycle.ts";
 import { type ImportPlacement, importPlacements } from "./placements.ts";
 
 /** No database writes: even a late validation failure leaves no imported rows or blob metadata. */
-export async function prepareImport(ownerId: string, bundle: ImportBundle, deps: AppDeps, signal?: AbortSignal) {
+export async function prepareImport(
+  ownerId: string,
+  bundle: ImportBundle,
+  deps: AppDeps,
+  signal?: AbortSignal,
+  counting = { budget: createDiffCountBudget(), now: () => performance.now() },
+) {
   checkImportSignal(signal);
   const index = indexImportBundle(bundle);
   let rowCount = importRowCount(bundle);
@@ -122,6 +129,7 @@ export async function prepareImport(ownerId: string, bundle: ImportBundle, deps:
     >
   >();
   const empty = new Map<string, boolean>();
+  const counted = new Map<string, Awaited<ReturnType<typeof countDiffFiles>>>();
   try {
     const targetReserves = new Map<string, number>();
     let checkedComments = 0;
@@ -145,6 +153,7 @@ export async function prepareImport(ownerId: string, bundle: ImportBundle, deps:
     const checkedSources = new Set<string>();
     let previousSourceHash: string | undefined;
     let previousMedia: string[] = [];
+    const revisionsToCount: { id: string; files: PublishRequest["files"] }[] = [];
     for (const revision of bundle.revisions) {
       checkImportSignal(signal);
       current.clear();
@@ -210,6 +219,7 @@ export async function prepareImport(ownerId: string, bundle: ImportBundle, deps:
         }
       }
       await validateNoteRanges(input.files, read, execute);
+      revisionsToCount.push({ id: revision.id, files: input.files });
       // Keep only this revision's and its predecessor's image heads.
       const media = input.files
         .filter((f) => f.role === "asset" && f.parent === undefined && f.newBlob)
@@ -253,13 +263,19 @@ export async function prepareImport(ownerId: string, bundle: ImportBundle, deps:
         writeupMarkdown(input.writeup).every((s) => !s?.trim()),
       );
     }
+    // Spend the shared counting budget on the revision the reviewer opens first.
+    for (const revision of revisionsToCount.reverse())
+      counted.set(
+        revision.id,
+        await countDiffFiles(ownerId, revision.files, read, execute, signal, counting.budget, counting.now),
+      );
     // Check even supplied derived references, which will never be served as trusted HTML.
     for (const hash of hashes) {
       checkImportSignal(signal);
       if (!(await deps.blobs.hasContent(ownerId, hash, sizes.get(hash) ?? 0))) throw new ApiError("blob_missing");
     }
     checkImportSignal(signal);
-    return { staged, holds, rendered, empty, placements, changedBlocks };
+    return { staged, holds, rendered, empty, counted, placements, changedBlocks };
   } finally {
     signal?.removeEventListener("abort", stop);
     await worker?.close();
