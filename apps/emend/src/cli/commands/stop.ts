@@ -6,6 +6,7 @@ import { CliError, CliUsageError } from "../http.ts";
 import { servicePid } from "../service/pid.ts";
 import { requestServerStop } from "../service/takeover.ts";
 import { removeStaleTailscaleServe } from "../tailscale.ts";
+import { tailscaleOrigin } from "../tailscale-marker.ts";
 
 export async function stopCommand(stateDir: string, args: string[], io: Io) {
   if (args.length) throw new CliUsageError("Usage: emend stop.");
@@ -44,11 +45,12 @@ export async function stopCommand(stateDir: string, args: string[], io: Io) {
       now: io.service?.now,
       sleep: io.service?.sleep,
     });
+    const origin = "dnsName" in route ? escapeReference(tailscaleOrigin(route.dnsName, route.httpsPort)) : "";
     io.stdout(
       route.removed
-        ? `emend: no emend server is running; removed the Tailscale Serve route a stopped emend server left at https://${escapeReference(route.dnsName)}\n`
+        ? `emend: no emend server is running; removed the Tailscale Serve route a stopped emend server left at ${origin}\n`
         : "notInstalled" in route
-          ? `emend: no emend server is running; tailscale was not found on PATH, so the Tailscale Serve route at https://${escapeReference(route.dnsName)} may still exist.\n`
+          ? `emend: no emend server is running; tailscale was not found on PATH, so the Tailscale Serve route at ${origin} may still exist.\n`
           : "emend: no emend server is running.\n",
     );
   } else io.stdout(`emend: stopped the emend server at ${escapeReference(url)}\n`);
