@@ -1454,6 +1454,20 @@ test("stop removes only the route on the marker's port and names its origin", as
   expect(JSON.parse(await readFile(f.configPath, "utf8"))).toEqual({});
 });
 
+test("stop names the chosen port when a stale-route removal fails", async () => {
+  const marker = ownershipOn(chosen, 3636, markerPid());
+  const f = await ownedFake(routeOn(chosen), marker);
+  await writeFile(join(f.dir, "fail-off"), "");
+  expect(await stopState(f.env)).toEqual({
+    code: 1,
+    stdout: [],
+    stderr: [
+      `emend: no emend server is running, but removing the Tailscale Serve route it left at https://${dnsName}:${chosen} failed: Could not configure Tailscale Serve.\n`,
+    ],
+  });
+  expect(JSON.parse(await readFile(f.path, "utf8"))).toEqual(marker);
+});
+
 test("stop leaves a chosen-port marker's route alone when only 443 holds the target", async () => {
   const f = await ownedFake(route(), ownershipOn(chosen, 3636, markerPid()));
   const result = await removeStaleTailscaleServe(f.stateDir, f.env);

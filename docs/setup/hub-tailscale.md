@@ -111,8 +111,15 @@ emend removes the route it made on the old port before it sets up the new one. A
 with `sudo` is never removed.
 
 The sign-in cookie does not depend on the port: every page on the same Tailscale name, on any
-HTTPS port, receives it. emend warns when Serve also serves other HTTPS ports on that name. Keep
-only services you trust there.
+HTTPS port, receives it. emend warns when Serve also serves other HTTPS ports on that name. That
+warning covers only Tailscale Serve HTTPS routes. It does not see a Serve TCP passthrough to a
+local TLS server, or a process bound directly to the Tailscale address. Any HTTPS service on the
+same Tailscale name, on any port, receives emend's sign-in cookie. When port 443 of the name
+belongs to something you do not fully trust, put emend on a separate Tailscale name.
+
+An emend version older than this option does not recognise the route record of a chosen port, so
+it never removes that route. After you go back to an older version, check `tailscale serve status`
+and remove the route on the chosen port yourself with `tailscale serve --https=<n> off`.
 
 If Tailscale refuses to let your user set up Serve, run this once as root, then install again:
 

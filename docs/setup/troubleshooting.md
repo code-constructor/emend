@@ -368,7 +368,12 @@ Three more lines come from emend itself:
 
 One more line is a warning, not an error: `emend: warning: Tailscale Serve also serves other HTTPS
 ports on <hub>.<tailnet>.ts.net; pages there receive emend's sign-in cookie.` Remove the other
-HTTPS routes, or accept that pages there see the cookie.
+HTTPS routes, or accept that pages there see the cookie. The warning covers only Tailscale Serve
+HTTPS routes; any HTTPS service on the same Tailscale name receives the cookie.
+
+An emend version older than `--tailscale-port` never removes a route on a chosen port. After you
+go back to an older version, check `tailscale serve status` and remove that route yourself with
+`tailscale serve --https=<n> off`.
 
 ## emend stop cannot remove a Tailscale route
 
