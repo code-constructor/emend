@@ -15,6 +15,7 @@ const SKILLS = [
   "e-rebase",
   "e-merge-local",
   "e-issue",
+  "e-outside",
   "e-loop",
 ];
 

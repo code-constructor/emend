@@ -10,6 +10,17 @@ it is not. `docs/architecture.md` describes how it is built.
 - Sibling repo: [hunk-review-skill](https://github.com/vendis-ai/hunk-review-skill), the project
   emend grew out of. Its local path is in `.sync-counterpart-path` (gitignored).
 
+## Contributing from a fork
+
+If you are not a maintainer (see `.github/CODEOWNERS`), most of this file is for the maintainers'
+own agents; `CONTRIBUTING.md` is your guide. In short:
+
+- Your issue is your brief. No task files, no plan numbers, no special branch names.
+- Work on any branch of your fork. Put `Closes #<n>` first in the PR body.
+- Keep the non-negotiables below, run `pnpm verify` before you open the PR, and leave `.github/`
+  alone unless the issue is about CI.
+- CI runs after a maintainer approves it. A maintainer reviews the PR in emend and squash-merges it.
+
 ## What to do next
 
 New work comes as GitHub issues. `bin/wt issues` prints the queue in pick order: bugs first, then
@@ -93,13 +104,15 @@ Each line prevents a real failure. "Before you touch" names the rule file with t
 - On its own feature branch an agent commits with plain `git commit` (the git config signs it) and
   pushes that branch. One logical change per commit; the body names the plan task.
 - A merge happens only through `/e-pr-merge` (squash, pinned to the head the owner approved in
-  emend) or `/e-merge-local`, after the owner approved that head in emend. Outside those skills,
-  never run `gh pr merge`.
+  emend), `/e-merge-local`, or `/e-outside` for a fork PR, after the owner approved that head in
+  emend. Outside those skills, never run `gh pr merge`.
 - Agents never push `main` or tags, and never force-push without a lease. Direct commits to `main`
   happen only when the owner asks. The Release workflow publishes to npm from `main`; agents never
   start or re-run it.
 - The lifecycle skills: `/e-spawn`, `/e-work`, `/e-pr`, `/e-pr-finalize`, `/e-pr-merge`, `/e-rebase`,
   `/e-merge-local`.
+- `/e-outside` takes an outside contributor's issue and fork PR through a safety check, CI approval,
+  a review and an emend review to the merge. Fork code never runs on this machine.
 - `/e-issue` turns an idea, an improvement or a bug into a GitHub issue. Issues are public. Only the
   owner's command sets the `ready` label.
 - A hook guards Bash and Monitor: issue and label writes ask in main and are refused in worktrees;

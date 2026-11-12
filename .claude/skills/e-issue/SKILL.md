@@ -1,6 +1,6 @@
 ---
 name: e-issue
-description: Turn an idea, an improvement or a bug, given as text and screenshots, into a GitHub issue a worker agent can start from, after asking the owner what is unclear. Also refines an existing issue and sets `ready` on the owner's command. Use when the owner types /e-issue, or asks to file, refine or groom an issue.
+description: Turn an idea, an improvement or a bug, given as text and screenshots, into a GitHub issue a worker agent can start from, after asking the owner what is unclear. Also refines an existing issue and sets `ready` on the owner's command. Use when the owner types /e-issue, or asks to file, refine or groom an issue. For an issue or PR from an outside contributor, tell the owner to run /e-outside first.
 ---
 
 # /e-issue
