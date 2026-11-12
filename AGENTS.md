@@ -101,7 +101,8 @@ Each line prevents a real failure. "Before you touch" names the rule file with t
   happen only when the owner asks. The Release workflow publishes to npm from `main`; agents never
   start or re-run it.
 - The lifecycle skills: `/e-spawn`, `/e-work`, `/e-pr`, `/e-pr-finalize`, `/e-pr-merge`, `/e-rebase`,
-  `/e-merge-local`, `/e-outside` (an outside contributor's issue and fork PR).
+  `/e-merge-local`, `/e-outside` (an outside contributor's issue and fork PR). Fork code never
+  runs on this machine.
 - `/e-issue` turns an idea, an improvement or a bug into a GitHub issue. Issues are public. Only the
   owner's command sets the `ready` label.
 - A hook guards Bash and Monitor: issue and label writes ask in main and are refused in worktrees;
