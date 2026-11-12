@@ -70,7 +70,8 @@ closes it. Approval in emend allows the merge; nothing else does.
    - `git diff --no-ext-diff --no-textconv --stat=200 <base> <head> > '<dir>/stat.txt'`
    - `git log --format='%H %an <%ae>%n%B' <base>..<head> > '<dir>/commits.txt'`
    - `git -c core.quotePath=false diff --no-renames --name-only <base> <head> > '<dir>/pr-files.txt'`
-   - `git -c core.quotePath=false diff --no-renames --name-only <base> origin/main > '<dir>/main-files.txt'`
+   - `git rev-parse origin/main` is `<main-sha>`, the `main` this evidence describes; then
+     `git -c core.quotePath=false diff --no-renames --name-only <base> <main-sha> > '<dir>/main-files.txt'`
 3. Start `emend-security-reviewer` (model `opus`) with `checklist.md` ("Safety") and the paths in
    `<dir>`. Do not read the texts or the patch yourself before its verdict.
 4. Write its verdict to `<dir>/safety.md` with `<head>`, and show the owner the verdict and reasons.
@@ -104,8 +105,9 @@ Nobody fixes anything: fork code is the contributor's. Findings go into the emen
 ## 4. emend review
 
 1. Start `emend-review` in a fresh `general-purpose` subagent (model `sonnet`) and tell it: write
-   the manifest `<dir>/review/review.json` and stop before "Publish and offer the views"; diff
-   entries only, skip "Collect the docs the change rests on"; run no git command, and read the
+   the manifest `<dir>/review/review.json` as its "Publish and offer the views" says, with
+   `<dir>/review` as the private folder (skip its `mktemp`), and stop before any `emend publish`;
+   diff entries only, skip "Collect the docs the change rests on"; run no git command, and read the
    change from `diff.patch`, `stat.txt` and `pr-files.txt`. Target: base `<base>`, head `<head>`
    (full SHA); links: the PR and issue URLs. Its writeup, in this order: what the issue asks; what
    the PR does; the safety verdict; the findings by class; overlap with `main` (`main-files.txt`
@@ -114,9 +116,10 @@ Nobody fixes anything: fork code is the contributor's. Findings go into the emen
 2. When the subagent has finished, run `jq -r '.base, .head' '<dir>/review/review.json'`; never
    read the rest of the file. The two lines must be `<base>` and `<head>`; otherwise say so and
    stop. Publish it yourself: `emend publish --manifest '<dir>/review/review.json' --key outside-pr-<p>`
-   the first time, `--review <id>` from `heads.txt` after that. The review id is the URL's last
-   segment, and stderr names the revision. Append `<reviewId> <revision> <head> <main-sha>` to
-   `<dir>/heads.txt` with the Edit or Write tool, where `<main-sha>` is `git rev-parse origin/main`.
+   the first time, `--review <id>` from `heads.txt` after that. It prints one JSON line; take
+   `reviewId`, `revision` and `url` from it. Append `<reviewId> <revision> <head> <main-sha>` to
+   `<dir>/heads.txt` with the Edit or Write tool, with the `<main-sha>` step 1 recorded.
+   A `heads.txt` line without `<main-sha>` counts for nothing: publish a new revision.
 3. Give the owner the URL. Ask them to check that the review header reads
    `<first 7 of base> → <first 7 of head>` before approving. Say: approve means merge; comments and
    Send go to the contributor or become follow-up issues.
