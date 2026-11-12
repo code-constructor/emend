@@ -77,19 +77,22 @@ then for each id `gh api -X POST repos/<owner>/<name>/actions/runs/<id>/approve`
 - `go`: the owner's comments become one PR review in `<dir>/pr-review.md`, each point with file
   and line: `gh pr review <p> --repo github.com/<owner>/<name> --request-changes --body-file '<dir>/pr-review.md'`
   (`--comment` for questions only). A fix the owner keeps becomes a follow-up issue through
-  `/e-issue`. Reply to each comment with `emend reply`, then stop; the owner runs `/e-outside #<p>`
-  again after the contributor pushes.
+  `/e-issue`. Reply to each comment with `emend reply`, record the `deliveryId` in `handled.txt`
+  as `emend-feedback` says, then stop; the owner runs `/e-outside #<p>` again after the
+  contributor pushes.
 - `approve`, for the revision on the last line of `published.txt` (that line's head is `<head>`):
   1. `gh pr view <p> --repo github.com/<owner>/<name> --json state,headRefOid,mergeable`: `OPEN`,
-     `headRefOid` equal to `<head>` (a new head: start again at step 2), `MERGEABLE`
-     (`CONFLICTING`: ask the contributor in a PR comment to update the branch, and stop).
+     `headRefOid` equal to `<head>` (a new head: start again at step 2), `MERGEABLE` (`UNKNOWN`:
+     read it once more; `CONFLICTING`: ask the contributor in a PR comment to update the branch,
+     and stop).
   2. `gh pr checks <p> --repo github.com/<owner>/<name>`: every check passed. Otherwise stop.
   3. Write `<dir>/merge-subject.txt` (Conventional Commits, at most 72 characters) and
      `<dir>/merge-body.md` (two to four lines, `Closes #<i>`, a `Sync:` trailer as `AGENTS.md`
      says when `sync/` paths change), and `<dir>/approve.md` (one line of thanks). Check all three.
   4. `gh api -X POST repos/<owner>/<name>/pulls/<p>/reviews -f commit_id=<head> -f event=APPROVE -F body=@'<dir>/approve.md'`.
   5. `gh pr merge <p> --repo github.com/<owner>/<name> --squash --match-head-commit <head> --subject="$(cat '<dir>/merge-subject.txt')" --body-file '<dir>/merge-body.md'`.
-  6. `<main>/bin/wt sync-main`.
+  6. `<main>/bin/wt sync-main`, then record the approval's `deliveryId` in `handled.txt`. Until
+     then a rerun takes the saved approval to this step again.
 - `closed` or an error: report it and stop.
 
 ## 6. The issue
