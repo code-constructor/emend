@@ -1,12 +1,13 @@
-import type { HoursSetting, SettingsView } from "@emend/contract";
-import { QueryClient } from "@tanstack/react-query";
+import type { BinView, HoursSetting, SettingsView } from "@emend/contract";
+import { type InfiniteData, QueryClient } from "@tanstack/react-query";
 import { createMemoryHistory } from "@tanstack/react-router";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { StrictMode } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 import { App } from "./App.tsx";
 
 const clients: QueryClient[] = [];
+const binVersion = "a".repeat(64);
 const defaultSetting: HoursSetting = {
   value: 12,
   source: "default",
@@ -15,12 +16,42 @@ const defaultSetting: HoursSetting = {
   override: null,
   fileError: false,
 };
-function setup(setting: Partial<HoursSetting> = {}, path = "/settings", patchResponse?: Promise<Response>) {
+function setup(
+  setting: Partial<HoursSetting> = {},
+  path = "/settings",
+  patchResponse?: Promise<Response>,
+  binned: BinView = { items: [], total: 0, more: false, version: binVersion },
+  pageSize = 200,
+) {
+  let bin = binned;
   let view: SettingsView = {
     approvedActiveHours: { ...defaultSetting, ...setting },
     serverTime: "2026-11-04T10:00:00.000Z",
   };
   const fetcher = vi.fn(async (path: string, init?: RequestInit) => {
+    if (path === "/api/v1/bin" || path.startsWith("/api/v1/bin?")) {
+      if (init?.method === "DELETE") {
+        bin = { items: [], total: 0, more: false, version: binVersion };
+        return new Response(null, { status: 204 });
+      }
+      const query = new URL(path, "http://localhost").searchParams;
+      const beforeId = query.get("beforeId");
+      const beforeAt = query.get("beforeAt");
+      const items = bin.items.filter(
+        (item) =>
+          !beforeId || !beforeAt || item.binnedAt < beforeAt || (item.binnedAt === beforeAt && item.id > beforeId),
+      );
+      return Response.json({
+        ...bin,
+        items: items.slice(0, pageSize),
+        more: bin.more || pageSize < items.length,
+      });
+    }
+    if ((path.startsWith("/api/v1/bin/") && init?.method === "DELETE") || path.endsWith("/restore")) {
+      const reviewId = path.split("/")[4];
+      bin = { ...bin, items: bin.items.filter((item) => item.id !== reviewId), total: bin.total - 1 };
+      return new Response(null, { status: 204 });
+    }
     if (path === "/api/v1/settings") {
       if (init?.method === "PATCH") {
         if (patchResponse) return patchResponse;
@@ -53,6 +84,9 @@ function setup(setting: Partial<HoursSetting> = {}, path = "/settings", patchRes
     client,
     invalidate,
     fetcher,
+    setBin: (view: BinView) => {
+      bin = view;
+    },
     patches: () => fetcher.mock.calls.filter(([, init]) => init?.method === "PATCH"),
   };
 }
@@ -190,4 +224,215 @@ test("a delayed background GET cannot overwrite the saved settings view", async 
     value: 0,
     source: "override",
   });
+});
+
+const binId = "33333333-3333-4333-8333-333333333333";
+const binItem = {
+  id: binId,
+  title: "Binned review",
+  machine: "Workshop",
+  binnedAt: "2026-11-04T09:00:00.000Z",
+};
+const calls = (f: ReturnType<typeof setup>, method: string, path: string) =>
+  f.fetcher.mock.calls.filter(([called, init]) => called === path && init?.method === method);
+
+test("the bin lists title, machine and deleted time, and Empty bin is disabled when empty", async () => {
+  setup();
+  await screen.findByText("The bin is empty.");
+  expect(screen.getByRole("heading", { name: "Bin" })).toBeTruthy();
+  expect(screen.getByRole<HTMLButtonElement>("button", { name: "Empty bin" }).disabled).toBe(true);
+});
+test("the bin shows each item and says when it is cut short", async () => {
+  setup({}, "/settings", undefined, { items: [binItem], total: 3, more: true, version: binVersion });
+  await screen.findByText("Binned review");
+  expect(screen.getByText(/Workshop · Deleted /)).toBeTruthy();
+  expect(screen.getByText("Showing 1 of 3.")).toBeTruthy();
+  expect(screen.getByRole<HTMLButtonElement>("button", { name: "Empty bin" }).disabled).toBe(false);
+});
+test("Restore needs no confirm, calls restore and toasts", async () => {
+  const f = setup({}, "/settings", undefined, { items: [binItem], total: 1, more: false, version: binVersion });
+  fireEvent.click(await screen.findByRole("button", { name: "Restore" }));
+  await screen.findByText("Restored “Binned review”");
+  expect(calls(f, "POST", `/api/v1/reviews/${binId}/restore`)).toHaveLength(1);
+  await screen.findByText("The bin is empty.");
+  expect(f.invalidate).toHaveBeenCalledWith({ queryKey: ["inbox"] });
+  expect(f.invalidate).toHaveBeenCalledWith({ queryKey: ["bin"] });
+});
+test("Delete for good asks first, and Cancel calls nothing", async () => {
+  const f = setup({}, "/settings", undefined, { items: [binItem], total: 1, more: false, version: binVersion });
+  fireEvent.click(await screen.findByRole("button", { name: "Delete for good" }));
+  const dialog = await screen.findByRole("alertdialog", { name: "Delete “Binned review” for good?" });
+  expect(
+    within(dialog).getByText("This removes the review, its revisions, comments and Sends. This cannot be undone."),
+  ).toBeTruthy();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  expect(f.fetcher.mock.calls.some(([, init]) => init?.method === "DELETE")).toBe(false);
+});
+test("Delete for good calls DELETE on the bin item and toasts", async () => {
+  const f = setup({}, "/settings", undefined, { items: [binItem], total: 1, more: false, version: binVersion });
+  fireEvent.click(await screen.findByRole("button", { name: "Delete for good" }));
+  const dialog = await screen.findByRole("alertdialog");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Delete for good" }));
+  await screen.findByText("Deleted “Binned review”");
+  expect(calls(f, "DELETE", `/api/v1/bin/${binId}`)).toHaveLength(1);
+  await screen.findByText("The bin is empty.");
+});
+test("Empty bin asks with the count, and Cancel calls nothing", async () => {
+  const f = setup({}, "/settings", undefined, { items: [binItem], total: 1, more: false, version: binVersion });
+  await screen.findByText("Binned review");
+  fireEvent.click(screen.getByRole("button", { name: "Empty bin" }));
+  const dialog = await screen.findByRole("alertdialog", { name: "Empty the bin?" });
+  expect(
+    within(dialog).getByText(
+      "This deletes the 1 review in the bin for good, with their revisions, comments and Sends. This cannot be undone.",
+    ),
+  ).toBeTruthy();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  expect(calls(f, "DELETE", "/api/v1/bin")).toHaveLength(0);
+});
+test("Empty bin calls DELETE on the bin and toasts", async () => {
+  const f = setup({}, "/settings", undefined, { items: [binItem], total: 1, more: false, version: binVersion });
+  await screen.findByText("Binned review");
+  fireEvent.click(screen.getByRole("button", { name: "Empty bin" }));
+  const dialog = await screen.findByRole("alertdialog");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Empty bin" }));
+  await screen.findByText("Emptied the bin");
+  expect(calls(f, "DELETE", "/api/v1/bin")).toHaveLength(1);
+  expect(JSON.parse(String(calls(f, "DELETE", "/api/v1/bin")[0]?.[1]?.body))).toEqual({ version: binVersion });
+});
+
+test.each(["Restore", "Delete for good"])("Show older appends a page and %s works on it", async (action) => {
+  const older = {
+    ...binItem,
+    id: "44444444-4444-4444-8444-444444444444",
+    title: "Older review",
+    binnedAt: "2026-11-03T09:00:00.000Z",
+  };
+  const f = setup(
+    {},
+    "/settings",
+    undefined,
+    { items: [binItem, older], total: 2, more: false, version: binVersion },
+    1,
+  );
+  await screen.findByText("Showing 1 of 2.");
+  expect(screen.queryByText(older.title)).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Show older" }));
+  const row = (await screen.findByText(older.title)).closest("li");
+  expect(screen.getByText(binItem.title)).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Show older" })).toBeNull();
+  expect(
+    f.fetcher.mock.calls.some(
+      ([path]) => path === `/api/v1/bin?${new URLSearchParams({ beforeAt: binItem.binnedAt, beforeId: binId })}`,
+    ),
+  ).toBe(true);
+  if (!row) throw new Error("Missing older item");
+  fireEvent.click(within(row).getByRole("button", { name: action }));
+  if (action === "Delete for good") {
+    const dialog = await screen.findByRole("alertdialog", { name: "Delete “Older review” for good?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: action }));
+  }
+  await screen.findByText(`${action === "Restore" ? "Restored" : "Deleted"} “Older review”`);
+  expect(
+    calls(
+      f,
+      action === "Restore" ? "POST" : "DELETE",
+      action === "Restore" ? `/api/v1/reviews/${older.id}/restore` : `/api/v1/bin/${older.id}`,
+    ),
+  ).toHaveLength(1);
+  await waitFor(() => expect(screen.queryByText(older.title)).toBeNull());
+  expect(screen.getByText(binItem.title)).toBeTruthy();
+});
+
+test("Show older works after the cursor row was deleted and Empty bin uses the first page's version and count", async () => {
+  const older = { ...binItem, id: "44444444-4444-4444-8444-444444444444", title: "Older review" };
+  const f = setup(
+    {},
+    "/settings",
+    undefined,
+    { items: [binItem, older], total: 2, more: false, version: binVersion },
+    1,
+  );
+  await screen.findByText("Showing 1 of 2.");
+  f.setBin({ items: [older], total: 1, more: false, version: "b".repeat(64) });
+  fireEvent.click(screen.getByRole("button", { name: "Show older" }));
+  await screen.findByText(older.title);
+  const pages = f.client.getQueryData<InfiniteData<BinView>>(["bin"])?.pages;
+  expect(pages?.[1]?.version).not.toBe(pages?.[0]?.version);
+  expect(pages?.[1]?.total).toBe(1);
+  fireEvent.click(screen.getByRole("button", { name: "Empty bin" }));
+  const dialog = await screen.findByRole("alertdialog");
+  expect(within(dialog).getByText(/This deletes the 2 reviews in the bin/)).toBeTruthy();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Empty bin" }));
+  await screen.findByText("Emptied the bin");
+  expect(JSON.parse(String(calls(f, "DELETE", "/api/v1/bin")[0]?.[1]?.body))).toEqual({ version: binVersion });
+});
+
+test("Empty bin stays enabled when the listing has a count but no items", async () => {
+  const f = setup({}, "/settings", undefined, { items: [], total: 1, more: false, version: binVersion });
+  await screen.findByText("The bin is empty.");
+  const button = screen.getByRole<HTMLButtonElement>("button", { name: "Empty bin" });
+  expect(button.disabled).toBe(false);
+  fireEvent.click(button);
+  const dialog = await screen.findByRole("alertdialog");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Empty bin" }));
+  await screen.findByText("Emptied the bin");
+  expect(JSON.parse(String(calls(f, "DELETE", "/api/v1/bin")[0]?.[1]?.body))).toEqual({ version: binVersion });
+});
+
+test("Empty bin closes its dialog, refreshes the bin and toasts the server's message on a version conflict", async () => {
+  const f = setup({}, "/settings", undefined, { items: [binItem], total: 1, more: false, version: binVersion });
+  await screen.findByText(binItem.title);
+  fireEvent.click(screen.getByRole("button", { name: "Empty bin" }));
+  const dialog = await screen.findByRole("alertdialog");
+  f.setBin({ items: [], total: 0, more: false, version: "b".repeat(64) });
+  f.fetcher.mockImplementationOnce(async () =>
+    Response.json(
+      { error: { code: "invalid_state", message: "The bin changed. Check it and try again." } },
+      { status: 409 },
+    ),
+  );
+  fireEvent.click(within(dialog).getByRole("button", { name: "Empty bin" }));
+  await screen.findByText("The bin changed. Check it and try again.");
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  await screen.findByText("The bin is empty.");
+  expect(screen.queryByText(binItem.title)).toBeNull();
+  expect(f.invalidate).toHaveBeenCalledWith({ queryKey: ["bin"] });
+  expect(calls(f, "DELETE", "/api/v1/bin")).toHaveLength(1);
+  expect(JSON.parse(String(calls(f, "DELETE", "/api/v1/bin")[0]?.[1]?.body))).toEqual({ version: binVersion });
+});
+
+test("Empty bin preserves the shown version and count while its confirmation is open", async () => {
+  const f = setup({}, "/settings", undefined, { items: [binItem], total: 1, more: false, version: binVersion });
+  await screen.findByText(binItem.title);
+  fireEvent.click(screen.getByRole("button", { name: "Empty bin" }));
+  const dialog = await screen.findByRole("alertdialog");
+  act(() =>
+    f.client.setQueryData<InfiniteData<BinView>>(["bin"], {
+      pages: [
+        {
+          items: [
+            {
+              ...binItem,
+              id: "44444444-4444-4444-8444-444444444444",
+              binnedAt: "2026-11-05T09:00:00.000Z",
+              title: "Just binned",
+            },
+            binItem,
+          ],
+          total: 2,
+          more: false,
+          version: "b".repeat(64),
+        },
+      ],
+      pageParams: [undefined],
+    }),
+  );
+  await screen.findByText("Just binned");
+  expect(within(dialog).getByText(/This deletes the 1 review in the bin/)).toBeTruthy();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Empty bin" }));
+  await screen.findByText("Emptied the bin");
+  expect(JSON.parse(String(calls(f, "DELETE", "/api/v1/bin")[0]?.[1]?.body))).toEqual({ version: binVersion });
 });

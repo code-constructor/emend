@@ -6,6 +6,26 @@ import { repos, reviews } from "../../db/schema.ts";
 import { directFixture } from "../direct-test-support.ts";
 import { snapshot } from "./bundle.ts";
 
+test.each([false, true])("a hub without a bin never receives a binned snapshot (resend: %s)", async (resend) => {
+  const fixture = await directFixture();
+  const { result } = await fixture.publish();
+  const server = await fixture.reviewer();
+  const movedToUrl = `https://hub.example/r/${result.reviewId}`;
+  const where = and(eq(reviews.ownerId, server.ownerId), eq(reviews.id, result.reviewId));
+  await server.db.query((q) =>
+    q
+      .update(reviews)
+      .set({ binnedAt: Date.now(), movedToUrl: resend ? movedToUrl : null })
+      .where(where),
+  );
+  const before = await server.db.read((q) => q.select().from(reviews).where(where).get());
+  const exported = await server.db.transaction((q) =>
+    snapshot(q, server.ownerId, server.instance.id, result.reviewId, movedToUrl, Date.now(), false),
+  );
+  expect(exported).toEqual({ kind: "skipped" });
+  expect(await server.db.read((q) => q.select().from(reviews).where(where).get())).toEqual(before);
+});
+
 test.each(["Orchard", ".git", null])(
   "export preserves the review's project %s separately from its repo",
   async (project) => {
@@ -32,6 +52,7 @@ test.each(["Orchard", ".git", null])(
         result.reviewId,
         `https://hub.example/r/${result.reviewId}`,
         Date.now(),
+        false,
       ),
     );
     if (exported.kind !== "bundle") throw new Error("missing bundle");
@@ -56,6 +77,7 @@ test("export rows keep doc titles but omit recomputable headings", async () => {
       result.reviewId,
       `https://hub.example/r/${result.reviewId}`,
       Date.now(),
+      false,
     ),
   );
   if (exported.kind !== "bundle") throw new Error("missing bundle");
@@ -64,4 +86,34 @@ test("export rows keep doc titles but omit recomputable headings", async () => {
   expect(exported.bundle.files[0]?.title).toBe("Named");
   expect(exported.bundle.files[0]).not.toHaveProperty("headings");
   expect(JSON.parse(exported.json).files[0]).not.toHaveProperty("headings");
+});
+
+test.each([
+  [false, null],
+  [true, "2026-11-04T10:00:00.000Z"],
+])("export carries binnedAt of a binned review (binned: %s)", async (binned, expected) => {
+  const fixture = await directFixture();
+  const { result } = await fixture.publish();
+  const server = await fixture.reviewer();
+  if (binned)
+    await server.db.query((q) =>
+      q
+        .update(reviews)
+        .set({ binnedAt: Date.parse("2026-11-04T10:00:00.000Z") })
+        .where(and(eq(reviews.ownerId, server.ownerId), eq(reviews.id, result.reviewId))),
+    );
+  const exported = await server.db.transaction((q) =>
+    snapshot(
+      q,
+      server.ownerId,
+      server.instance.id,
+      result.reviewId,
+      `https://hub.example/r/${result.reviewId}`,
+      Date.now(),
+      true,
+    ),
+  );
+  if (exported.kind !== "bundle") throw new Error("missing bundle");
+  expect(exported.bundle.review.binnedAt).toBe(expected);
+  expect(JSON.parse(exported.json).review.binnedAt).toBe(expected);
 });

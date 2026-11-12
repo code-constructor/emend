@@ -1,6 +1,6 @@
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, or } from "drizzle-orm";
 import type { Hono } from "hono";
-import { files } from "../../db/schema.ts";
+import { files, reviews, revisions } from "../../db/schema.ts";
 import type { AppDeps } from "../app.ts";
 import type { AppEnv } from "../auth/principal.ts";
 import { ApiError } from "../http/errors.ts";
@@ -17,9 +17,13 @@ export function mediaRoutes(app: Hono<AppEnv>, deps: AppDeps) {
       const file = await q
         .select({ mediaType: files.mediaType })
         .from(files)
+        .innerJoin(revisions, and(eq(revisions.ownerId, ownerId), eq(revisions.id, files.revisionId)))
+        .innerJoin(reviews, and(eq(reviews.ownerId, ownerId), eq(reviews.id, revisions.reviewId)))
         .where(
           and(
             eq(files.ownerId, ownerId),
+            // Moved copies remain readable; otherwise binned reviews keep bytes only for restore.
+            or(isNull(reviews.binnedAt), isNotNull(reviews.movedToUrl)),
             eq(files.role, "asset"),
             eq(files.newBlob, hash),
             // Only writeup media: an HTML doc's own assets load from its content path.
