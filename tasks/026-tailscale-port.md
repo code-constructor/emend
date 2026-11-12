@@ -61,6 +61,8 @@ emend's own route, behaviour without the option is unchanged, `emend-security-re
   referencing shllg/emend#81, no attribution) back to the main session, which opens the upstream PR.
 - 2026-11-12: built as `--tailscale-port <n>`; the route record keeps a port other than 443.
   `pnpm verify` passes and `emend-security-reviewer` signed off. Codex was not reachable, so a
-  Sonnet sub-agent wrote the code and a second Sonnet read stood in for the Codex review. Still
-  open for the owner: one check on a real tailnet that the app answers and a phone pairs on the
-  chosen port; the tests use a fake `tailscale`.
+  Sonnet sub-agent wrote the code and a second Sonnet read stood in for the Codex review.
+- 2026-11-12: checked on a real tailnet with a test server and its own state folder. The app
+  answered on the chosen port, a Host without the port or with `:443` got `bad_host`, a phone
+  paired, a stop removed the route, a restart on another port after a hard kill removed the old
+  route, and a port another service uses was refused. The other Serve routes stayed unchanged.
