@@ -1,10 +1,10 @@
 ---
 id: 025
 title: Let an agent read which commit a review approved, from the CLI
-status: in-progress
+status: done
 owner: agent + your approval
 depends_on: []
-done_on:
+done_on: 2026-11-12
 ---
 
 # 025 — Let an agent read which commit a review approved, from the CLI
@@ -21,18 +21,18 @@ security review).
 
 ## Steps
 
-- [ ] Contract first: `packages/contract` and `docs/api.md` describe the new fields before code.
-- [ ] Each `emend ls --json` item gains, in camelCase: `branch`, `approved` (null while no revision
+- [x] Contract first: `packages/contract` and `docs/api.md` describe the new fields before code.
+- [x] Each `emend ls --json` item gains, in camelCase: `branch`, `approved` (null while no revision
       is approved, else an object with `revision` and `head`) and `newest` (an object with
       `revision` and `head`). Additive only, `/api/v1` stays compatible.
-- [ ] A lookup by commit: `emend ls --json --head SHA` returns only the reviews whose approved or
+- [x] A lookup by commit: `emend ls --json --head SHA` returns only the reviews whose approved or
       newest revision has that head (exact semantics are the worker's call; document them).
-- [ ] An agent credential reads these repeatedly with no side effect: no take, no confirm. Only
+- [x] An agent credential reads these repeatedly with no side effect: no take, no confirm. Only
       metadata the agent published itself (head, branch, seq, state); still no comments, writeups or
       docs; reviews stay limited to the token's origin instance and `owner_id` as today. Decide
       whether this needs a scope change and justify it.
-- [ ] A head of `worktree` or null comes out unchanged.
-- [ ] Tests: approved review returns its approved head; after a new revision `approved` is null
+- [x] A head of `worktree` or null comes out unchanged.
+- [x] Tests: approved review returns its approved head; after a new revision `approved` is null
       and the old commit no longer matches as approved; the call changes no row.
 
 ## Done when
@@ -43,6 +43,11 @@ clears it, the call writes nothing, `emend-security-reviewer` signed off (agent 
 
 ## Notes
 
+- Done 2026-11-12: no scope change, the list stays on the agent `publish` scope (security review
+  signed off). `--head` matches the approved or the newest revision's head, exactly. `head` is the
+  publisher's unverified value, so `docs/api.md` names what a gating caller must also require.
+  Deferred: a per-revision code flag, the import validator refusing a non-newest approval, and
+  regression tests for the lifecycle un-approve and retire-then-reopen paths.
 - Findings: `packages/contract/src/views.ts` (AgentReviewItem), `apps/emend/src/db/repo/agent-reviews.ts`,
   `apps/emend/src/server/routes/reviews.ts` (revision route needs scope `read`),
   `packages/contract/src/auth.ts` (agent scopes publish, take, reply),
