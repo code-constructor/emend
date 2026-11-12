@@ -573,6 +573,19 @@ test("the removed run subcommand is unknown and help does not list it", () =>
     assert.match(help.stdout, /spawn --issue <n>/);
   }));
 
+test("the removed tasks command and setup --task are refused", () =>
+  scenario({ withBin: true }, async ({ fx, repo }) => {
+    const wt = join(fx.main, "bin", "wt");
+    const tasks = await runWt(wt, ["tasks"], { cwd: fx.main });
+    assert.equal(tasks.code, 2);
+    assert.match(tasks.stderr, /Unknown subcommand/);
+    const setup = await runWt(wt, ["setup", "some-new-branch", "--task", "1"], { cwd: fx.main });
+    assert.equal(setup.code, 2);
+    assert.match(setup.stderr, /Unknown option/);
+    assert.deepEqual(readRegistry(repo).worktrees, {});
+    assert.equal(gitIn(fx.main, "branch", "--list", "some-new-branch"), "");
+  }));
+
 test("list and gc output carry no control character from outside", () => {
   const rows = [
     {

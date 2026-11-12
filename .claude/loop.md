@@ -63,7 +63,7 @@ checked.
 Then run these and read the results together:
 
 1. `<main>/bin/wt list --json`: the worktrees. A worker is a row with an `issue` field. Rows without
-   one (task-file branches, manual worktrees) are not this loop's and never count against the three.
+   one (manual worktrees) are not this loop's and never count against the three.
 2. `<main>/bin/wt agents --json`: the agents of herdr and herdr desktop inside bin/wt's worktrees,
    each with its `backend`, `name`, `address`, `status` (`working`, `blocked`, `idle`, `done`,
    `unknown`), `location` (its live folder) and `launchCwd` (the folder herdr desktop started it
@@ -113,7 +113,7 @@ Use the survey's `items` for PR lookups. For each worker, and each journal issue
     the owner the issue number.
   - **polish:** the log's last line shows `open 0`, it is more than 30 minutes old, and the worker
     has no PR. Ask it to check its "Done when" and to close out once its rounds are done, as
-    `/e-work` step 5 says.
+    `/e-work` step 4 says.
   - **stalled:** its last `progress` or `started` line is over 60 minutes old, and no `in-review`
     line follows it. Read its screen once with
     `<main>/bin/wt agent read '<target>' --lines 80`. When it shows the emend wait, journal

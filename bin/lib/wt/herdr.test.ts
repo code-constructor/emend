@@ -731,6 +731,7 @@ test("spawn --issue refuses --mode local before any external call", () =>
     assert.match(r.stderr, /Nothing was created\./);
     assert.deepEqual(readRegistry(repo).worktrees, {});
     assert.deepEqual(fakeCalls(env, "herdr"), []);
+    assert.deepEqual(fakeCalls(env, "gh"), []);
   }));
 
 // ---------------------------------------------------------------------------------------------
