@@ -32,6 +32,7 @@ import { insertChangedBlocks } from "./changed.ts";
 import { WorkTimeout, workerExecutor } from "./executor.ts";
 import { abortable, checkPublishSignal, PublishAborted, publishSlots } from "./lifecycle.ts";
 import { fileMediaType } from "./media.ts";
+import { ownerHead } from "./media-head.ts";
 import { validateNoteRanges } from "./notes.ts";
 import { renderRevision } from "./render.ts";
 import { revisionTransition } from "./transitions.ts";
@@ -296,6 +297,7 @@ async function computePublish(
       input,
       execute,
       read,
+      ownerHead(deps.blobs, ownerId, deps.signal),
       (bytes) => deps.blobs.put(ownerId, bytes, "application/json"),
       deps.signal,
     );
