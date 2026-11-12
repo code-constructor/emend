@@ -95,7 +95,7 @@ rebase waits (see step 7).
 ## 3. Title and body
 
 The title follows `/e-pr`'s rules: `type(scope): summary`, lowercase, one line, at most 72
-characters, no task number. The body fills the template: Summary, Evidence, Sync, with
+characters, no issue or plan number. The body fills the template: Summary, Evidence, Sync, with
 "Follow-ups" and "Not changed" under the Summary as `/e-pr` says. After a push that changed
 content, or after a review round in step 7, bring them up to date. When either is wrong, run
 `<main>/bin/wt pr edit --title-file <top>/.wt/pr-title.txt` after writing the title there, or write the body to `<top>/.wt/pr-body.md` and run
@@ -317,8 +317,7 @@ for CI and threads; back here, the list above picks the next round.
    Create it with `mkdir -p -m 700 <top>/.wt/review`, written out literally. It is per worktree
    and gitignored, and only this worktree's session writes it.
 3. Start `emend-review` in a fresh subagent and tell it "publish only". Give it the target
-   `origin/main`, with `head` set to the full PR head commit, the task file and the PR URL for
-   `links`. Tell it to use `<top>/.wt/review` as the review folder, in place of a new temporary one.
+   `origin/main`, with `head` set to the full PR head commit, and the PR URL for `links`. Tell it to use `<top>/.wt/review` as the review folder, in place of a new temporary one.
    It returns the review id, the revision, the URL, the literal review folder, the directory it
    published from and the wait command.
 4. A subagent cannot wait, so this session waits. The subagent set `decisions` to `null`. If this

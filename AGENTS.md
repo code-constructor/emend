@@ -15,9 +15,9 @@ it is not. `docs/architecture.md` describes how it is built.
 New work comes as GitHub issues. `bin/wt issues` prints the queue in pick order: bugs first, then
 `P0`, `P1`, `P2`, then the oldest. Only an issue the owner labelled `ready`, with no open blocker, is
 picked up. A bare `/loop` or `/loop /e-loop` in the main checkout works the queue
-(`.claude/loop.md`); `/e-issue` files new issues. Older work stays in `tasks/`: when asked "what
-now?", "what's next?" or similar, give the next pickable issue, then follow `tasks/README.md` for
-open task files. Keep each task file's status current as work lands.
+(`.claude/loop.md`); `/e-issue` files new issues. When asked "what now?", "what's next?" or
+similar, give the next pickable issue. When none is pickable, say so and point to the plan; do not
+invent work.
 
 ## Layout
 
@@ -32,8 +32,7 @@ open task files. Keep each task file's status current as work lands.
   Markdown parser; bin/wt itself stays dependency-free.
 - `plugin/`: the Claude Code plugin. `plugin/skills/` holds the review skills, their only copy;
   `plugin/` holds nothing else but `.claude-plugin/plugin.json`. `docs/api.md`: the v1 contract.
-  `sync/`: surfaces shared with hunk-review-skill, and synthetic fixtures. `tasks/`: the older
-  work queue; new work is GitHub issues.
+  `sync/`: surfaces shared with hunk-review-skill, and synthetic fixtures.
 
 ## Commands
 
@@ -90,7 +89,7 @@ Each line prevents a real failure. "Before you touch" names the rule file with t
 
 - Feature work happens on a branch in a `bin/wt` worktree under `.claude/worktrees/`. Claude Code
   sessions start at the root of the main checkout or of such a worktree. Branch names start with
-  `emend-`: `emend-<n>-<slug>` for issue `<n>`, `emend-task-<NNN>-<slug>` for a task file.
+  `emend-`: `emend-<n>-<slug>` for issue `<n>`.
 - On its own feature branch an agent commits with plain `git commit` (the git config signs it) and
   pushes that branch. One logical change per commit; the body names the plan task.
 - A merge happens only through `/e-pr-merge` (squash, pinned to the head the owner approved in

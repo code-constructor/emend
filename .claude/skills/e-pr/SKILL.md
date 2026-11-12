@@ -55,16 +55,15 @@ Format: `type(scope): summary`, from Conventional Commits.
   whose type is not `docs`; when every commit is `docs`, use `docs`. On a tie, take the type of the
   newest of the tied commits.
 - Summary: lowercase, no trailing period, the effect a user sees. The whole title is one line of at
-  most 72 characters. No task number: GitHub would read `(#012)` as a link to PR 12.
+  most 72 characters. No issue or plan number: GitHub would read `(#12)` as a link to PR 12.
 
 ## 3. Body
 
 Fill `.github/pull_request_template.md` section by section, in its order. Its HTML comments are
 instructions; they do not go into the body.
 
-- Summary: one to three lines on what changes for the owner. Name the task file
-  (`tasks/NNN-slug.md`) when the branch has one. When `.wt/worktree.json` names an issue, the
-  Summary's first line is `Closes #<n>`; `bin/wt pr create` refuses a body without it.
+- Summary: one to three lines on what changes for the owner. When `.wt/worktree.json` names an
+  issue, the Summary's first line is `Closes #<n>`; `bin/wt pr create` refuses a body without it.
 - Follow-ups: when the work found gaps outside the issue's scope, list them under the Summary as
   "Follow-ups", one line each. They become issues only through the owner.
 - Not changed: findings left as they are under `.claude/rules/review-rounds.md`, listed under
