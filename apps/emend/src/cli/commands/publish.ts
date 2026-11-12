@@ -2,11 +2,12 @@ import { lstat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { type DocView, isRenderedHtmlDoc, LIMITS, PublishManifest, PublishResponse } from "@emend/contract";
 import type { Io } from "../../main.ts";
+import { DIFF_COUNT_BUDGET_MS } from "../../server/publish/counts.ts";
 import { readDocRoots } from "../config.ts";
 import { publishDirect } from "../direct/index.ts";
 import { escapeReference } from "../escape.ts";
 import { apiRequest, CliError, printJson, publishAnswerIncomplete } from "../http.ts";
-import { movedError, refuseUncopiedReview } from "../moved.ts";
+import { binnedError, movedError, refuseUncopiedReview } from "../moved.ts";
 import { manifestError } from "../publish/manifest-error.ts";
 import { GitFolderRead, inside, NotRegularFile, OversizedFile, readRegular } from "../publish/read.ts";
 import { type PublishOptions, publishContext, resolvePublish } from "../publish/resolve.ts";
@@ -81,6 +82,9 @@ export function parsePublishArgs(args: string[]): PublishArgs {
 export const publishTimeoutMs = (files: { role: string; path: string; view?: DocView }[]) =>
   30000 +
   15000 +
+  // Counting can exceed its budget by the executor's final render timeout.
+  DIFF_COUNT_BUDGET_MS +
+  10000 +
   10000 * (1 + files.filter((file) => file.role === "doc" && !isRenderedHtmlDoc(file)).length) +
   3 * 30000;
 
@@ -227,6 +231,12 @@ export async function publishCommand(
       error,
       { reviewId: options.review, keyFor: (id) => collected.forInstance(id).reviewKey },
       true,
+    ).catch((next) =>
+      binnedError(stateDir, next, {
+        reviewId: options.review,
+        publish: true,
+        shortcut: options.manifest === undefined,
+      }),
     );
   }
   const result = PublishResponse.safeParse(response);

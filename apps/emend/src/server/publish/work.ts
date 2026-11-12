@@ -12,8 +12,10 @@ import {
   type Block,
   blockHash,
   composeRenames,
+  DIFF_COUNT_TIMEOUT_MS,
   type DocLinks,
   decodeText,
+  diffLineCounts,
   docText,
   type FileSides,
   htmlHeadings,
@@ -30,6 +32,7 @@ import {
   renderWriteup,
   resectionBlocks,
 } from "@emend/core";
+import { type ImageSize, imageSize } from "./image-size.ts";
 
 /** One comment's rendered HTML is at most this many characters; a larger one is null. */
 export const COMMENT_HTML_CHARS = 262144;
@@ -40,6 +43,7 @@ export type PlacementDoc = PlaceContext["docs"] extends Map<string, infer T> ? T
 /** Import caches opaque worker output; parsed content never crosses by structured clone. */
 export type EncodedPlacementDoc = { bytes: ArrayBuffer; textBytes: number; encodedBytes: number };
 export type Work =
+  | { kind: "diff-counts"; old: ArrayBuffer | null; next: ArrayBuffer | null }
   | { kind: "source"; path: string; source: ArrayBuffer; highlight?: boolean }
   | { kind: "doc-metadata"; format: "html" | "markdown"; bytes: ArrayBuffer }
   | { kind: "line-count"; bytes: ArrayBuffer }
@@ -52,6 +56,8 @@ export type Work =
       links?: PublishLinks;
       repoUrl?: string;
       media: [string, string][];
+      /** Each distinct media blob's SHA-256 and its first bytes, for reading image sizes in the worker. */
+      mediaHeads?: [string, ArrayBuffer][];
       docs?: DocLinks;
     }
   | { kind: "doc"; path: string; source: ArrayBuffer; repoUrl?: string; docs?: DocLinks }
@@ -78,6 +84,7 @@ export type Work =
     };
 export type DocMetadata = { title?: string; headings: DocHeading[] };
 export type WorkResult =
+  | { kind: "diff-counts"; counts: { additions: number; deletions: number } | null }
   | ({ kind: "doc-metadata" } & DocMetadata)
   | { kind: "line-count"; count: number }
   | { kind: "writeup-source"; source: WriteupInput; links?: PublishLinks; repoUrl?: string }
@@ -109,6 +116,13 @@ export function serializeRendered(value: RenderedWriteup | Block[], pathDependen
 }
 export type Executor = (work: Work) => Promise<WorkResult>;
 export const executeWork: Executor = async (work) => {
+  if (work.kind === "diff-counts")
+    return {
+      kind: "diff-counts",
+      counts: diffLineCounts(work.old === null ? "" : decode(work.old), work.next === null ? "" : decode(work.next), {
+        timeout: DIFF_COUNT_TIMEOUT_MS,
+      }),
+    };
   if (work.kind === "source") {
     const content = await renderSource(decodeText(new Uint8Array(work.source)), work.path, work.highlight);
     return {
@@ -161,10 +175,16 @@ export const executeWork: Executor = async (work) => {
   }
   if (work.kind === "writeup") {
     const effects: { docBaseUsed?: boolean } = {};
+    const mediaSizes = new Map<string, ImageSize>();
+    for (const [sha, head] of work.mediaHeads ?? []) {
+      const size = imageSize(new Uint8Array(head));
+      if (size) mediaSizes.set(sha, size);
+    }
     const rendered = await renderWriteup(work.source, work.topics, {
       links: work.links,
       repoUrl: work.repoUrl,
       media: new Map(work.media),
+      mediaSizes,
       docs: work.docs,
       effects,
     });

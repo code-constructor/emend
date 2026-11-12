@@ -16,7 +16,6 @@ const OWNERS: Record<string, string> = {
   status: "worktree.ts",
   cleanup: "worktree.ts",
   gc: "worktree.ts",
-  tasks: "tasks.ts",
   issues: "issues.ts",
   issue: "issues.ts",
   spawn: "herdr.ts",
@@ -37,18 +36,16 @@ const OWNERS: Record<string, string> = {
 const HELP = `bin/wt: worktrees and the pull request lifecycle
 
 Local:
-  setup [<branch>] [--from <ref>] [--task <NNN> | --issue <n>]
+  setup [<branch>] [--from <ref>] [--issue <n>]
                                                create a worktree with a port and an EMEND_HOME;
                                                    copies the gitignored files .worktreeinclude lists
   list [--json]  (alias: status)                   one row per worktree
                                                    JSON pr: {number,state}, "?" (lookup skipped), or null (no PR)
   cleanup [--discard] [--close-workspace] [<branch|path>]
-  tasks [--json]                                   the task queue
   gc [--prune]                                     report or remove orphans
   repo                                            print origin's GitHub owner/name
 
 herdr / herdr desktop:
-  spawn --brief <text> | --brief-file <path> --slug <slug> [--mode github|local] [--model <m>] [--effort <e>]
   spawn --issue <n> [--mode github] [--model <m>] [--effort <e>]
   notify ...
   agents [--json]                                  agents in registered worktrees, from both backends

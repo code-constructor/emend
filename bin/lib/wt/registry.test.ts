@@ -10,6 +10,7 @@ import {
   PORT_MAX,
   PORT_MIN,
   portRange,
+  readRegistry,
   registryPath,
   setPortRangeForTests,
   withRegistry,
@@ -41,7 +42,6 @@ after(() => env.cleanup());
 const entry = (port: number) => ({
   path: `/nowhere/${port}`,
   port,
-  task: null,
   mode: "github" as const,
   createdAt: "2026-01-01T00:00:00.000Z",
 });
@@ -56,7 +56,7 @@ test("registry survives concurrent writers", async () => {
     for (let i = 0; i < 5; i++) {
       withRegistry(repo, (r) => {
         const port = allocatePort(r, new Set());
-        r.worktrees[tag + "-" + i] = { path: "/nowhere", port, task: null, mode: "github", createdAt: "t" };
+        r.worktrees[tag + "-" + i] = { path: "/nowhere", port, mode: "github", createdAt: "t" };
       });
     }`;
   const args = (tag: string) => ["--input-type=module", "-e", code, fx.main, tag];
@@ -113,15 +113,35 @@ test("a corrupt registry is refused and left alone", () => {
     (e) => e instanceof WtError && e.code === 1,
   );
   assert.equal(readFileSync(registryPath(repo), "utf8"), "{not json");
-  writeFileSync(registryPath(repo), JSON.stringify({ version: 1, worktrees: {}, reservations: {} }));
+  writeFileSync(registryPath(repo), JSON.stringify({ version: 1, worktrees: {} }));
+});
+
+test("a legacy registry with reservations and task keys loads, and a write keeps it valid", () => {
+  writeFileSync(
+    registryPath(repo),
+    JSON.stringify({
+      version: 1,
+      worktrees: { old: { ...entry(PORT_MIN), task: "014" } },
+      reservations: { "014": { branch: "emend-task-014-x", slug: "x", reservedAt: "2020-01-01T00:00:00Z" } },
+    }),
+  );
+  assert.equal(readRegistry(repo).worktrees.old?.port, PORT_MIN);
+  withRegistry(repo, (r) => {
+    r.worktrees.new = entry(PORT_MIN + 1);
+  });
+  assert.deepEqual(Object.keys(readRegistry(repo).worktrees), ["old", "new"]);
+  // a registry without the key loads as well
+  writeFileSync(registryPath(repo), JSON.stringify({ version: 1, worktrees: {} }));
+  assert.deepEqual(readRegistry(repo).worktrees, {});
+  writeFileSync(registryPath(repo), JSON.stringify({ version: 1, worktrees: {} }));
 });
 
 test("allocatePort takes the lowest port neither registered nor busy", () => {
   const { min, max } = portRange();
-  const r = { version: 1 as const, worktrees: { a: entry(min), b: entry(min + 2) }, reservations: {} };
+  const r = { version: 1 as const, worktrees: { a: entry(min), b: entry(min + 2) } };
   assert.equal(allocatePort(r, new Set()), min + 1);
   assert.equal(allocatePort(r, new Set([min + 1, min + 3])), min + 4);
-  const full = { version: 1 as const, worktrees: {} as Record<string, ReturnType<typeof entry>>, reservations: {} };
+  const full = { version: 1 as const, worktrees: {} as Record<string, ReturnType<typeof entry>> };
   for (let p = min; p <= max; p++) full.worktrees[`b${p}`] = entry(p);
   assert.throws(
     () => allocatePort(full, new Set()),
@@ -133,7 +153,7 @@ test("the real range is 3637 to 3656 once the test seam is cleared", () => {
   setPortRangeForTests(null);
   try {
     assert.deepEqual(portRange(), { min: PORT_MIN, max: PORT_MAX });
-    assert.equal(allocatePort({ version: 1, worktrees: {}, reservations: {} }, new Set([3637])), 3638);
+    assert.equal(allocatePort({ version: 1, worktrees: {} }, new Set([3637])), 3638);
   } finally {
     setPortRangeForTests(testPortRange());
   }

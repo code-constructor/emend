@@ -16,7 +16,6 @@ workspace scaffold implements the version command and a minimal browser shell.
 | `plugin` | The Claude Code plugin. `plugin/skills` holds the skills for creating reviews and handling reviewer feedback. |
 | `docs` | The versioned API contract and architecture. |
 | `sync` | Surfaces shared with hunk-review-skill and synthetic fixtures. |
-| `tasks` | The ordered work queue. |
 
 Core has no Node-only or browser-only APIs; WebCrypto is allowed. Both apps can use it without
 introducing a runtime dependency on the other app. Contract and core expose their TypeScript

@@ -43,7 +43,6 @@ const REAP_STALE_MS = 10_000;
 export interface WorktreeEntry {
   path: string;
   port: number;
-  task: string | null;
   issue?: number;
   mode: "github" | "local";
   createdAt: string;
@@ -56,11 +55,10 @@ export interface WorktreeEntry {
 export interface Registry {
   version: 1;
   worktrees: Record<string, WorktreeEntry>;
-  reservations: Record<string, { branch: string; slug: string; reservedAt: string }>;
 }
 
 export function emptyRegistry(): Registry {
-  return { version: 1, worktrees: {}, reservations: {} };
+  return { version: 1, worktrees: {} };
 }
 
 function stateDir(repo: Repo): string {
@@ -174,13 +172,14 @@ function parseRegistry(text: string): Registry {
   } catch {
     throw new WtError(1, "The worktree registry is not valid JSON. Nothing was changed; ask the owner to repair it.");
   }
-  if (!isRecord(data) || data.version !== 1 || !isRecord(data.worktrees) || !isRecord(data.reservations)) {
+  if (!isRecord(data) || data.version !== 1 || !isRecord(data.worktrees)) {
     throw new WtError(1, "The worktree registry has an unexpected shape. Nothing was changed.");
   }
   for (const entry of Object.values(data.worktrees)) {
     if (isRecord(entry) && Object.hasOwn(entry, "hcAddress") && hcAddress(entry.hcAddress) === null)
       throw new WtError(1, "The worktree registry has an invalid hc address. Nothing was changed.");
   }
+  // Older registries may still carry `reservations` and per-entry `task` keys; they are ignored.
   return data as unknown as Registry;
 }
 

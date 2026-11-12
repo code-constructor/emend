@@ -43,10 +43,10 @@ local `main` as one signed commit. The owner pushes `main` later.
 1. Make the review folder `<top>/.wt/review` with `mkdir -p -m 700 <top>/.wt/review`, written out
    literally. It is per worktree and gitignored, and only this worktree's session writes it.
 2. Start `emend-review` in a fresh subagent and tell it "publish only". Give it the target `main`,
-   with `head` set to the full commit hash from step 1 and `base` the merge-base with `main`. Give it
-   the task file. Tell it to use `<top>/.wt/review` as the review folder, in place of a new temporary
-   one. It returns the review id, the revision, the URL, the literal review folder, the directory it
-   published from and the wait command.
+   with `head` set to the full commit hash from step 1 and `base` the merge-base with `main`. Tell it
+   to use `<top>/.wt/review` as the review folder, in place of a new temporary one. It returns the
+   review id, the revision, the URL, the literal review folder, the directory it published from and
+   the wait command.
 3. The subagent set `decisions` to `null`. If this session holds the conversation in which the owner
    asked for the change, write `decisions` into `review.json` in that folder from that conversation,
    then run the republish command from the directory it named. Otherwise leave it `null`.
@@ -102,7 +102,7 @@ restate them here.
 Report that `main` now holds one unpushed commit, give the `<sha>` from the `landed` line, and say the
 owner pushes `main`. Tell the owner to run `node '<main>/scripts/check-public.ts' --push main` in the
 main checkout first: it checks the history of `main` that `origin` does not have yet, not tags or
-other branches. Mention the task file. Then, as the very last call, run
+other branches. Then, as the very last call, run
 `<main>/bin/wt cleanup --close-workspace <branch>`. It removes the worktree and closes the workspace,
 which ends this session. If its safety check fails, leave everything, run `<main>/bin/wt notify blocked`,
 and name the failed check.

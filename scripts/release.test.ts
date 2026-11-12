@@ -140,7 +140,7 @@ test("test/ci commits, even breaking ones, and non-shipped paths do not count", 
   for (const path of [
     "scripts/tool.ts",
     "docs/releasing.md",
-    "tasks/example.md",
+    "sync/example.md",
     "README.md.backup",
     "apps/web-old/x",
   ]) {

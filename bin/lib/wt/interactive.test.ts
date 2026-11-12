@@ -79,9 +79,9 @@ test("wizard offers branches but not main or the caller's branch", () =>
     assert.ok(!withMain.includes("origin/main"), "an origin branch with a local twin is listed once");
   }));
 
-test("interactive choices preserve task names and existing numeric remote branches", () =>
+test("interactive choices preserve plain names and existing numeric remote branches", () =>
   scenario({}, ({ env, repo, fx }) => {
-    for (const branch of ["014-old-task", "emend-task-015-new-task"]) {
+    for (const branch of ["014-old-work", "emend-feature-015-work"]) {
       const wt = setup(repo, { branch });
       assert.ok(branchChoices(repo, false).includes(branch));
       installFake(env, "fzf", [{ stdout: `\n${branch}\n` }]);
@@ -89,9 +89,9 @@ test("interactive choices preserve task names and existing numeric remote branch
       installFake(env, "fzf", [{ stdout: `${branch}\t${wt.path}\n` }]);
       assert.equal(cleanupPicker(repo), branch);
     }
-    // Older numeric task branches remain discoverable even though setup cannot create them without --issue.
-    gitIn(fx.main, "update-ref", "refs/remotes/origin/emend-016-origin-task", "HEAD");
-    assert.ok(branchChoices(repo, false).includes("origin/emend-016-origin-task"));
+    // Older numeric branches remain discoverable even though setup cannot create them without --issue.
+    gitIn(fx.main, "update-ref", "refs/remotes/origin/emend-016-origin-work", "HEAD");
+    assert.ok(branchChoices(repo, false).includes("origin/emend-016-origin-work"));
   }));
 
 test("no TTY or no fzf: wizard, picker and menu return null without calling fzf", () =>
@@ -123,7 +123,7 @@ test("menu returns the picked action", () =>
     installFake(env, "fzf", [{ stdout: "issues\tshow the ready issue queue\n", code: 0 }]);
     assert.equal(menu(repo), "issues");
     installFake(env, "fzf", [{ stdout: "tasks\tshow the task queue\n", code: 0 }]);
-    assert.equal(menu(repo), "tasks");
+    assert.equal(menu(repo), null, "the task queue is gone from the menu");
     installFake(env, "fzf", [{ stdout: "rm -rf\n", code: 0 }]);
     assert.equal(menu(repo), null);
     installFake(env, "fzf", [{ code: 130 }]);

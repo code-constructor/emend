@@ -301,7 +301,7 @@ test("closing keywords follow the registered issue branch and scan comments and 
       assert.throws(() => closingGuard(repo, name, "No closing keyword"), /must close/);
       closingGuard(repo, name, "Closes #42");
     }
-    for (const task of ["emend-task-042-old-task", "042-old-task", "feature-name"])
+    for (const task of ["emend-feature-042-old-task", "042-old-task", "feature-name"])
       closingGuard(repo, task, "No closing keyword required.");
     writeFileSync(join(dir, ".wt/worktree.json"), JSON.stringify({ issue: 43 }));
     assert.throws(() => closingGuard(repo, branch, "Closes #42"), /does not match/);

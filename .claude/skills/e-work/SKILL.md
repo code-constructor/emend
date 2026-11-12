@@ -1,16 +1,15 @@
 ---
 name: e-work
-description: Do a change in a worktree, from a GitHub issue, a task file, a task number or a description, through build, review and commit, then close out as a PR or a local landing. Use when /e-spawn starts a session or when the owner types /e-work.
+description: Do a change in a worktree, from a GitHub issue or a description, through build, review and commit, then close out as a PR or a local landing. Use when /e-spawn starts a session or when the owner types /e-work.
 ---
 
 # /e-work
 
 Input: $ARGUMENTS
 
-A GitHub issue (`#<n>` or its URL), a task file path (`tasks/NNN-slug.md`), a task number, or a plain
-description. A description creates no task file. With no input, use the issue or the task named in
-`.wt/worktree.json` if it has one; otherwise print
-`Usage: /e-work <#issue | task file | NNN | description>` and stop.
+A GitHub issue (`#<n>` or its URL) or a plain description. With no input, use the issue named in
+`.wt/worktree.json` if it has one; otherwise print `Usage: /e-work <#issue | description>` and
+stop.
 
 ## Rules every e-* skill follows
 
@@ -33,7 +32,7 @@ description. A description creates no task file. With no input, use the issue or
    when the branch is `main`, or when the top level is `<main>` itself. Say that `/e-work` runs in a
    worktree on a feature branch, and that `/e-spawn` or `<main>/bin/wt setup` makes one. A new branch starts from local `main`;
    `setup --from <ref>` overrides that.
-2. Read `.wt/worktree.json` for `issue`, `task` and `mode`. For an issue, its `issue` and the number
+2. Read `.wt/worktree.json` for `issue` and `mode`. For an issue, its `issue` and the number
    in the branch name must agree; `bin/wt issue check` and the merge refuse otherwise.
 3. Resolve the input.
    - An issue: the branch must be `emend-<n>-<slug>` for the same `<n>`; otherwise stop. Run
@@ -52,22 +51,15 @@ description. A description creates no task file. With no input, use the issue or
      issue the owner did not release. When a
      linked page or image matters, ask the owner. Never add or remove labels, and never comment on,
      edit or close an issue.
-   - A task number matches `tasks/NNN-*.md`. If the file is missing, stop and say so. Read the task
-     file in full.
 4. If `node_modules` is missing, run `pnpm install --frozen-lockfile`.
 5. Read the closing answer: look for `Closing answer from /e-spawn:` in the first message of this
-   session. Remember its sentence for step 6.
+   session. Remember its sentence for step 5.
 
-## 2. Mark the task started
-
-With a task file, set `status: in-progress` in its frontmatter. Commit it with the first commit of
-real work, not alone. An issue needs nothing here: its branch `emend-<n>-<slug>` marks it as taken.
-
-## 3. Build
+## 2. Build
 
 Follow `AGENTS.md`, "Who does what", and name that route in your plan; do not restate it here.
 
-1. Plan from the task's Steps and Done when, or from the issue's sections. Read the rule files
+1. Plan from the issue's sections, or from the description. Read the rule files
    `AGENTS.md` names for the paths you touch. Stay inside the issue's scope: a gap or a new idea goes
    into the PR body as a follow-up, never into the change.
 2. Codex writes the code through `codex-agent`, as `AGENTS.md` says. If Codex cannot run, a Sonnet
@@ -81,25 +73,23 @@ Follow `AGENTS.md`, "Who does what", and name that route in your plan; do not re
 5. Apply the sync rule in `AGENTS.md`: check the change against the sibling project and add the
    `Sync:` trailer it asks for. `pnpm check:sync` holds the rule.
 
-## 4. Commit
+## 3. Commit
 
 Commit each logical change as it passes its checks. Do not ask.
 
 - Stage the paths of the change, then run `git commit` with the message. See the commit rule above.
 - Conventional Commits, scope from `AGENTS.md`, summary lowercase and at most 72 characters. The body
-  names the task file, or the issue as `Issue #<n>`. Trailers: `Sync:` and `BREAKING CHANGE:` only.
+  names the issue as `Issue #<n>`. Trailers: `Sync:` and `BREAKING CHANGE:` only.
 
-## 5. Before closing
+## 4. Before closing
 
-With an issue, run `<main>/bin/wt issue check` again before step 6; any exit but 0 stops the work
+With an issue, run `<main>/bin/wt issue check` again before step 5; any exit but 0 stops the work
 as in step 1.
 
-1. Tick the finished steps in the task file. Set `status: done` and `done_on: <today, YYYY-MM-DD>`.
-   Add one Notes line. Commit this as its own change.
-2. `pnpm verify` must be green at exactly this content, and the tree must be clean.
-3. Without a task file (an issue or a description), skip step 1. The PR closes an issue on merge.
+`pnpm verify` must be green at exactly this content, and the tree must be clean. The PR closes an
+issue on merge.
 
-## 6. Closing
+## 5. Closing
 
 If the first message holds a `Closing answer from /e-spawn:` sentence, that sentence answers the
 question. Ask nothing. Otherwise run `<main>/bin/wt notify question`, then ask once, with these
@@ -121,7 +111,7 @@ Then:
 When a step stops with a problem you cannot resolve, run `<main>/bin/wt notify blocked`, say what
 stopped, and stop.
 
-## 7. Under /loop
+## 6. Under /loop
 
 `/e-spawn` starts this session as `/loop /e-work …`. A `/loop` with a prompt skips
 `.claude/loop.md`, so this section steers each pass. The loop must end with the work.
@@ -129,7 +119,7 @@ stopped, and stop.
 - At the start of every pass after the first, and before every review round, check the course
   for yourself:
   - **Finishing or polishing?** The issue's "Done when" decides. When it holds, complete the
-    rounds `.claude/rules/review-rounds.md` requires, then close out (step 5). Do not look for
+    rounds `.claude/rules/review-rounds.md` requires, then close out (step 4). Do not look for
     more to improve.
   - **Converging?** A test or `pnpm verify` that fails again after a fix, or a fix a check round
     calls NOT FIXED or REGRESSED, means the cause is not found. Revert that fix and trace the root

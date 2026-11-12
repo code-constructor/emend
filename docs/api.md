@@ -110,11 +110,16 @@ a machine token reaches only reviews from its own instance.
 | POST | `/api/v1/threads/:id/resolve` | Reviewer | Resolve a thread. |
 | POST | `/api/v1/threads/:id/reopen` | Reviewer | Reopen a thread. |
 | POST | `/api/v1/reviews/:id/sends` | Reviewer | Send feedback or approve the revision on screen. |
-| POST | `/api/v1/reviews/:id/snooze` | Reviewer | Move an open review to Snoozed (204); see "Snooze, retire and delete". |
+| POST | `/api/v1/reviews/:id/snooze` | Reviewer | Move an open review to Snoozed (204); see "Snooze, retire, delete and the bin". |
 | POST | `/api/v1/reviews/:id/unsnooze` | Reviewer | End a snooze (204). |
 | POST | `/api/v1/reviews/:id/retire` | Reviewer | Mark an open review done without an approval (204). |
 | POST | `/api/v1/reviews/:id/reopen` | Reviewer | Reopen a retired review (204). |
-| DELETE | `/api/v1/reviews/:id` | Reviewer | Delete the review and its records (204). |
+| DELETE | `/api/v1/reviews/:id` | Reviewer | Delete the review and its records for good (204), in the bin or not. |
+| POST | `/api/v1/reviews/:id/bin` | Reviewer | Move the review to the bin (204); see "Snooze, retire, delete and the bin". |
+| POST | `/api/v1/reviews/:id/restore` | Reviewer | Take the review out of the bin (204). |
+| GET | `/api/v1/bin` | Reviewer | Page through binned reviews as `BinView` (200), with optional `beforeAt` and `beforeId` together. |
+| DELETE | `/api/v1/bin` | Reviewer | Delete the confirmed bin if its version matches `EmptyBinRequest.version` (204). |
+| DELETE | `/api/v1/bin/:id` | Reviewer | Delete a review for good only while it is still in the bin (204). |
 | POST | `/api/v1/reviews/:id/take` | Agent | Claim a delivery with `{waitSeconds?: 0..25, maxBytes?: 65536..16777216, accepts?: ["closed"]}`. |
 | POST | `/api/v1/deliveries/:id/confirm` | Agent | Confirm receipt of a claimed delivery. |
 | POST | `/api/v1/comments/:id/reply` | Agent | Answer a comment with an outcome. |
@@ -148,6 +153,10 @@ stored media type of `image/png`, `image/jpeg`, `image/gif`, `image/webp` or `im
 row, a diff side, an SVG, an HTML doc's own asset or any other asset, a foreign owner's row, a
 missing stored blob, or one whose size or bytes do not match its hash returns `404 not_found`
 before any byte is sent.
+An image used only by reviews in the bin also returns `404 not_found`. Media is addressed by
+hash and may be shared, so it never answers `review_in_bin`; another readable review using the
+same image keeps it available, and Restore makes it available again. A moved local copy remains
+readable even if it was binned before the move.
 Otherwise it returns `200` with the stored bytes, `Content-Length`, `Content-Type` set to the
 row's stored media type, `X-Content-Type-Options: nosniff`, `Cross-Origin-Resource-Policy: same-origin`,
 `Cache-Control: no-store`, `Content-Disposition: inline` and
@@ -159,8 +168,12 @@ image source, relative or absolute, is dropped, in writeups, Markdown docs and c
 path never contains a colon. The renderer drops any query or fragment, strips a leading `./`, percent-decodes, and refuses a
 result with a `..` segment, a leading `/`, a scheme, a backslash, a control character or an
 invalid or encoded-slash escape. A match becomes
-`<span class="emend-media"><img src="/api/v1/media/<sha256>" alt loading="lazy" decoding="async"><span class="emend-media-caption">…</span></span>`;
-the caption is the alt text, or the file name when the alt text is empty. A paragraph holding only
+`<span class="emend-media"><img src="/api/v1/media/<sha256>" alt loading="lazy" decoding="async" width height><span class="emend-media-caption">…</span></span>`;
+the caption is the alt text, or the file name when the alt text is empty. `width` and `height` are
+the image's displayed pixel size, read by the server from the stored bytes at publish (JPEG EXIF
+orientation applied); they are absent when the server cannot read the size. The wrapper span also has
+the class `emend-media-sized` exactly when the server sent `width` and `height`. On a writeup media image,
+author-written width and height are always dropped. A paragraph holding only
 such images also has the class `emend-media-row`. Author classes keep the `user-content-`
 prefix, so they never match the generated classes. A block's id covers each image's alt text, path
 and SHA-256, so a re-shot image at the same path shows as changed. Markdown docs render no
@@ -269,7 +282,7 @@ period) or an unexpired direct-wait row for the same owner and review. Direct wa
 views reflect direct writes on their next load.
 
 `GET /api/v1/reviews` returns `InboxList = { items: InboxItem[], serverTime: string, approvedActiveHours: ApprovedActiveHours }`.
-`approvedActiveHours` is the effective window used for this response.
+`approvedActiveHours` is the effective window used for this response. Reviews in the bin are in none of the lists.
 `serverTime` is the server's clock when it built the list, as an ISO 8601 UTC string.
 The Active list holds open reviews
 whose snooze is not in effect and reviews approved within that window (12 hours by default). A review with a waiting
@@ -300,7 +313,14 @@ these fields read as `main: null`, `writeupEmpty: false` and keep opening on Wri
 Without an explicit visible `tab` in the URL, the app opens the main page when set; otherwise
 it opens Writeup if it has text, the first doc in manifest order, Diff if any file has role
 `diff`, or Writeup when there is nothing. A main doc opens Docs scrolled to that document.
-`FileView = { id, path, oldPath, role, status, topic, order, mediaType, flag, hasOld, hasNew, viewed?, viewedOn?, notes?, view?: "source" }`.
+`FileView = { id, path, oldPath, role, status, topic, order, mediaType, flag, hasOld, hasNew, counts?, viewed?, viewedOn?, notes?, view?: "source" }`.
+
+`counts` is `{ additions, deletions }` lines, counted at publish with the same line diff the app uses.
+It is absent for flagged files, for docs, for a file whose diff exceeded the per-file time limit
+or the revision's counting budget, and for revisions published before the field existed.
+The app also uses counts from diffs it has loaded. It marks a total as partial while a changed
+text file has neither server nor loaded counts; the mark goes once every such file has loaded.
+
 `notes` is present only for files with agent notes. Each `AgentNoteView` adds a UUID `id` to
 `AgentNote` below. Notes are read-only revision content, separate from reviewer comments.
 `oldPath`, `status`, `topic` and `flag` are nullable. Files are in their stored order; assets
@@ -328,6 +348,12 @@ is sent. The doc receives an inline selection/highlight bridge; assets retain th
 `Content-Length`.
 Content-Type is the stored media type, with `; charset=utf-8` for `text/*`, `application/json`
 and `image/svg+xml`; the doc is `text/html; charset=utf-8`.
+
+The bridge also inserts one style element first in the doc's head, in the cascade layer
+`emend-fallback`: `pre { overflow-x: auto; }`. Declared first and layered, it loses to every
+document-level rule of the doc's own CSS, so a code block the doc leaves unstyled scrolls inside its
+own box instead of widening the doc. A `::slotted(pre)` rule in a shadow root does not override it:
+the cascade ranks the outer document's rules above a shadow tree's.
 
 Asset and error responses under `/content/` send:
 
@@ -496,7 +522,7 @@ invalid sequences of an owned review return `404 not_found`. Agent tokens receiv
 scope and lists only the principal owner's reviews whose origin is the token's own instance, so a
 machine token never sees another instance's or another owner's reviews. Items run newest
 `updatedAt` first, review id as the stable tie breaker, at most `agentReviews` (100) rows, with no
-pagination. The list has no inbox filter: snoozed, approved and retired reviews appear with their
+pagination. Binned reviews are left out. The list has no other inbox filter: snoozed, approved and retired reviews appear with their
 stored `state` (`open`, `approved` or `settled`). `updatedAt` is an ISO 8601 UTC string. `url` is
 the review's address on this server. The list carries no comment bodies,
 writeup text, doc content, tokens or other ids. A reviewer session receives `403 forbidden`.
@@ -593,6 +619,11 @@ a missing or invalid JSON record, credentials, path, query or fragment falls bac
 `revision` is a positive integer sequence, and the placement counts are nonnegative integers.
 
 ### Machines and import
+
+`emend attach` refuses a hub whose capabilities lack `review-bin` while this machine holds an
+unmoved binned review originating on this machine. It refuses before registering or copying
+anything. A review binned during the copy is skipped when that hub lacks `review-bin`, including
+on a resend, and stays in the local bin without being marked as moved.
 
 `POST /machines` accepts `MachineRegistration`: exactly one of `secret` and `code`, with
 `instance: { id: UUID, name: string }` (1–200 characters). Secret and code formats and
@@ -718,7 +749,10 @@ with the review. Failed imports may leave unreferenced immutable bytes, as publi
 `ImportResult = { skipped, deleted? }`. A review the owner deleted on the hub is answered
 `{ skipped: true, deleted: true }` (200): the hub keeps a tombstone by review id, so a repeated
 `emend attach` never brings it back. A retired review is exported with its `settled` state; the
-snooze is not part of the bundle.
+snooze is not part of the bundle. `review.binnedAt` is optional and nullable (an ISO timestamp,
+clamped to at most the hub clock like the other timestamps); a review exported from the bin lands
+in the hub's bin, and a bundle without it is not binned. A review the hub already holds, in its
+bin or not, is skipped like any existing review and never restored by a repeated attach.
 
 The hub records its copy time in nullable `ReviewView.importedAt`; ordinary local reviews use
 null (older responses lacking this additive field parse as null). Imported `movedTo` is ignored.
@@ -784,7 +818,7 @@ Content-Length is checked first; credentials and scope are checked before readin
 Blob lookups never expose another owner's content.
 
 Publish resolves an explicit id only for the authenticated owner and origin instance, otherwise
-404 `unknown_review`. A moved review returns 409 `review_moved`. Without an id the server
+404 `unknown_review`. A moved review returns 409 `review_moved`, and a review in the bin 409 `review_in_bin`. Without an id the server
 atomically finds or creates by owner, token instance and review key. Missing referenced blobs
 return 400 `blob_missing`. Each successful publish adds a revision, reopens the review, and
 reports placement counts for that revision. Media types and role size limits are server enforced.
@@ -963,12 +997,12 @@ doc spans retain `path` and `blockId`; HTML spans retain `path`. Line locations 
 use the same fields as their targets. Placement describes the newest revision; a thread keeps its
 original target separately.
 
-### Snooze, retire and delete
+### Snooze, retire, delete and the bin
 
-All five routes are reviewer-only (scope `send`): an agent or admin bearer, or a reviewer token
+All ten routes (the five below, bin, restore and the three `/bin` routes) are reviewer-only (scope `send`): an agent or admin bearer, or a reviewer token
 sent as a bearer, is refused before any lookup. A missing or foreign review is `404 unknown_review`.
 Each runs in one transaction and emits its event after the commit. A wrong state is `409 invalid_state`.
-Capabilities lists the feature `review-lifecycle`.
+Capabilities lists the features `review-lifecycle` and `review-bin`.
 
 - `POST /reviews/:id/snooze`, body `SnoozeRequest = { until: datetime } | { untilRevision: true }`
   (strict, exactly one). `until` must lie in the future and at most `MAX_SNOOZE_DAYS` (366) days
@@ -994,11 +1028,64 @@ Capabilities lists the feature `review-lifecycle`.
   failure there is logged and never changes the response. A later take on the id is `404 unknown_review`. A publish with
   the same key creates a new review with a new id and URL.
 
+- `POST /reviews/:id/bin` moves a review to the bin. It sets `binnedAt` to now and changes nothing
+  else: state, snooze, approval, `updatedAt`, revisions, threads, comments, Sends, deliveries and
+  viewed marks stay. A moved review is `409 review_moved`; a review already in the bin is
+  `409 review_in_bin`. Returns 204; emits `bin` (its `revision` is the newest). Nothing leaves the
+  bin on its own: no timer or purge removes a binned review.
+- `POST /reviews/:id/restore` clears `binnedAt` and nothing else, so the review returns to the list
+  and place it had. A review that is not in the bin is `409 invalid_state`. Returns 204; emits
+  `restore`.
+- `GET /bin` returns `BinView = { items: BinItem[], total: number, more: boolean, version: string }` with
+  `BinItem = { id, title, machine, binnedAt }`. `machine` is the name of the review's origin
+  instance. Items run in `binnedAt` descending, `id` ascending order, at most `binItems` (200)
+  rows per page. Optional query parameters `beforeAt` (ISO datetime) and `beforeId` (UUID)
+  continue strictly after that item in this order. Give both or neither; one alone or an invalid
+  value is `400 invalid_request`. `more` is true when items remain after this page; `total` counts
+  every binned review of the owner, across all pages. Moved local copies are not listed or counted
+  in the local bin: the hub's copy is the live one in the hub's bin. `version` is the SHA-256,
+  encoded as 64 lowercase hex characters, of the sorted ids of every binned, unmoved review of
+  the owner, joined by `\n`. Items, `total`, `more` and `version` come from one SQL snapshot; every page of
+  an unchanged bin carries the same version. Any bin, restore, import, move mark or delete that
+  changes this membership changes the version, regardless of timestamps or clock adjustments.
+- `DELETE /bin/:id` deletes the review exactly like `DELETE /reviews/:id`, but checks inside the
+  delete transaction that it is still in the bin. Otherwise it returns `409 invalid_state`.
+  A missing, foreign or other-owner review is `404 unknown_review`; a moved local copy is
+  `409 review_moved`.
+- `DELETE /bin` requires `EmptyBinRequest = { version: string }` (strict), with 64 lowercase hex
+  characters; a missing or invalid body is `400 invalid_request`. The web sends the `version`
+  from its first loaded page, frozen with the displayed `total` when the confirmation dialog
+  opens. Before deleting anything, the server reads the owner's current binned, unmoved ids and
+  their version in one read. If the version differs, it returns `409 invalid_state` with
+  `bin_changed` detail and deletes nothing. The web closes the dialog, refreshes the bin and shows
+  the server's message. Empty bin selects exactly the confirmed set or deletes nothing; each selected review
+  is deleted exactly like `DELETE /reviews/:id`: its own transaction, its tombstone, its
+  repository cleanup and its `delete` event after the commit, and blob cleanup after the response.
+  Each transaction checks again that the review is still in the bin, so a review restored
+  meanwhile stays. A review binned or imported after the version read is outside the selected
+  ids and stays. The loop yields between reviews. Returns 204. If a later delete fails, earlier
+  deletes stay committed and their blob cleanup still runs; the request returns the delete error.
+- `DELETE /reviews/:id` keeps working on a binned review and deletes it for good.
+
+A binned review acts as deleted for agents and leaves every list. A take (`emend wait`,
+`emend feedback`, the MCP tools), a waiter, an agent reply, a publish to it by id or by key, and
+every reviewer read or write of the review, its revisions, files, threads, comments, Sends, viewed
+marks, snooze, retire and reopen answer `409 review_in_bin`. `/media/:sha256` is the exception:
+an image used only by binned reviews answers `404 not_found`, as described under Writeup media.
+A moved local copy takes precedence over the bin: reads by id return the normal view with
+`movedTo`, and its revisions, files and media remain readable. Mutations still answer
+`409 review_moved`, including bin and restore. Confirming or releasing a delivery that
+was claimed before the review was binned stays available. The inbox, its counts and the agent list
+leave binned reviews out. The content path is unchanged. A missing, foreign or other-origin review
+stays `404 unknown_review`. A publish that is refused with `review_in_bin` adds no review and no
+revision; blobs uploaded before it stay unreferenced, as after any failed publish. Bin ends a
+waiting take at once, like retire and delete.
+
 A take that finds no deliverable Send, on a review that is retired or snoozed, answers
 `closed` (below) when the request lists `"closed"` in `accepts`, and `409 review_closed`
 otherwise, so a client that does not know `closed` stops instead of waiting. A pending Send is
 delivered first. `closed` is a status answer, not a hand-off: it repeats on every later take while
-the review stays retired or snoozed. Retire, snooze and delete end a waiting take at once; `unsnooze`
+the review stays retired or snoozed. Retire, snooze, bin and delete end a waiting take at once; `unsnooze`
 and `reopen` never end one.
 
 ### Sends, replies and waiting
@@ -1045,7 +1132,7 @@ endpoints use `text/event-stream`, `Cache-Control: no-store` and a keepalive eve
 data and is not a `ReviewEvent`. (A comment line would fire no browser event, and an event with
 an empty data buffer is never dispatched.) A client may treat about 40 seconds without any frame
 (`ping` or review event) as a dead stream and reconnect. `ReviewEventName` is
-`publish | send | thread | waiting | claimed | confirmed | viewed | snooze | unsnooze | retire | reopen | delete`. `ReviewEvent` has a `type`
+`publish | send | thread | waiting | claimed | confirmed | viewed | snooze | unsnooze | retire | reopen | delete | bin | restore`. `ReviewEvent` has a `type`
 discriminator and the same fields as its SSE payload. The SSE `event` line supplies
 `type`; the JSON `data` is:
 
@@ -1058,7 +1145,7 @@ discriminator and the same fields as its SSE payload. The SSE `event` line suppl
 | `claimed` | `{ reviewId, revision }` |
 | `confirmed` | `{ reviewId, revision, deliveryId }` |
 | `viewed` | `{ reviewId }` |
-| `snooze`, `unsnooze`, `retire`, `reopen`, `delete` | `{ reviewId, revision }` |
+| `snooze`, `unsnooze`, `retire`, `reopen`, `delete`, `bin`, `restore` | `{ reviewId, revision }` |
 
 Events contain ids and, except for `viewed`, a positive revision sequence only, never paths, text bodies or
 instructions. `claimed` follows a successful take; `confirmed` follows a successful
@@ -1169,7 +1256,11 @@ a newer approval remains intact.
 A merged Go and Approve delivers Go with `approvalSetAside: true`. The CLI prints one JSON object
 for Go, Approve, Closed or Pending and exits 0; errors print one line to stderr, nothing to stdout,
 and exit 1. A take on a deleted or unknown review prints `review <id> was deleted or never existed`
-(`review <id> was deleted on the hub` for a local copy that moved to the hub).
+(`review <id> was deleted on the hub` for a local copy that moved to the hub). A take or a reply on
+a binned review prints `review <id> is in the bin`. `emend publish --review <id>` on one prints
+`review <id> is in the bin. Restore it in Settings, or publish without --review and with a new
+--key for a new review.`, and a publish by key prints `the review this publish would update is in
+the bin. Restore it in Settings, or pass a new --key for a new review.`
 Synthetic examples live in `packages/contract/fixtures/wait-*.json`.
 
 ## Limits
@@ -1182,6 +1273,7 @@ limit with `413 too_large` before parsing. Upload content also has the role's by
 | --- | ---: |
 | `inboxItems` | 200 reviews returned in the inbox |
 | `agentReviews` | 100 reviews returned in the agent list |
+| `binItems` | 200 reviews returned in the bin list |
 | `importRevisions` | 1000 revisions per import |
 | `importThreads` | 1000 threads per import |
 | `importComments` | 10000 comments per import |
@@ -1297,6 +1389,7 @@ escaped line on stderr.
 | `unsent_comments` | 409 | An Approve is attempted while unsent comments remain. |
 | `instance_attached` | 409 | The instance already has a live machine device; the pairing remains usable. |
 | `review_moved` | 409 | A mutation targets a local review moved to a hub. |
+| `review_in_bin` | 409 | The review is in the bin and the operation is not restore, delete for good or the settling of a delivery claimed before. |
 | `review_closed` | 409 | A take finds the review retired or snoozed and the client did not list `closed` in `accepts`. |
 | `invalid_state` | 409 | A lifecycle action does not fit the review's state, or a Send targets a retired review. |
 | `publish_conflict` | 409 | The revision or thread set changed during publish computation on three attempts; retry publishing. |

@@ -1,6 +1,8 @@
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
-import { LIMITS, MachineRegistered, MachineRegistration } from "@emend/contract";
+import { LIMITS, MachineRegistered, MachineRegistration, REVIEW_BIN_FEATURE } from "@emend/contract";
+import { and, eq, isNotNull, isNull } from "drizzle-orm";
+import { reviews } from "../../db/schema.ts";
 import type { Io } from "../../main.ts";
 import { initializeServerState } from "../../server/state.ts";
 import { stateAccessError, writeSecretFile } from "../../state/files.ts";
@@ -60,9 +62,31 @@ async function attach(stateDir: string, link: ReturnType<typeof pairingLink>, io
     throw new CliError(`the server at ${link.origin} cannot accept machines.`);
   const state = await initializeServerState(stateDir, { tokens: false });
   try {
+    const hubHasBin = capabilities.features.includes(REVIEW_BIN_FEATURE);
+    if (!hubHasBin) {
+      const binned = await state.db.read((q) =>
+        q
+          .select({ id: reviews.id })
+          .from(reviews)
+          .where(
+            and(
+              eq(reviews.ownerId, state.ownerId),
+              eq(reviews.originInstanceId, state.instance.id),
+              isNotNull(reviews.binnedAt),
+              isNull(reviews.movedToUrl),
+            ),
+          )
+          .limit(1)
+          .get(),
+      );
+      if (binned)
+        throw new CliError(
+          `the server at ${link.origin} has no bin yet. Update emend there, or restore or delete the reviews in this machine's bin first.`,
+        );
+    }
     signal.throwIfAborted();
     if (!pair) pair = await register(stateDir, link, state.instance, io, signal);
-    const result = await copyReviews(stateDir, state, attachedTarget(pair), io, signal);
+    const result = await copyReviews(stateDir, state, attachedTarget(pair), io, hubHasBin, signal);
     io.stderr(
       `emend: attached to ${safeMessage(pair.attachment.hubName)}; copied ${result.copied} reviews, skipped ${result.skipped}.\n`,
     );

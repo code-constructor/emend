@@ -5,6 +5,8 @@
       "Read(/**/.env)",
       "Read(/**/.env.*)",
       "Read(//**/.private-terms)",
+      "Read(//proc/**)",
+      "Read(//run/user/**)", 
       "Edit(//**/.private-terms)",
       "Edit(//**/.claude/hooks/**)",
       "Edit(//**/.claude/settings.json)",
@@ -27,7 +29,8 @@
       "Read(~/.kube/**)",
       "Read(~/.config/rclone/**)",
       "Read(~/.local/share/keyrings/**)",
-      "Read(~/.config/op/**)"
+      "Read(~/.config/op/**)",
+      "mcp__github" 
     ]
   },
   "hooks": {

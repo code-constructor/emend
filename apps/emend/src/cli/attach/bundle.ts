@@ -49,10 +49,13 @@ export async function snapshot(
   reviewId: string,
   movedToUrl: string,
   now: number,
+  hubHasBin: boolean,
 ) {
   const where = and(eq(reviews.ownerId, ownerId), eq(reviews.originInstanceId, instanceId), eq(reviews.id, reviewId));
   const review = await q.select().from(reviews).where(where).get();
   if (!review || (review.movedToUrl && review.movedToUrl !== movedToUrl)) return { kind: "skipped" as const };
+  // Recheck under the writer lock: binning can race registration and earlier copies, even on a resend.
+  if (!hubHasBin && review.binnedAt !== null) return { kind: "skipped" as const };
   const resend = review.movedToUrl === movedToUrl;
   const live = await q
     .select({ id: deliveries.id })
@@ -143,7 +146,12 @@ export async function snapshot(
     .where(and(eq(deliveries.ownerId, ownerId), eq(deliveries.reviewId, reviewId)))
     .orderBy(sql`${deliveries}.rowid`);
   const prepared = prepareBundle({
-    review: { ...dates(review), repo: repo ?? null, project: review.project },
+    review: {
+      ...dates(review),
+      repo: repo ?? null,
+      project: review.project,
+      binnedAt: review.binnedAt === null ? null : iso(review.binnedAt),
+    },
     revisions: revisionRows.map((r) => ({ ...r, createdAt: iso(r.createdAt) })),
     topics: topicRows.map((t) => ({
       ...t,

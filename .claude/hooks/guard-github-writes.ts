@@ -55,13 +55,16 @@
 // values/brace products also have fixed bounds. No inspected command or probe is executed.
 // bin/wt is trusted code read from the main checkout. Never execute the inspected command.
 // Strict GraphQL --input allows .wt JSON; earlier background jobs can race the check and gh's read.
+// In a worker worktree every hc or herdr command is denied, whatever its subcommand.
+// The main checkout gets no decision for it.
+// gh pr merge, review, comment and other PR writes ask in the main checkout; workers may post.
 // Requires Node with native type stripping (the repo requires Node 24 or newer).
 import { spawnSync } from "node:child_process";
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readSync, realpathSync } from "node:fs";
 import { devNull, tmpdir } from "node:os";
 import path from "node:path";
 
-type Finding = "token" | "private-terms" | "tamper" | "complex" | "write" | undefined;
+type Finding = "token" | "private-terms" | "tamper" | "complex" | "write" | "terminal" | "pr-write" | "terminal-pr" | undefined;
 
 // Token identity survives decoding and variable substitution; quoted operators are operands.
 const operatorTokens = new WeakMap<string[], Set<number>>();
@@ -114,6 +117,11 @@ function strongest(a: Finding, b: Finding): Finding {
   if (a === "private-terms" || b === "private-terms") return "private-terms";
   if (a === "tamper" || b === "tamper") return "tamper";
   if (a === "complex" || b === "complex") return "complex";
+  if (a === "write" || b === "write") return "write";
+  // terminal denies in a worker, pr-write asks in main; both together need both effects.
+  const terminal = [a, b].some((x) => x === "terminal" || x === "terminal-pr");
+  const prWrite = [a, b].some((x) => x === "pr-write" || x === "terminal-pr");
+  if (terminal && prWrite) return "terminal-pr";
   return a ?? b;
 }
 
@@ -2230,6 +2238,12 @@ function apiWrite(words: string[]): boolean {
   return unknownFlag || !["GET", "HEAD"].includes((method ?? (body ? "POST" : "GET")).toUpperCase());
 }
 
+// gh pr subcommands that write to a pull request (checkout brings fork content into the tree).
+const prWriteSubcommands = new Set([
+  "merge", "review", "comment", "close", "reopen", "edit", "ready", "lock", "unlock", "create",
+  "update-branch", "revert", "checkout",
+]);
+
 function ghFinding(words: string[], namedGh = true): Finding {
   const start = skipFlags(words, 0);
   const group = words[start];
@@ -2259,6 +2273,7 @@ function ghFinding(words: string[], namedGh = true): Finding {
   )
     return "write";
   if (group === "api" && apiWrite(words.slice(start + 1))) return "write";
+  if (group === "pr" && prWriteSubcommands.has(subcommand)) return "pr-write";
   return undefined;
 }
 
@@ -3751,6 +3766,8 @@ function commandFinding(
     }
     if (credentialCommand(command, args)) finding = strongest(finding, "token");
     if (readsCredentialDirectory(command, args, context.dotglob)) finding = strongest(finding, "token");
+    // hc (herdr desktop) and herdr type into and read other terminals, whatever the subcommand.
+    if (command === "hc" || command === "herdr") finding = strongest(finding, "terminal");
     // Unlike field values, a command substitution can contain spaces or '=' and still be gh.
     // Always inspect the actual command after assignments and wrappers have been skipped.
     if (command === "gh" || nonliteral.test(words[i] ?? "")) {
@@ -4296,6 +4313,19 @@ if (typeof command === "string") {
       "deny",
       "Agents never change guard hooks, Claude settings, or git metadata used to locate the hooks. Workers change worktrees only through bin/wt. These direct changes are denied in the main checkout too; the owner maintains the guard.",
     );
+  } else if (finding === "terminal" || finding === "pr-write" || finding === "terminal-pr") {
+    if (mainCheckout(input.cwd)) {
+      if (finding !== "terminal")
+        decide(
+          "ask",
+          `This command writes to a GitHub pull request with the owner's login. Confirm: ${command.replace(/\s/g, " ").slice(0, 200)}`,
+        );
+    } else if (finding !== "pr-write") {
+      decide(
+        "deny",
+        "Workers never drive herdr or herdr desktop; bin/wt does that. Typing into another terminal is denied in worktrees.",
+      );
+    }
   } else if (finding === "write" && !strictGraphqlInput(command, input.cwd)) {
     if (mainCheckout(input.cwd)) {
       decide(

@@ -1,4 +1,5 @@
 export { htmlAssetReferences } from "./assets.ts";
+export { DIFF_COUNT_TIMEOUT_MS, diffLineCounts } from "./diff-counts.ts";
 export { htmlHeadings, markdownHeadings } from "./doc-headings.ts";
 export { cleanDocTitle, inferDocTitle, markdownTitle } from "./doc-title.ts";
 export { headingLookups } from "./heading-lookups.ts";
@@ -15,6 +16,7 @@ export { blockHash } from "./render/hash.ts";
 export { HIGHLIGHT_FENCE_BYTES, HIGHLIGHT_LINE_CHARS, HIGHLIGHT_RENDER_BYTES } from "./render/highlight.ts";
 export { renderCommentHtml, renderDoc, renderMarkdown, renderMetadataBlocks } from "./render/markdown.ts";
 export { normalizeText } from "./render/normalize.ts";
+export type { MediaSize } from "./render/sanitize.ts";
 export * from "./render/source.ts";
 export { type RenderedWriteup, renderWriteup } from "./render/writeup.ts";
 

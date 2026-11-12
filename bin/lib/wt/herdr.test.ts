@@ -17,7 +17,6 @@ import {
 import { issueSnapshot, pickIssue } from "./issues.ts";
 import { readRegistry } from "./registry.ts";
 import { type Repo, resolveRepo } from "./repo.ts";
-import { reserveTask } from "./tasks.ts";
 import {
   type FakeRule,
   type Fixture,
@@ -90,22 +89,12 @@ function captureStdout(fn: () => void): string {
   return out;
 }
 
-const BRIEF = [
-  "---",
-  "id: NNN",
-  "title: Add thing",
-  "status: open",
-  "---",
-  "",
-  "# NNN — Add thing",
-  "",
-  "Do it.",
-  "",
-].join("\n");
+const BRANCH = "emend-42-fix-the-review-pane";
+const AGENT = "wt-emend-42-fix-the-review-pane";
 
-function writeBrief(main: string, name = "add-thing.md", text = BRIEF): void {
-  mkdirSync(join(main, ".wt", "spawn"), { recursive: true });
-  writeFileSync(join(main, ".wt", "spawn", name), text);
+/** The gh fake for one ready issue 42, the issue every spawn test below uses. */
+function readyIssueGh(env: TestEnv): void {
+  installFake(env, "gh", issueRules([readyIssue(42)]));
 }
 
 const json = (result: Record<string, unknown>) => JSON.stringify({ result });
@@ -142,10 +131,7 @@ function herdrRules(agent: string, extra: FakeRule[] = []): FakeRule[] {
   ];
 }
 
-/** The arguments of a spawn call whose brief is the fixture's .wt/spawn/add-thing.md. */
-function spawnArgs(main: string): string[] {
-  return ["spawn", "--brief-file", join(main, ".wt", "spawn", "add-thing.md"), "--slug", "add-thing"];
-}
+const SPAWN_ARGS = ["spawn", "--issue", "42"];
 
 function processInfo(pids: number[], shell = 10): FakeRule {
   return {
@@ -208,8 +194,9 @@ test("spawn waits for the pane shell before agent start", () =>
   scenario({}, ({ env, repo }) =>
     inHerdr(async () => {
       const clock = fakeClock();
-      installFake(env, "herdr", herdrRules("wt-emend-task-001-add-thing", [{ ...processInfo([20]), times: 2 }]));
-      await spawn(repo, { brief: BRIEF, slug: "add-thing", mode: "github" }, clock);
+      readyIssueGh(env);
+      installFake(env, "herdr", herdrRules(AGENT, [{ ...processInfo([20]), times: 2 }]));
+      await spawn(repo, { issue: 42, mode: "github" }, clock);
       assert.deepEqual(clock.sleeps, [250, 250]);
       const steps = fakeCalls(env, "herdr").map((c) => c.slice(0, 2).join(" "));
       assert.deepEqual(steps, [
@@ -228,21 +215,21 @@ test("spawn still tries agent start after the pane wait expires and preserves it
   scenario({}, ({ env, repo }) =>
     inHerdr(async () => {
       const clock = fakeClock();
+      readyIssueGh(env);
       installFake(
         env,
         "herdr",
-        herdrRules("wt-emend-task-001-add-thing", [
+        herdrRules(AGENT, [
           processInfo([20]),
           { match: ["agent", "start"], code: 1, stderr: failWith("agent_pane_busy") },
         ]),
       );
-      await assert.rejects(spawn(repo, { brief: BRIEF, slug: "add-thing", mode: "github" }, clock), (e: unknown) => {
+      await assert.rejects(spawn(repo, { issue: 42, mode: "github" }, clock), (e: unknown) => {
         assert.ok(e instanceof WtError);
         assert.equal(e.code, 1);
         assert.match(e.message, /agent_pane_busy/);
         assert.match(e.message, /no agent was started/);
-        assert.match(e.message, /task number 001 stays reserved/);
-        assert.match(e.message, /cleanup emend-task-001-add-thing/);
+        assert.match(e.message, /cleanup emend-42-fix-the-review-pane/);
         return true;
       });
       assert.equal(clock.now(), 30_000);
@@ -274,7 +261,7 @@ for (const mode of ["github"] as const) {
       const path = join(repo.worktreesDir, "emend-42-fix-the-review-pane");
       const metadata = JSON.parse(readFileSync(join(path, ".wt/worktree.json"), "utf8"));
       assert.equal(metadata.issue, 42);
-      assert.equal(metadata.task, null);
+      assert.equal(Object.hasOwn(metadata, "task"), false);
       assert.equal(metadata.mode, mode);
       assert.equal(readFileSync(join(path, ".wt/brief.md"), "utf8"), `${url}\n`);
       assert.equal(
@@ -289,7 +276,6 @@ for (const mode of ["github"] as const) {
       assert.ok(fakeCalls(env, "gh").filter((c) => c.includes("number=42")).length >= 3);
       assert.ok(fakeCalls(env, "gh").every((c) => !c.some((a) => /comments/.test(a))));
       assert.equal(existsSync(join(path, "tasks")), false);
-      assert.deepEqual(readRegistry(repo).reservations, {});
       assert.equal(readRegistry(repo).worktrees["emend-42-fix-the-review-pane"]?.issue, 42);
       const calls = fakeCalls(env, "herdr");
       assert.deepEqual(calls.find((c) => c[1] === "start")?.slice(-4), ["--model", "opus", "--effort", "high"]);
@@ -307,7 +293,7 @@ test("spawn --issue rejects other sources and invalid numbers before any externa
     installFake(env, "gh", issueRules([readyIssue(42)]));
     installFake(env, "herdr", herdrRules("unused"));
     const args = [
-      ["--issue", "42", "--brief", BRIEF],
+      ["--issue", "42", "--brief", "text"],
       ["--issue", "42", "--brief-file", "/missing"],
       ["--issue", "42", "--slug", "add-thing"],
       ...["0", "042", "-1", "wat", "42;echo"].map((n) => [`--issue=${n}`]),
@@ -318,7 +304,6 @@ test("spawn --issue rejects other sources and invalid numbers before any externa
     }
     assert.deepEqual(fakeCalls(env, "gh"), []);
     assert.deepEqual(fakeCalls(env, "herdr"), []);
-    assert.deepEqual(readRegistry(repo).reservations, {});
     assert.deepEqual(readRegistry(repo).worktrees, {});
   }));
 
@@ -349,14 +334,13 @@ test("spawn --issue preflight refuses blocked, untrusted, taken and not-ready wo
       assert.match(r.stderr, reason);
       assert.match(r.stderr, /Nothing was created/);
     }
-    assert.deepEqual(readRegistry(repo).reservations, {});
     assert.deepEqual(readRegistry(repo).worktrees, {});
     assert.equal(existsSync(repo.worktreesDir), false);
     assert.equal(gitIn(fx.main, "branch", "--format=%(refname:short)").split("\n").length, 2);
     assert.deepEqual(fakeCalls(env, "herdr"), []);
   }));
 
-test("issue spawn reports a stalled prompt once, leaves the worktree and reserves no task", () =>
+test("issue spawn reports a stalled prompt once, and leaves the worktree", () =>
   scenario({}, ({ env, repo }) =>
     inHerdr(async () => {
       installFake(env, "gh", issueRules([readyIssue(42, { title: "你好" })]));
@@ -372,11 +356,9 @@ test("issue spawn reports a stalled prompt once, leaves the worktree and reserve
         assert.equal(e.code, 124);
         assert.match(e.message, /Do not resend the prompt/);
         assert.match(e.message, /cleanup emend-42-issue/);
-        assert.doesNotMatch(e.message, /stays reserved/);
         return true;
       });
       assert.equal(fakeCalls(env, "herdr").filter((c) => c[1] === "prompt").length, 1);
-      assert.deepEqual(readRegistry(repo).reservations, {});
       assert.ok(readRegistry(repo).worktrees["emend-42-issue"]);
     }),
   ));
@@ -391,14 +373,14 @@ test("agent name from a slashed branch", () => {
   assert.equal(agentName("feat//x..y"), "wt-feat-x-y");
 });
 
-test("the prompt names the task file and the closing answer", () => {
+test("the prompt names the issue and the closing answer", () => {
   assert.equal(
-    spawnPrompt("tasks/014-add-thing.md", "github"),
-    "/loop /e-work tasks/014-add-thing.md Closing answer from /e-spawn: Open a ready PR and finalize it.",
+    spawnPrompt("#14", "github"),
+    "/loop /e-work #14 Closing answer from /e-spawn: Open a ready PR and finalize it.",
   );
   assert.equal(
-    spawnPrompt("tasks/014-add-thing.md", "local"),
-    "/loop /e-work tasks/014-add-thing.md Closing answer from /e-spawn: Land locally after an emend review.",
+    spawnPrompt("#14", "local"),
+    "/loop /e-work #14 Closing answer from /e-spawn: Land locally after an emend review.",
   );
 });
 
@@ -456,43 +438,28 @@ test("herdrCall without herdr exits 69", () =>
   }));
 
 // ---------------------------------------------------------------------------------------------
-// Reservation
-
-test("reserveTask records the branch built from the reserved number", () =>
-  scenario({}, ({ repo }) => {
-    const n = reserveTask(repo, "add-thing", (num) => `${num}-add-thing`);
-    assert.equal(n, "001");
-    assert.equal(readRegistry(repo).reservations["001"]?.branch, "001-add-thing");
-    assert.equal(reserveTask(repo, "other-thing", "feat-other"), "002");
-    assert.equal(readRegistry(repo).reservations["002"]?.branch, "feat-other");
-  }));
-
-// ---------------------------------------------------------------------------------------------
 // spawn
 
-test("brief spawn uses a task namespace distinct from issue branches", () =>
+test("issue spawn makes these herdr calls and writes the issue URL as the brief", () =>
   scenario({ withBin: true }, async ({ fx, env, repo }) => {
-    mkdirSync(join(fx.main, "tasks"));
-    writeFileSync(join(fx.main, "tasks", "013-prior.md"), "---\nid: 013\ntitle: Prior\nstatus: open\n---\n");
-    writeBrief(fx.main);
-    installFake(env, "herdr", herdrRules("wt-emend-task-014-add-thing"));
+    readyIssueGh(env);
+    installFake(env, "herdr", herdrRules(AGENT));
 
-    const r = await runWt(join(fx.main, "bin", "wt"), spawnArgs(fx.main), { cwd: fx.main, env: { HERDR_ENV: "1" } });
+    const r = await runWt(join(fx.main, "bin", "wt"), SPAWN_ARGS, { cwd: fx.main, env: { HERDR_ENV: "1" } });
     assert.equal(r.code, 0, r.stderr);
 
-    const wtPath = join(fx.main, ".claude", "worktrees", "emend-task-014-add-thing");
+    const wtPath = join(fx.main, ".claude", "worktrees", "emend-42-fix-the-review-pane");
     const lines = r.stdout.trimEnd().split("\n");
-    assert.equal(lines[0], "Task: tasks/014-add-thing.md");
-    assert.equal(lines[1], "Branch: emend-task-014-add-thing");
+    assert.equal(lines[0], "Issue: #42 https://example.invalid/test/issues/42");
+    assert.equal(lines[1], "Branch: emend-42-fix-the-review-pane");
     assert.match(lines[2] as string, /^Port: 36\d\d$/);
     assert.equal(lines[3], `Worktree: ${wtPath}`);
     assert.equal(
       lines.at(-1),
-      "Claude agent wt-emend-task-014-add-thing is working on emend-task-014-add-thing in herdr workspace task-ws (w9).",
+      "Claude agent wt-emend-42-fix-the-review-pane is working on emend-42-fix-the-review-pane in herdr workspace task-ws (w9).",
     );
 
-    const prompt =
-      "/loop /e-work tasks/014-add-thing.md Closing answer from /e-spawn: Open a ready PR and finalize it.";
+    const prompt = "/loop /e-work #42 Closing answer from /e-spawn: Open a ready PR and finalize it.";
     assert.deepEqual(fakeCalls(env, "herdr"), [
       ["agent", "list"],
       ["worktree", "open", "--cwd", fx.main, "--path", wtPath, "--no-focus"],
@@ -500,7 +467,7 @@ test("brief spawn uses a task namespace distinct from issue branches", () =>
       [
         "agent",
         "start",
-        "wt-emend-task-014-add-thing",
+        AGENT,
         "--kind",
         "claude",
         "--pane",
@@ -511,38 +478,23 @@ test("brief spawn uses a task namespace distinct from issue branches", () =>
         "--permission-mode",
         "auto",
         "--name",
-        "emend-task-014-add-thing",
+        "emend-42-fix-the-review-pane",
       ],
-      [
-        "agent",
-        "prompt",
-        "wt-emend-task-014-add-thing",
-        prompt,
-        "--wait",
-        "--until",
-        "working",
-        "--until",
-        "blocked",
-        "--timeout",
-        "60000",
-      ],
+      ["agent", "prompt", AGENT, prompt, "--wait", "--until", "working", "--until", "blocked", "--timeout", "60000"],
     ]);
 
-    const task = readFileSync(join(wtPath, "tasks", "014-add-thing.md"), "utf8");
-    assert.match(task, /^id: 014$/m);
-    assert.match(task, /^# 014 — Add thing$/m);
-    assert.equal(task.includes("NNN"), false);
-    assert.equal(readFileSync(join(wtPath, ".wt", "brief.md"), "utf8"), task);
-    assert.equal(readRegistry(repo).reservations["014"]?.branch, "emend-task-014-add-thing");
-    assert.equal(readRegistry(repo).worktrees["emend-task-014-add-thing"]?.task, "014");
+    assert.equal(readFileSync(join(wtPath, ".wt", "brief.md"), "utf8"), "https://example.invalid/test/issues/42\n");
+    assert.equal(existsSync(join(wtPath, "tasks")), false);
+    assert.equal(readRegistry(repo).worktrees[BRANCH]?.issue, 42);
   }));
 
 test("herdr spawn ignores a failed hc listing during its name collision check", () =>
   scenario({}, ({ env, repo }) =>
     inHerdr(async () => {
-      installFake(env, "herdr", herdrRules("wt-emend-task-001-add-thing"));
+      readyIssueGh(env);
+      installFake(env, "herdr", herdrRules(AGENT));
       installFake(env, "hc", [{ code: 124 }]);
-      const result = await spawn(repo, { brief: BRIEF, slug: "add-thing", mode: "github" }, fakeClock());
+      const result = await spawn(repo, { issue: 42, mode: "github" }, fakeClock());
       assert.equal(result.state, "working");
       assert.deepEqual(fakeCalls(env, "hc"), [["ls", "--json"]]);
       assert.equal(fakeCalls(env, "herdr").filter((c) => c[1] === "start").length, 1);
@@ -551,173 +503,165 @@ test("herdr spawn ignores a failed hc listing during its name collision check", 
 
 test("spawn passes model and effort to the agent only", () =>
   scenario({ withBin: true }, async ({ fx, env }) => {
-    writeBrief(fx.main);
-    installFake(env, "herdr", herdrRules("wt-emend-task-001-add-thing"));
-    const r = await runWt(
-      join(fx.main, "bin", "wt"),
-      [...spawnArgs(fx.main), "--mode", "local", "--model", "opus", "--effort", "high"],
-      {
-        cwd: fx.main,
-        env: { HERDR_ENV: "1" },
-      },
-    );
+    readyIssueGh(env);
+    installFake(env, "herdr", herdrRules(AGENT));
+    const r = await runWt(join(fx.main, "bin", "wt"), [...SPAWN_ARGS, "--model", "opus", "--effort", "high"], {
+      cwd: fx.main,
+      env: { HERDR_ENV: "1" },
+    });
     assert.equal(r.code, 0, r.stderr);
     const calls = fakeCalls(env, "herdr");
     assert.deepEqual(calls.find((c) => c[1] === "start")?.slice(-4), ["--model", "opus", "--effort", "high"]);
-    assert.match(calls.find((c) => c[1] === "prompt")?.[3] as string, /Land locally after an emend review\.$/);
+    assert.match(calls.find((c) => c[1] === "prompt")?.[3] as string, /Open a ready PR and finalize it\.$/);
   }));
 
 test("spawn refuses a malformed model or effort without echoing it", () =>
   scenario({ withBin: true }, async ({ fx, env, repo }) => {
-    writeBrief(fx.main);
-    installFake(env, "herdr", herdrRules("wt-emend-task-001-add-thing"));
+    readyIssueGh(env);
+    installFake(env, "herdr", herdrRules(AGENT));
     for (const extra of [
       ["--model", "Bad Model!"],
       ["--effort", "extreme-secret"],
     ]) {
-      const r = await runWt(join(fx.main, "bin", "wt"), [...spawnArgs(fx.main), ...extra], {
+      const r = await runWt(join(fx.main, "bin", "wt"), [...SPAWN_ARGS, ...extra], {
         cwd: fx.main,
         env: { HERDR_ENV: "1" },
       });
       assert.equal(r.code, 2);
       assert.equal(/Bad Model|extreme-secret/.test(r.stdout + r.stderr), false);
       assert.match(r.stderr, /Nothing was created\./);
+      assert.deepEqual(readRegistry(repo).worktrees, {});
     }
-    assert.deepEqual(readRegistry(repo).reservations, {});
   }));
 
 test("spawn outside herdr creates nothing", () =>
-  scenario({ withBin: true }, async ({ fx, repo }) => {
-    writeBrief(fx.main);
-    const r = await runWt(join(fx.main, "bin", "wt"), spawnArgs(fx.main), { cwd: fx.main });
+  scenario({ withBin: true }, async ({ env, fx, repo }) => {
+    readyIssueGh(env);
+    const r = await runWt(join(fx.main, "bin", "wt"), SPAWN_ARGS, { cwd: fx.main });
     assert.equal(r.code, 69);
     assert.match(r.stdout + r.stderr, /Nothing was created\./);
-    assert.deepEqual(readRegistry(repo).reservations, {});
     assert.deepEqual(readRegistry(repo).worktrees, {});
-    assert.equal(gitIn(fx.main, "branch", "--list", "emend-task-001-*"), "");
+    assert.equal(gitIn(fx.main, "branch", "--list", "emend-42-*"), "");
     assert.equal(existsSync(join(fx.main, ".claude", "worktrees")), false);
   }));
 
 test("spawn outside herdr: herdr unreachable creates nothing", () =>
-  scenario({ withBin: true }, async ({ fx, repo }) => {
-    writeBrief(fx.main);
-    const r = await runWt(join(fx.main, "bin", "wt"), spawnArgs(fx.main), { cwd: fx.main, env: { HERDR_ENV: "1" } });
+  scenario({ withBin: true }, async ({ env, fx, repo }) => {
+    readyIssueGh(env);
+    const r = await runWt(join(fx.main, "bin", "wt"), SPAWN_ARGS, { cwd: fx.main, env: { HERDR_ENV: "1" } });
     assert.equal(r.code, 69);
     assert.match(r.stderr, /Nothing was created\./);
-    assert.deepEqual(readRegistry(repo).reservations, {});
+    assert.deepEqual(readRegistry(repo).worktrees, {});
   }));
 
 test("spawn refuses to run from a linked worktree", () =>
   scenario({ withBin: true }, async ({ fx, env, repo }) => {
-    writeBrief(fx.main);
-    installFake(env, "herdr", herdrRules("wt-emend-task-001-add-thing"));
+    readyIssueGh(env);
+    installFake(env, "herdr", herdrRules(AGENT));
     const other = setup(repo, { branch: "other-work" });
     // the main checkout's copy, called by its absolute path from inside the linked worktree
-    const r = await runWt(join(fx.main, "bin", "wt"), spawnArgs(fx.main), { cwd: other.path, env: { HERDR_ENV: "1" } });
+    const r = await runWt(join(fx.main, "bin", "wt"), SPAWN_ARGS, { cwd: other.path, env: { HERDR_ENV: "1" } });
     assert.equal(r.code, 2);
     assert.match(r.stderr, /Run spawn from the main checkout\./);
     assert.match(r.stderr, /Nothing was created\./);
-    assert.deepEqual(readRegistry(repo).reservations, {});
   }));
 
-test("spawn: an existing agent name releases the reservation", () =>
+test("spawn: an existing agent name creates nothing", () =>
   scenario({ withBin: true }, async ({ fx, env, repo }) => {
-    writeBrief(fx.main);
+    readyIssueGh(env);
     installFake(env, "herdr", [
       {
         match: ["agent", "list"],
-        stdout: json({ type: "agent_list", agents: [{ name: "wt-emend-task-001-add-thing" }] }),
+        stdout: json({ type: "agent_list", agents: [{ name: AGENT }] }),
       },
     ]);
-    const r = await runWt(join(fx.main, "bin", "wt"), spawnArgs(fx.main), { cwd: fx.main, env: { HERDR_ENV: "1" } });
+    const r = await runWt(join(fx.main, "bin", "wt"), SPAWN_ARGS, { cwd: fx.main, env: { HERDR_ENV: "1" } });
     assert.equal(r.code, 3);
     assert.match(r.stderr, /Nothing was created\./);
-    assert.deepEqual(readRegistry(repo).reservations, {});
+    assert.deepEqual(readRegistry(repo).worktrees, {});
     assert.equal(fakeCalls(env, "herdr").length, 1);
   }));
 
-test("spawn: an existing branch on origin releases the reservation", () =>
+test("spawn: an existing branch on origin creates nothing", () =>
   scenario({ withBin: true }, async ({ fx, env, repo }) => {
-    writeBrief(fx.main);
-    installFake(env, "herdr", herdrRules("wt-emend-task-001-add-thing"));
-    gitIn(fx.main, "push", "--quiet", "origin", "main:refs/heads/emend-task-001-add-thing");
-    const r = await runWt(join(fx.main, "bin", "wt"), spawnArgs(fx.main), { cwd: fx.main, env: { HERDR_ENV: "1" } });
+    readyIssueGh(env);
+    installFake(env, "herdr", herdrRules(AGENT));
+    gitIn(fx.main, "push", "--quiet", "origin", "main:refs/heads/emend-42-fix-the-review-pane");
+    const r = await runWt(join(fx.main, "bin", "wt"), SPAWN_ARGS, { cwd: fx.main, env: { HERDR_ENV: "1" } });
     assert.equal(r.code, 3);
     assert.match(r.stderr, /Nothing was created\./);
-    assert.deepEqual(readRegistry(repo).reservations, {});
+    assert.deepEqual(readRegistry(repo).worktrees, {});
   }));
 
 test("spawn: prompt stalled is not resent", () =>
   scenario({ withBin: true }, async ({ fx, env, repo }) => {
-    writeBrief(fx.main);
+    readyIssueGh(env);
     installFake(
       env,
       "herdr",
-      herdrRules("wt-emend-task-001-add-thing", [
+      herdrRules(AGENT, [
         { match: ["agent", "prompt"], stderr: failWith("agent_prompt_stalled", "no activity"), code: 1 },
       ]),
     );
-    const r = await runWt(join(fx.main, "bin", "wt"), spawnArgs(fx.main), { cwd: fx.main, env: { HERDR_ENV: "1" } });
+    const r = await runWt(join(fx.main, "bin", "wt"), SPAWN_ARGS, { cwd: fx.main, env: { HERDR_ENV: "1" } });
     assert.equal(r.code, 124);
     assert.equal(fakeCalls(env, "herdr").filter((c) => c[1] === "prompt").length, 1);
     assert.match(r.stderr, /Do not resend the prompt/);
-    const wtPath = join(fx.main, ".claude", "worktrees", "emend-task-001-add-thing");
+    const wtPath = join(fx.main, ".claude", "worktrees", BRANCH);
     assert.ok(r.stderr.includes(wtPath));
-    assert.ok(r.stderr.includes(`${fx.main}/bin/wt cleanup emend-task-001-add-thing`));
-    // nothing was cleaned up or released
+    assert.ok(r.stderr.includes(`${fx.main}/bin/wt cleanup emend-42-fix-the-review-pane`));
+    // nothing was cleaned up
     assert.ok(existsSync(wtPath));
-    assert.equal(readRegistry(repo).reservations["001"]?.branch, "emend-task-001-add-thing");
+    assert.ok(readRegistry(repo).worktrees[BRANCH]);
   }));
 
 test("spawn: start refused reports the worktree", () =>
   scenario({ withBin: true }, async ({ fx, env, repo }) => {
-    writeBrief(fx.main);
+    readyIssueGh(env);
     installFake(
       env,
       "herdr",
-      herdrRules("wt-emend-task-001-add-thing", [
-        { match: ["agent", "start"], stderr: failWith("agent_name_taken", "taken"), code: 1 },
-      ]),
+      herdrRules(AGENT, [{ match: ["agent", "start"], stderr: failWith("agent_name_taken", "taken"), code: 1 }]),
     );
-    const r = await runWt(join(fx.main, "bin", "wt"), spawnArgs(fx.main), { cwd: fx.main, env: { HERDR_ENV: "1" } });
+    const r = await runWt(join(fx.main, "bin", "wt"), SPAWN_ARGS, { cwd: fx.main, env: { HERDR_ENV: "1" } });
     assert.equal(r.code, 1);
-    const wtPath = join(fx.main, ".claude", "worktrees", "emend-task-001-add-thing");
+    const wtPath = join(fx.main, ".claude", "worktrees", BRANCH);
     assert.ok(r.stderr.includes(wtPath));
-    assert.match(r.stderr, /bin\/wt cleanup emend-task-001-add-thing/);
+    assert.match(r.stderr, /bin\/wt cleanup emend-42-fix-the-review-pane/);
     assert.match(r.stderr, /no agent was started/);
     assert.equal(fakeCalls(env, "herdr").filter((c) => c[1] === "prompt").length, 0);
     assert.ok(existsSync(wtPath));
-    assert.ok(readRegistry(repo).worktrees["emend-task-001-add-thing"]);
+    assert.ok(readRegistry(repo).worktrees[BRANCH]);
   }));
 
 test("spawn: a blocked agent is reported as waiting", () =>
   scenario({ withBin: true }, async ({ fx, env }) => {
-    writeBrief(fx.main);
+    readyIssueGh(env);
     installFake(
       env,
       "herdr",
-      herdrRules("wt-emend-task-001-add-thing", [
+      herdrRules(AGENT, [
         {
           match: ["agent", "prompt"],
           stdout: json({ type: "agent_prompted", agent: { agent_status: "blocked" } }),
         },
       ]),
     );
-    const r = await runWt(join(fx.main, "bin", "wt"), spawnArgs(fx.main), { cwd: fx.main, env: { HERDR_ENV: "1" } });
+    const r = await runWt(join(fx.main, "bin", "wt"), SPAWN_ARGS, { cwd: fx.main, env: { HERDR_ENV: "1" } });
     assert.equal(r.code, 0, r.stderr);
     assert.equal(
       r.stdout.trimEnd().split("\n").at(-1),
-      "Claude agent wt-emend-task-001-add-thing started and is waiting for an answer in herdr workspace task-ws (w9).",
+      "Claude agent wt-emend-42-fix-the-review-pane started and is waiting for an answer in herdr workspace task-ws (w9).",
     );
   }));
 
 test("spawn: an already open workspace starts no agent", () =>
   scenario({ withBin: true }, async ({ fx, env }) => {
-    writeBrief(fx.main);
+    readyIssueGh(env);
     installFake(
       env,
       "herdr",
-      herdrRules("wt-emend-task-001-add-thing", [
+      herdrRules(AGENT, [
         {
           match: ["worktree", "open"],
           stdout: json({
@@ -729,47 +673,65 @@ test("spawn: an already open workspace starts no agent", () =>
         },
       ]),
     );
-    const r = await runWt(join(fx.main, "bin", "wt"), spawnArgs(fx.main), { cwd: fx.main, env: { HERDR_ENV: "1" } });
+    const r = await runWt(join(fx.main, "bin", "wt"), SPAWN_ARGS, { cwd: fx.main, env: { HERDR_ENV: "1" } });
     assert.equal(r.code, 3);
     assert.equal(fakeCalls(env, "herdr").filter((c) => c[1] === "start").length, 0);
-    assert.match(r.stderr, /bin\/wt cleanup emend-task-001-add-thing/);
+    assert.match(r.stderr, /bin\/wt cleanup emend-42-fix-the-review-pane/);
   }));
 
-test("brief input is checked before anything is created", () =>
+test("spawn without --issue refuses and creates nothing", () =>
   scenario({ withBin: true }, async ({ fx, env, repo }) => {
-    installFake(env, "herdr", herdrRules("wt-emend-task-001-add-thing"));
+    readyIssueGh(env);
+    installFake(env, "herdr", herdrRules(AGENT));
     const wt = join(fx.main, "bin", "wt");
     const opts = { cwd: fx.main, env: { HERDR_ENV: "1" } };
-    const assertNothing = (r: { code: number | null; stderr: string; stdout: string }) => {
-      assert.equal(r.code, 2);
-      assert.deepEqual(readRegistry(repo).reservations, {});
+    const file = join(fx.main, "brief.md");
+    writeFileSync(file, "# Plain\n");
+    for (const [args, message] of [
+      [["spawn"], /becomes an issue first.*Nothing was created/],
+      [["spawn", "--mode", "github"], /becomes an issue first.*Nothing was created/],
+      // the removed task-spawn options are unknown flags now
+      [["spawn", "--brief", "# Plain\n", "--slug", "add-thing"], /Unknown option/],
+      [["spawn", "--brief-file", file, "--slug", "add-thing"], /Unknown option/],
+    ] as const) {
+      const r = await runWt(wt, [...args], opts);
+      assert.equal(r.code, 2, args.join(" "));
+      assert.match(r.stderr, message);
       assert.deepEqual(readRegistry(repo).worktrees, {});
       assert.equal(existsSync(join(fx.main, ".claude", "worktrees")), false);
-      assert.equal(r.stdout + r.stderr === "", false);
-    };
-    const file = join(fx.main, "brief.md");
-    writeFileSync(file, BRIEF);
-
-    // both forms, neither form
-    assertNothing(await runWt(wt, ["spawn", "--brief", BRIEF, "--brief-file", file, "--slug", "add-thing"], opts));
-    assertNothing(await runWt(wt, ["spawn", "--slug", "add-thing"], opts));
-
-    // a brief without the id placeholder
-    assertNothing(await runWt(wt, ["spawn", "--brief", "# Plain\n", "--slug", "add-thing"], opts));
-
-    // a missing file
-    assertNothing(await runWt(wt, ["spawn", "--brief-file", join(fx.main, "none.md"), "--slug", "add-thing"], opts));
-    assert.equal(fakeCalls(env, "herdr").length, 0);
+    }
+    assert.equal(gitIn(fx.main, "branch", "--list", "emend-*"), "");
+    assert.deepEqual(fakeCalls(env, "herdr"), []);
+    assert.deepEqual(fakeCalls(env, "gh"), []);
   }));
 
-test("spawn takes the brief as text", () =>
-  scenario({ withBin: true }, async ({ fx, env }) => {
-    installFake(env, "herdr", herdrRules("wt-emend-task-001-add-thing"));
-    const r = await runWt(join(fx.main, "bin", "wt"), ["spawn", `--brief=${BRIEF}`, "--slug", "add-thing"], {
+test("spawn in-process without an issue refuses and says a description becomes an issue first", () =>
+  scenario({}, ({ env, repo }) =>
+    inHerdr(async () => {
+      installFake(env, "herdr", herdrRules(AGENT));
+      await assert.rejects(
+        spawn(repo, { mode: "github" } as unknown as Parameters<typeof spawn>[1], fakeClock()),
+        (e: unknown) => e instanceof WtError && e.code === 2 && /becomes an issue first/.test(e.message),
+      );
+      assert.deepEqual(readRegistry(repo).worktrees, {});
+      assert.deepEqual(fakeCalls(env, "herdr"), []);
+    }),
+  ));
+
+test("spawn --issue refuses --mode local before any external call", () =>
+  scenario({ withBin: true }, async ({ fx, env, repo }) => {
+    readyIssueGh(env);
+    installFake(env, "herdr", herdrRules(AGENT));
+    const r = await runWt(join(fx.main, "bin", "wt"), [...SPAWN_ARGS, "--mode", "local"], {
       cwd: fx.main,
       env: { HERDR_ENV: "1" },
     });
-    assert.equal(r.code, 0, r.stderr);
+    assert.equal(r.code, 2, r.stderr);
+    assert.match(r.stderr, /github mode/);
+    assert.match(r.stderr, /Nothing was created\./);
+    assert.deepEqual(readRegistry(repo).worktrees, {});
+    assert.deepEqual(fakeCalls(env, "herdr"), []);
+    assert.deepEqual(fakeCalls(env, "gh"), []);
   }));
 
 // ---------------------------------------------------------------------------------------------
@@ -1133,11 +1095,11 @@ test("a workspace id that reads as an option is never passed to workspace close"
 
 test("spawn treats a pane id that reads as an option as a malformed reply", () =>
   scenario({ withBin: true }, async ({ fx, env }) => {
-    writeBrief(fx.main);
+    readyIssueGh(env);
     installFake(
       env,
       "herdr",
-      herdrRules("wt-emend-task-001-add-thing", [
+      herdrRules(AGENT, [
         {
           match: ["worktree", "open"],
           stdout: json({
@@ -1149,7 +1111,7 @@ test("spawn treats a pane id that reads as an option as a malformed reply", () =
         },
       ]),
     );
-    const r = await runWt(join(fx.main, "bin", "wt"), spawnArgs(fx.main), { cwd: fx.main, env: { HERDR_ENV: "1" } });
+    const r = await runWt(join(fx.main, "bin", "wt"), SPAWN_ARGS, { cwd: fx.main, env: { HERDR_ENV: "1" } });
     assert.equal(r.code, 1);
     assert.equal(fakeCalls(env, "herdr").filter((c) => c[1] === "start").length, 0);
   }));

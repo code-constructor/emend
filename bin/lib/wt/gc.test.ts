@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { readRegistry, registryPath, setAfterLockHookForTests, withRegistry } from "./registry.ts";
 import { type Repo, resolveRepo } from "./repo.ts";
@@ -39,15 +39,6 @@ test("gc report and prune", () =>
     gitIn(fx.main, "worktree", "add", "--quiet", "-b", "worktree-own", join(wtDir, "own"), "origin/main");
     // a plain empty directory
     mkdirSync(join(wtDir, "empty-dir"));
-    // an old reservation without a branch, and a fresh one
-    withRegistry(repo, (r) => {
-      r.reservations["050"] = {
-        branch: "050-old-thing",
-        slug: "old-thing",
-        reservedAt: new Date(Date.now() - 48 * 3600_000).toISOString(),
-      };
-      r.reservations["051"] = { branch: "051-new-thing", slug: "new-thing", reservedAt: new Date().toISOString() };
-    });
     // a branch merged into origin/main
     gitIn(fx.main, "branch", "merged-b");
 
@@ -56,8 +47,6 @@ test("gc report and prune", () =>
     assert.equal(find(report.items, "orphan-directory", "orphan-clean")?.state, "unregistered");
     assert.equal(find(report.items, "orphan-directory", "orphan-locked")?.state, "locked");
     assert.equal(find(report.items, "orphan-directory", "own"), undefined);
-    assert.equal(find(report.items, "stale-reservation", "050")?.state, "found");
-    assert.equal(find(report.items, "stale-reservation", "051"), undefined);
     assert.equal(find(report.items, "merged-branch", "merged-b")?.state, "found");
     assert.equal(find(report.items, "merged-branch", "main"), undefined);
     assert.ok(existsSync(join(wtDir, "orphan-clean")), "a report removes nothing");
@@ -73,7 +62,6 @@ test("gc report and prune", () =>
     }
     assert.equal(find(pruned.items, "orphan-directory", "orphan-locked")?.state, "locked");
     assert.match(formatGc(pruned, true), /never removed by gc/);
-    assert.equal(find(pruned.items, "stale-reservation", "050")?.state, "removed");
     assert.equal(find(pruned.items, "merged-branch", "merged-b")?.state, "removed");
 
     for (const name of ["orphan-clean", "orphan-dirty", "orphan-locked", "own", "empty-dir"]) {
@@ -82,63 +70,56 @@ test("gc report and prune", () =>
     assert.ok(existsSync(join(wtDir, "orphan-dirty", "scratch.txt")), "a dirty worktree is kept");
     const reg = readRegistry(repo);
     assert.deepEqual(Object.keys(reg.worktrees), []);
-    assert.deepEqual(Object.keys(reg.reservations), ["051"]);
     assert.equal(gitIn(fx.main, "branch", "--list", "merged-b"), "");
     assert.notEqual(gitIn(fx.main, "branch", "--list", "orphan-dirty"), "");
   }));
 
-test("gc keeps a branch that has a registered worktree or a reservation", () =>
+test("gc keeps a branch that has a registered worktree", () =>
   scenario(({ repo, fx }) => {
     setup(repo, { branch: "in-use", busy: new Set() });
-    gitIn(fx.main, "branch", "reserved-b");
-    withRegistry(repo, (r) => {
-      r.reservations["060"] = { branch: "reserved-b", slug: "reserved-b", reservedAt: new Date().toISOString() };
-    });
     const pruned = gc(repo, true);
     assert.deepEqual(pruned.items, []);
     assert.notEqual(gitIn(fx.main, "branch", "--list", "in-use"), "");
-    assert.notEqual(gitIn(fx.main, "branch", "--list", "reserved-b"), "");
   }));
 
-test("gc handles legacy and prefixed task reservations and branches", () =>
+test("gc ignores the legacy keys an older registry still carries", () =>
   scenario(({ repo, fx }) => {
+    gitIn(fx.main, "branch", "legacy-b");
     const old = "2020-01-01T00:00:00Z";
-    for (const branch of ["014-old-task", "emend-015-new-task", "emend-16-issue-work"])
-      gitIn(fx.main, "branch", branch);
-    withRegistry(repo, (r) => {
-      r.reservations["014"] = { branch: "014-old-task", slug: "old-task", reservedAt: old };
-      r.reservations["015"] = { branch: "emend-015-new-task", slug: "new-task", reservedAt: old };
-      r.reservations["016"] = { branch: "emend-016-missing-task", slug: "missing-task", reservedAt: old };
-    });
+    mkdirSync(dirname(registryPath(repo)), { recursive: true });
+    writeFileSync(
+      registryPath(repo),
+      JSON.stringify({
+        version: 1,
+        worktrees: {},
+        reservations: { "050": { branch: "050-old-thing", slug: "old-thing", reservedAt: old } },
+      }),
+    );
     const report = gc(repo, true);
-    assert.equal(find(report.items, "stale-reservation", "016")?.state, "removed");
-    assert.equal(find(report.items, "merged-branch", "emend-16-issue-work")?.state, "removed");
-    assert.deepEqual(Object.keys(readRegistry(repo).reservations), ["014", "015"]);
-    for (const branch of ["014-old-task", "emend-015-new-task"])
-      assert.notEqual(gitIn(fx.main, "branch", "--list", branch), "");
+    assert.deepEqual(
+      report.items.map((i) => [i.kind, i.name]),
+      [["merged-branch", "legacy-b"]],
+    );
+    assert.equal(gitIn(fx.main, "branch", "--list", "legacy-b"), "");
   }));
 
 test("gc --prune keeps a merged branch that a concurrent setup claimed after the scan", () =>
   scenario(({ repo, fx }) => {
-    for (const b of ["late-registered", "late-reserved", "late-checked-out", "plain-merged"]) {
+    for (const b of ["late-registered", "late-checked-out", "plain-merged"]) {
       gitIn(fx.main, "branch", b);
     }
     setBeforeBranchDeleteHookForTests((b) => {
       // what a setup or spawn that starts between gc's scan and its delete would do
       if (b === "late-registered") {
         withRegistry(repo, (r) => {
-          r.worktrees[b] = { path: join(repo.worktreesDir, b), port: 1, task: null, mode: "github", createdAt: "t" };
-        });
-      } else if (b === "late-reserved") {
-        withRegistry(repo, (r) => {
-          r.reservations["070"] = { branch: b, slug: "late-reserved", reservedAt: new Date().toISOString() };
+          r.worktrees[b] = { path: join(repo.worktreesDir, b), port: 1, mode: "github", createdAt: "t" };
         });
       } else if (b === "late-checked-out") {
         gitIn(fx.main, "worktree", "add", "--quiet", join(fx.env.root, "late-co"), b);
       }
     });
     const pruned = gc(repo, true);
-    for (const name of ["late-registered", "late-reserved", "late-checked-out"]) {
+    for (const name of ["late-registered", "late-checked-out"]) {
       const item = find(pruned.items, "merged-branch", name);
       assert.equal(item?.state, "kept", name);
       assert.equal(item?.why, "in-use", name);

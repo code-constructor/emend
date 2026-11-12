@@ -273,7 +273,7 @@ For an owner-run command, keep the worktree unless its visible output shows exit
    `refused: <reason>`. A refusal is expected when the main checkout has overlapping work: report the
    reason. After a non-zero merge exit with a `MERGED` line, keep the blocked status and skip cleanup
    regardless of the sync result; otherwise continue only to cleanup permitted by step 7.
-2. Report: the PR URL, the task file or the issue (the merge closes it), and either `main` at the
+2. Report: the PR URL, the issue (the merge closes it), and either `main` at the
    new commit or why it did not move. Include any step-4 difference from `origin/main` in the
    current or main worktree and its disclosure in the PR body's Evidence; confirm that the
    committed gate ran. If there was a post-merge closing warning, include it and all named issue

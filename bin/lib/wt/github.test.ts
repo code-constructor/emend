@@ -672,7 +672,7 @@ test("issue PRs require the exact issue and one of GitHub's closing keywords", (
     gitIn(fx.main, "checkout", "--quiet", "-b", branch);
     repo.callerBranch = branch;
     mkdirSync(join(fx.main, ".wt"));
-    writeFileSync(join(fx.main, ".wt/worktree.json"), JSON.stringify({ issue: 42, task: null }));
+    writeFileSync(join(fx.main, ".wt/worktree.json"), JSON.stringify({ issue: 42 }));
     installFake(env, "gh", createRules(`${CREATED_URL}\n`, branch));
     for (const body of [
       "",

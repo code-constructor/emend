@@ -31,6 +31,7 @@ vi.mock("../executable.ts", async (original) => {
   };
 });
 
+const killProcess = process.kill;
 const url = "http://127.0.0.1:3636";
 const noServer = "emend: no emend server is running.\n";
 let root: string;
@@ -110,6 +111,18 @@ async function syntheticServer(mode = "stops") {
   writeSecretFile(join(state, "admin.token"), `em_${"a".repeat(43)}`);
   const proof = provenTestServer(state);
   let stopped = false;
+  const kill = killProcess;
+  vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+    if (
+      pid === process.pid &&
+      signal === 0 &&
+      stopped &&
+      mode !== "never-exit" &&
+      (mode !== "delayed-exit" || elapsed >= 500)
+    )
+      throw Object.assign(new Error("synthetic exited server"), { code: "ESRCH" });
+    return kill(pid, signal);
+  });
   let probes = 0;
   const fetcher = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     if (stopped) throw new TypeError("refused", { cause: { code: "ECONNREFUSED" } });
@@ -119,7 +132,11 @@ async function syntheticServer(mode = "stops") {
     }
     probes++;
     if (mode === "unanswered") throw new DOMException("synthetic timeout", "TimeoutError");
-    if (mode === "unverified" || (mode === "changed" && probes > 1)) return Response.json({});
+    if (mode === "unverified") {
+      await rm(join(state, "server.json"));
+      return Response.json({});
+    }
+    if (mode === "changed" && probes > 1) return Response.json({});
     const response = proof(String(input), init);
     if (!response) throw new Error("Unexpected request");
     return Response.json(
@@ -156,7 +173,7 @@ test("stop refuses a loose state folder with a stale route and no recorded serve
   writeSecretFile(path, contents);
   await chmod(state, 0o770);
   vi.spyOn(markers, "loopbackState").mockResolvedValue("refused");
-  const kill = process.kill;
+  const kill = killProcess;
   vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
     if (pid !== marker.pid) return kill(pid, signal);
     throw Object.assign(new Error("synthetic dead process"), { code: "ESRCH" });
@@ -185,6 +202,7 @@ test("a dead recorded pid reports no server and leaves files unchanged", async (
   expect(await readdir(state)).toEqual(["server.json"]);
   expect(await readFile(join(state, "server.json"), "utf8")).toBe(record);
   expect(fetcher).not.toHaveBeenCalled();
+  expect(elapsed).toBe(0);
 });
 
 test("stop extra is a usage error without creating state", async () => {
@@ -255,7 +273,7 @@ test("a loose admin token still refuses when unknown service ownership finds a d
     gone = true;
     return { code: 1, stdout: "", stderr: "synthetic failure" };
   });
-  const kill = process.kill;
+  const kill = killProcess;
   vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
     if (gone && pid === process.pid && signal === 0)
       throw Object.assign(new Error("synthetic dead process"), { code: "ESRCH" });
@@ -333,7 +351,7 @@ for (const platform of ["linux", "darwin"]) {
   test.each(["ESRCH", "EPERM"])(`${platform} unknown ownership checks recorded pid liveness (%s)`, async (code) => {
     const fetcher = await syntheticServer();
     await installService(platform);
-    const kill = process.kill;
+    const kill = killProcess;
     vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
       if (pid !== process.pid || signal !== 0) return kill(pid, signal);
       throw Object.assign(new Error("synthetic liveness"), { code });
@@ -382,14 +400,28 @@ test("other platforms skip service ownership", async () => {
 });
 
 test("stops a real bare server through its handler", async () => {
+  // This server closes in this process; its asynchronous cleanup needs the real clock.
+  if (io.service) {
+    io.service.now = undefined;
+    io.service.sleep = undefined;
+  }
   let server: Awaited<ReturnType<typeof startServer>> | undefined;
   let closing: Promise<void> | undefined;
+  let closed = false;
+  const kill = killProcess;
+  vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+    if (closed && pid === process.pid && signal === 0)
+      throw Object.assign(new Error("in-process server closed"), { code: "ESRCH" });
+    return kill(pid, signal);
+  });
   try {
     server = await startServer({
       stateDir: state,
       port: 0,
       onStopRequest: () => {
-        closing = server?.close();
+        closing = server?.close().then(() => {
+          closed = true;
+        });
       },
     });
     expect(await run(["stop"], io)).toBe(0);
@@ -428,7 +460,7 @@ test("stop keeps the marker and warns the route may still exist when Tailscale i
   await mkdir(state, { recursive: true, mode: 0o700 });
   writeSecretFile(join(state, "tailscale-serve.json"), JSON.stringify(marker));
   vi.spyOn(markers, "loopbackState").mockResolvedValue("refused");
-  const kill = process.kill;
+  const kill = killProcess;
   vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
     if (pid !== marker.pid) return kill(pid, signal);
     throw Object.assign(new Error("synthetic dead process"), { code: "ESRCH" });
@@ -462,4 +494,59 @@ test("stop names the chosen port when Tailscale is not on PATH", async () => {
     "emend: no emend server is running; tailscale was not found on PATH, so the Tailscale Serve route at https://hub.example.ts.net:13636 may still exist.\n",
   ]);
   expect(JSON.parse(await readFile(join(state, "tailscale-serve.json"), "utf8"))).toEqual(marker);
+test("stop waits for the process to exit after its listener closes", async () => {
+  const fetcher = await syntheticServer("delayed-exit");
+  expect(await run(["stop"], io)).toBe(0);
+  expect(elapsed).toBe(500);
+  expect(fetcher.mock.calls.some(([input]) => String(input).endsWith("/server/stop"))).toBe(true);
+  expect(stdout).toEqual([`emend: stopped the emend server at ${url}\n`]);
+  expect(stderr).toEqual([]);
+});
+
+test("stop fails after 15 seconds when the listener closes but the process never exits", async () => {
+  await syntheticServer("never-exit");
+  expect(await run(["stop"], io)).toBe(1);
+  expect(elapsed).toBe(15000);
+  expect(stdout).toEqual([]);
+  expect(stderr).toEqual([`emend: the emend server at ${url} did not stop; try again.\n`]);
+});
+
+test.each([false, true])("an already absent listener waits for process exit (timeout: %s)", async (timeout) => {
+  const fetcher = await syntheticServer("never-exit");
+  fetcher.mockRejectedValue(new TypeError("refused", { cause: { code: "ECONNREFUSED" } }));
+  vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+    if (!timeout && elapsed >= 500 && pid === process.pid && signal === 0)
+      throw Object.assign(new Error("synthetic exit"), { code: "ESRCH" });
+    return killProcess(pid, signal);
+  });
+  expect(await run(["stop"], io)).toBe(timeout ? 1 : 0);
+  expect(elapsed).toBe(timeout ? 15000 : 500);
+  expect(stdout).toEqual(timeout ? [] : [noServer]);
+  expect(stderr).toEqual(timeout ? [`emend: the emend server at ${url} did not stop; try again.\n`] : []);
+  expect(fetcher.mock.calls.some(([input]) => String(input).endsWith("/server/stop"))).toBe(false);
+});
+
+test.each(["removed", "new-pid", "new-key"])("a live pid stops waiting when its record is %s", async (kind) => {
+  await syntheticServer("never-exit");
+  if (!io.service) throw new Error("missing service fixture");
+  io.service.sleep = async (ms) => {
+    elapsed += ms;
+    expect(stdout).toEqual([]);
+    if (elapsed === 500) {
+      const path = join(state, "server.json");
+      if (kind === "removed") await rm(path);
+      else {
+        const record = JSON.parse(await readFile(path, "utf8"));
+        if (kind === "new-pid") record.pid++;
+        else record.key = Buffer.alloc(32, 4).toString("base64url");
+        await writeFile(path, JSON.stringify(record));
+      }
+    }
+  };
+  // A zombie (or a replacement process) still answers kill(pid, 0).
+  vi.spyOn(process, "kill").mockReturnValue(true);
+  expect(await run(["stop"], io)).toBe(0);
+  expect(elapsed).toBe(500);
+  expect(stdout).toEqual([`emend: stopped the emend server at ${url}\n`]);
+  expect(stderr).toEqual([]);
 });
