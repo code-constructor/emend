@@ -9,19 +9,8 @@ it is not. `docs/architecture.md` describes how it is built.
   "plan task 1.6" refer to the plan. Work in its order and record calls in its build log.
 - Sibling repo: [hunk-review-skill](https://github.com/vendis-ai/hunk-review-skill), the project
   emend grew out of. Its local path is in `.sync-counterpart-path` (gitignored).
-
-## Contributing from a fork
-
-If you are not a maintainer (see `.github/CODEOWNERS`), most of this file is for the maintainers'
-own agents; `CONTRIBUTING.md` is your guide. In short:
-
-- Your issue is your brief. No task files, no plan numbers, no special branch names.
-- `bin/wt`, the `e-*` skills and `.private-terms` are the maintainers' tools; skip the rules about
-  them. Push with plain `git push` and open the PR with `gh pr create` or on GitHub.
-- Work on any branch of your fork. Put `Closes #<n>` first in the PR body.
-- Keep the non-negotiables below, run `pnpm verify` before you open the PR, and leave `.github/`
-  alone unless the issue is about CI.
-- CI runs after a maintainer approves it. A maintainer reviews the PR in emend and squash-merges it.
+- Not a maintainer (see `.github/CODEOWNERS`)? Follow `CONTRIBUTING.md`, keep the non-negotiables,
+  and skip the rules on `bin/wt`, the `e-*` skills and `.private-terms`: push with `git push`.
 
 ## What to do next
 
@@ -112,18 +101,14 @@ Each line prevents a real failure. "Before you touch" names the rule file with t
   happen only when the owner asks. The Release workflow publishes to npm from `main`; agents never
   start or re-run it.
 - The lifecycle skills: `/e-spawn`, `/e-work`, `/e-pr`, `/e-pr-finalize`, `/e-pr-merge`, `/e-rebase`,
-  `/e-merge-local`.
-- `/e-outside` takes an outside contributor's issue and fork PR through a safety check, CI approval,
-  a review and an emend review to the merge. Fork code never runs on this machine.
+  `/e-merge-local`, `/e-outside` (an outside contributor's issue and fork PR).
 - `/e-issue` turns an idea, an improvement or a bug into a GitHub issue. Issues are public. Only the
   owner's command sets the `ready` label.
 - A hook guards Bash and Monitor: issue and label writes ask in main and are refused in worktrees;
   secret reads and guard, settings or git metadata edits are denied. It runs from main, so
   fast-forward main to a hook change before rebasing worktrees onto it.
-- A bare `/loop` in the main checkout runs the work loop in `.claude/loop.md`: it keeps up to
-  three workers on pickable issues that do not collide and steers them to finish. `/loop /e-loop`
-  runs the same file. Each worker merges only after the owner approved its head in emend, and the
-  merge closes its issue.
+- The work loop (`.claude/loop.md`) keeps up to three workers on pickable issues that do not
+  collide. Each merges only after the owner approved its head in emend; the merge closes its issue.
 - Tests never touch emend's real state directory, which holds client diffs: the Vitest setup
   sets a temporary `EMEND_HOME`, and every test that needs state uses its own.
 - Changing `.claude/settings.json`, `.claude/hooks/` or `.codex/` needs the owner's approval
@@ -167,10 +152,9 @@ Codex reads only this file. Open the matching rule file before you edit these pa
 
 ## Sync with hunk-review-skill
 
-hunk-review-skill is not being retired: both projects stay maintained. Every improvement made here
-is checked against hunk-review-skill and applied there in its own way when it fits, and every
-improvement there is checked against emend. That covers contract and CLI changes, review wording
-and review insights alike.
+Both projects stay maintained. Every improvement here is checked against hunk-review-skill and
+applied there in its own way when it fits, and the reverse: contract and CLI changes, review
+wording and review insights alike.
 
 `sync/manifest.json` lists the shared surfaces. Each surface's `self` globs are this repo's paths.
 
