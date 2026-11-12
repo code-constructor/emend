@@ -1,5 +1,7 @@
 let refusal: string | undefined;
-if (["publish", "wait", "feedback", "reply", "mcp", "stop", "service", "skills"].includes(process.argv[2] ?? "")) {
+if (
+  ["publish", "wait", "feedback", "reply", "mcp", "stop", "service", "update", "skills"].includes(process.argv[2] ?? "")
+) {
   try {
     const { runtimeInRepository } = await import("./cli/runtime-repository.ts");
     const { cliRuntime } = await import("./cli/runtime.ts");
@@ -60,4 +62,5 @@ if (refusal) {
 }
 // A pending stdout write can keep the event loop alive after an interrupted flush.
 // Serve has already finished its startup and process-group cleanup before returning.
-if (process.exitCode === 129 || process.exitCode === 130 || process.exitCode === 143) process.exit(process.exitCode);
+if (process.exitCode === 129 || process.exitCode === 130 || process.exitCode === 131 || process.exitCode === 143)
+  process.exit(process.exitCode);

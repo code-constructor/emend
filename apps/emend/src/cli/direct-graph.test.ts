@@ -126,6 +126,16 @@ const multilineTemplates = new Map([
   ["cli/commands/feedback.ts", "The reply hint on stderr ends with a newline."],
   ["cli/commands/mcp.ts", "MCP JSON output ends with a newline."],
 ]);
+const nonSqlQuotes = new Map<string, { reason: string; accepts: (quote: string, content: string) => boolean }>([
+  ["cli.ts", { reason: "update names a CLI command.", accepts: (_quote, content) => content === "update" }],
+  [
+    "main.ts",
+    {
+      reason: "update names a CLI command.",
+      accepts: (_quote, content) => content === "update",
+    },
+  ],
+]);
 const workerSpawners = new Set(["db/client.ts", "server/publish/executor.ts"]);
 // Receivers use parentPort (and the inline worker's workerData), never construct workers.
 const workerReceivers = new Set(["server/publish/worker.ts", "db/client.ts inline worker"]);
@@ -322,9 +332,19 @@ function assertAgentSql(
   };
   for (const quote of quotes) {
     const query = literal(quote) ?? quote.slice(1, -1);
+    if (nonSqlQuotes.get(name)?.accepts(quote, query)) continue;
     if (!/\b(?:select|insert|replace|update|delete|with|from|join|create|alter|drop)\b/i.test(query)) continue;
     if (name === "db/client.ts" && /\bselect\b/i.test(query)) fail("reviewer SQL binding");
+    // Static main help names the devices command; all SQL write checks still apply.
+    const help =
+      name === "main.ts" &&
+      quote.startsWith("`") &&
+      query.startsWith("Usage:\n") &&
+      !query.includes("${") &&
+      source.includes(`io.stdout(${quote})`) &&
+      source.split(quote).length === 2;
     if (
+      !help &&
       reviewerTables.some(
         (table) => !mayBindTable(name, table) && new RegExp(`\\b${bindings(source, table)}\\b`, "i").test(query),
       )
@@ -334,6 +354,7 @@ function assertAgentSql(
     for (let index = 0; index < tokens.length; index++) {
       const verb = tokens[index]?.toLowerCase();
       if (!verb || !["insert", "replace", "update", "delete"].includes(verb)) continue;
+      if (tokens.length === 1) fail("unresolved SQL write target");
       let cursor = index + 1;
       if (tokens[cursor]?.toLowerCase() === "or") cursor += 2;
       // An interior prose word ("needs an update.") is not an UPDATE statement.
@@ -1192,7 +1213,13 @@ test.each([
   );
 });
 
+test("a lone update outside the CLI entry modules is refused", async () => {
+  const folder = await fixture({ "entry.ts": 'export const command = "update";' });
+  await expect(assertAgentGraph(folder, [join(folder, "entry.ts")])).rejects.toThrow("forbidden");
+});
+
 test.each([
+  "update reviews set state = 'approved'",
   `UPDATE reviews SET state = \${nextState}`,
   "UPDATE OR REPLACE reviews SET state = next_state",
   `INSERT INTO reviews (state) VALUES (\${nextState})`,
@@ -1803,4 +1830,39 @@ test.each(["import", "require"])("round 5: db/client may pass on a %s schema nam
     "db/schema.ts": "export const comments = {};",
   });
   await expect(assertAgentGraph(folder, [join(folder, "db/client.ts")])).resolves.toBeInstanceOf(Set);
+});
+
+test.each([
+  'export const v = "update";',
+  'export const v = "delete";',
+  'export const act = (q) => q.run("update" + " tokens set kind = \'reviewer\'");',
+  `const v = "update"; export const act = (q) => q.run(\`\${v} reviews set state = 'approved'\`);`,
+])("rejects split and lone SQL verbs: %s", async (source) => {
+  const folder = await fixture({ "entry.ts": source });
+  await expect(assertAgentGraph(folder, [join(folder, "entry.ts")])).rejects.toThrow("forbidden");
+});
+
+test.each(["cli.ts", "main.ts"])("allows only the command name in %s", async (name) => {
+  const folder = await fixture({ [name]: 'export const command = "update";' });
+  await expect(assertAgentGraph(folder, [join(folder, name)])).resolves.toBeInstanceOf(Set);
+  const bad = await fixture({ [name]: 'export const command = "delete";' });
+  await expect(assertAgentGraph(bad, [join(bad, name)])).rejects.toThrow("forbidden");
+});
+test("allows the main Usage template including the inline update command", async () => {
+  const folder = await fixture({
+    "main.ts": "export const help = (io) => io.stdout(`Usage:\n  emend update\n  emend devices`);",
+  });
+  await expect(assertAgentGraph(folder, [join(folder, "main.ts")])).resolves.toBeInstanceOf(Set);
+});
+
+test.each([
+  "export const act = (q) => q.run(`Usage:\nSELECT * FROM devices`.slice(7));",
+  "export const act = (io, q) => { io.stdout(`Usage:\nSELECT * FROM devices`); q.run(`Usage:\nSELECT * FROM devices`.slice(7)); };",
+  "export const act = (q) => q.run(`Usage:\nUPDATE reviews SET state = 'approved'`.slice(7));",
+  "export const act = (q) => q.run(`Usage:\nDELETE FROM tokens`.slice(7));",
+  `const x = "UPDATE reviews SET state = 'approved'"; export const act = (q) => q.run(\`Usage:\n\${x}\`);`,
+  `export const act = (q, x) => q.run(\`Usage:\n\${x} SELECT * FROM devices\`);`,
+])("main Usage templates still reject SQL: %s", async (source) => {
+  const folder = await fixture({ "main.ts": source });
+  await expect(assertAgentGraph(folder, [join(folder, "main.ts")])).rejects.toThrow("forbidden");
 });

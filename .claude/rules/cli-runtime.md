@@ -11,8 +11,8 @@ A repo under review may try to run its own code through emend: under mise, its t
 point `emend`, `node` or `git` at code it controls, and agents run emend with full rights. These
 checks catch a copy inside the repo.
 
-- `publish`, `wait`, `feedback`, `reply`, `mcp`, `stop`, `service` and `skills` refuse an emend
-  whose Node.js or entry resolves inside a repository that holds the working directory
+- `publish`, `wait`, `feedback`, `reply`, `mcp`, `stop`, `service`, `update` and `skills` refuse
+  an emend whose Node.js or entry resolves inside a repository that holds the working directory
   (`apps/emend/src/cli.ts`, `runtime-repository.ts`). The refusal comes before `main.ts` loads.
 - A `.git` folder counts unless it has no `HEAD` (git never accepts one without), so an empty one
   such as a sandbox mount point does not, and one whose `HEAD` cannot be checked does. A `.git`
@@ -29,10 +29,10 @@ checks catch a copy inside the repo.
   link inside the repository could point the file at one the repository writes, whose `docRoots`
   would let `publish` read a folder such as `~/.ssh`. The server reads only `approvedActiveHours`
   from that file, a bounded integer, without this check.
-- Every helper program (git, systemctl, launchctl, tailscale, the browser opener) comes from
-  `findExecutable` (`executable.ts`): absolute `PATH` entries without `.` or `..` parts, where no
-  part of the entry's path or of the program's path, link targets included, lies inside such a
-  repository. The helper runs with only those entries on its `PATH`, minus any entry where a file
+- Every helper program (git, systemctl, launchctl, tailscale, the browser opener, and mise, npm
+  and pnpm for `emend update`) comes from `findExecutable` (`executable.ts`): absolute `PATH`
+  entries without `.` or `..` parts, where no part of the entry's path or of the program's path,
+  link targets included, lies inside such a repository. The helper runs with only those entries on its `PATH`, minus any entry where a file
   of that name exists but leads into such a repository or cannot be checked. On macOS, tailscale
   may instead come from the app's fixed path and then runs with the system `PATH`.
 - An error refuses, or skips the entry; nothing unchecked is trusted.
@@ -45,3 +45,27 @@ checks catch a copy inside the repo.
   mock of `executable.ts` refuses any lookup outside the test's own folders, so no test can reach a
   real `tailscale` or, on macOS, the Tailscale app. Tests of git run the system git with the
   fenced config above; tests of systemctl and launchctl use a fixture `PATH` and a mocked runner.
+- Tests use temporary `EMEND_HOME` folders and git repos built in the test, never real state.
+- `emend update` alone runs a package manager: it requires a terminal, a non-root user and HOME
+  resolving to the account's home. It finds mise, npm or pnpm through `findExecutable` and runs
+  from home. Its allowlisted environment drops Node options and incoming npm options; path-valued
+  variables pass only when checked outside the working directory's repositories, hop by hop.
+  Its PATH also drops entries whose node, npm or systemctl leads into a repository or cannot be checked.
+  Every child gets `npm_config_ignore_scripts=true`; npm and pnpm get `--ignore-scripts`, and
+  pnpm list gets `--config.ignore-pnpmfile=true`, pnpm add `--ignore-pnpmfile`. Children run in
+  their own process group; SIGINT, SIGTERM, SIGHUP and SIGQUIT forward to the group, followed by
+  SIGKILL on termination. Backups sync the file before rename and the directories afterward.
+  Go-back lists stop at the first failure: restore the old package and start it first; restore
+  the database only when the old entry's ls reports NewerDatabaseError, warning of lost changes
+  and revived revocations. Prose is shell comments; the database copy moves over the old inode.
+  Every program uses `/usr/bin/env -i` with checked PATH, HOME, path and session-bus pins; restore
+  proxies pass by shell reference, never printed values. Linux stops via a checked absolute systemctl;
+  macOS polls launchctl and proceeds only on status 113. Bare stop waits for process exit or discovery
+  removal/replacement, even without a listener. Locale values containing / are dropped;
+  a located downgrade refuses before executing it.
+  Local builds only get instructions. A located new emend inside those repositories is refused,
+  including every symlink hop; its `--version` and `service install` use the running Node.js.
+  After success it ends with notes; it compares the links in `~/.agents/skills` with the new
+  package's skills by real path only and reads nothing else there; each note line is inert prose
+  starting with `emend: `.
+  Tests use fake package managers on a fixture PATH.
