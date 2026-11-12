@@ -1,5 +1,5 @@
 import { AgentReviewList, type AgentReviewQuery, LIMITS } from "@emend/contract";
-import { and, asc, desc, eq, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import type { Principal } from "../../server/auth/principal.ts";
 import type { Db } from "../client.ts";
@@ -59,6 +59,7 @@ export async function listAgentReviews(
         and(
           eq(reviews.ownerId, principal.ownerId),
           eq(reviews.originInstanceId, instanceId),
+          isNull(reviews.binnedAt),
           query.head === undefined ? undefined : or(eq(approved.head, query.head), eq(newest.head, query.head)),
         ),
       )

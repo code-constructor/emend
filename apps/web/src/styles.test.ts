@@ -53,6 +53,20 @@ test("change bars define their base and continuation offsets in the components s
   expect(continuation).toMatch(/\btop:\s*calc\(-1\s*\*\s*var\(--reading-block-gap\)\)\s*;/);
 });
 
+test("topic metadata wraps whole desktop items and keeps the phone spacing", () => {
+  const css = readFileSync(join(webSource, "styles/diff.css"), "utf8");
+  const desktop = /\.em-topic-meta\s*\{([^}]+)\}/.exec(css)?.[1];
+  expect(desktop).toMatch(/flex-wrap:\s*wrap;/);
+  expect(desktop).toMatch(/row-gap:\s*2px;/);
+  expect(desktop).toMatch(/white-space:\s*nowrap;/);
+  expect(desktop).toMatch(/overflow:\s*hidden;/);
+  const phone = /\.em-diff-topic\[data-phone\] \.em-topic-meta\s*\{([^}]+)\}/.exec(css)?.[1];
+  expect(phone).toMatch(/flex-wrap:\s*wrap;/);
+  expect(phone).toMatch(/white-space:\s*normal;/);
+  expect(phone).toMatch(/overflow:\s*visible;/);
+  expect(phone).toMatch(/row-gap:\s*4px;/);
+});
+
 test("changed files keep the unviewed checkbox look", () => {
   const css = readFileSync(join(webSource, "styles/files.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
   expect(css).not.toMatch(/\[data-stale[^\]]*\][^{}]*\.em-viewed-mark__box\b[^{}]*\{/);
@@ -139,16 +153,22 @@ test("the five variable fonts and their OFL licences ship with matching font-fac
   expect(sources.sort()).toEqual(fontFiles.map((file) => join(webFonts, file)).sort());
 });
 
-test("writeup images sit in a wrapping row that stacks on narrow screens, using theme tokens only", () => {
+test("writeup images keep their own size, stay under half the screen and show a ring, using theme tokens only", () => {
   const css = readFileSync(join(webSource, "styles/prose.css"), "utf8");
   const rule = (selector: string) =>
     new RegExp(`${selector.replace(/[.>]/g, "\\$&")}\\s*\\{([^}]+)\\}`).exec(css)?.[1] ?? "";
-  expect(rule(".em-prose .emend-media")).toMatch(/display:\s*inline-flex/);
+  expect(rule(".em-prose .emend-media")).toMatch(/display:\s*inline-block/);
   expect(rule(".em-prose .emend-media")).toMatch(/max-width:\s*100%/);
-  expect(rule(".em-prose .emend-media img")).toMatch(/border:\s*1px solid var\(--border-1\)/);
+  expect(rule(".em-prose .emend-media")).toMatch(/--emend-media-fit:\s*min\(\s*calc\(var\(--emend-media-w\) \* 1px\)/);
+  expect(rule(".em-prose .emend-media img")).toMatch(/max-height:\s*50svh/);
+  expect(rule(".em-prose .emend-media img")).toMatch(/object-fit:\s*contain/);
+  expect(rule(".em-prose .emend-media img")).toMatch(/box-shadow:\s*0 0 0 1px var\(--border-1\)/);
   expect(rule(".em-prose .emend-media img")).toMatch(/border-radius:\s*var\(--radius-md\)/);
+  expect(rule(".em-prose .emend-media img")).toMatch(/background:\s*var\(--bg-sunken\)/);
   expect(rule(".em-prose p.emend-media-row")).toMatch(/flex-wrap:\s*wrap/);
-  expect(rule(".em-prose p.emend-media-row > .emend-media")).toMatch(/flex:\s*1 1 18rem/);
+  expect(rule(".em-prose p.emend-media-row > .emend-media")).toMatch(
+    /flex:\s*1 1 min\(var\(--emend-media-fit\), 18rem\)/,
+  );
   const media = css.slice(css.indexOf(".em-prose .emend-media {"), css.indexOf(".em-prose > :first-child"));
   expect(media).not.toMatch(/#[0-9a-f]{3,8}\b|rgb\(|oklch\(/i);
 });

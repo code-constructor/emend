@@ -12,7 +12,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { PORT_MAX, PORT_MIN, readRegistry, withRegistry } from "./registry.ts";
+import { PORT_MAX, PORT_MIN, readRegistry, registryPath, withRegistry } from "./registry.ts";
 import { gitTry, type Repo, resolveRepo } from "./repo.ts";
 import {
   branchPrRules,
@@ -32,7 +32,7 @@ import {
   type TestEnv,
   testPortRange,
 } from "./test-support.ts";
-import { WtError } from "./validate.ts";
+import { WtError, worktreeIssue } from "./validate.ts";
 import {
   cleanup,
   formatGc,
@@ -82,17 +82,19 @@ test("setup creates worktree, port and EMEND_HOME", () =>
     assert.equal(gitIn(r.path, "rev-parse", "HEAD"), gitIn(fx.main, "rev-parse", "origin/main"));
   }));
 
-test("setup, metadata, list and cleanup accept both task branch forms and preserve explicit names", () =>
+test("setup, metadata, list and cleanup treat a numbered non-issue branch as a plain branch", () =>
   scenario({}, ({ repo, fx, env }) => {
-    for (const branch of ["014-some-task", "emend-task-014-some-task"]) {
+    for (const branch of ["014-some-work", "emend-task-014-some-work"]) {
       const wt = setup(repo, { branch });
       assert.equal(wt.branch, branch);
       const info = JSON.parse(readFileSync(join(wt.path, ".wt/worktree.json"), "utf8"));
-      assert.equal(info.task, "014");
+      assert.equal(Object.hasOwn(info, "task"), false);
       assert.equal(info.issue, undefined);
-      assert.equal(readRegistry(repo).worktrees[branch]?.task, "014");
-      assert.equal(list(repo).find((r) => r.branch === branch)?.task, "014");
-      assert.match(formatList(list(repo)), /014-some-task\s+014\s/);
+      assert.equal(Object.hasOwn(readRegistry(repo).worktrees[branch] ?? {}, "task"), false);
+      const row = list(repo).find((r) => r.branch === branch);
+      assert.equal(row?.issue, undefined);
+      assert.equal(Object.hasOwn(row ?? {}, "task"), false);
+      assert.match(formatList(list(repo)), /ISSUE/);
       cleanup(repo, { target: branch, discard: false, closeWorkspace: false });
       assert.equal(existsSync(wt.path), false);
       assert.equal(readRegistry(repo).worktrees[branch], undefined);
@@ -101,7 +103,27 @@ test("setup, metadata, list and cleanup accept both task branch forms and preser
     fakeGithubOrigin(env, fx);
     installFake(env, "gh", issueRules([readyIssue(14)]));
     const issueBranch = setup(repo, { branch: "emend-14-an-issue", issue: 14 });
-    assert.equal(readRegistry(repo).worktrees[issueBranch.branch]?.task, null);
+    assert.equal(readRegistry(repo).worktrees[issueBranch.branch]?.issue, 14);
+  }));
+
+test("a registry and a worktree.json with legacy task keys still load and list", () =>
+  scenario({}, ({ repo }) => {
+    const wt = newWorktree(repo, "feat-legacy");
+    const file = join(wt.path, ".wt", "worktree.json");
+    writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, "utf8")), task: "014" }));
+    withRegistry(repo, (r) => {
+      (r.worktrees["feat-legacy"] as unknown as Record<string, unknown>).task = "014";
+    });
+    const path = registryPath(repo);
+    const legacy = JSON.parse(readFileSync(path, "utf8"));
+    legacy.reservations = { "014": { branch: "emend-task-014-x", slug: "x", reservedAt: "2020-01-01T00:00:00Z" } };
+    writeFileSync(path, JSON.stringify(legacy));
+    assert.equal(readRegistry(repo).worktrees["feat-legacy"]?.port, wt.port);
+    const row = list(repo).find((r) => r.branch === "feat-legacy");
+    assert.equal(row?.branch, "feat-legacy");
+    assert.equal(Object.hasOwn(row ?? {}, "task"), false);
+    assert.equal(worktreeIssue(wt.path), null);
+    withRegistry(repo, () => undefined);
   }));
 
 test("setup writes .wt/worktree.json and private directories", () =>
@@ -112,7 +134,6 @@ test("setup writes .wt/worktree.json and private directories", () =>
       branch: "feat-a",
       port: P0,
       emendHome: join(r.path, ".wt", "home"),
-      task: null,
       mode: "github",
     });
     assert.equal(r.emendHome, join(r.path, ".wt", "home"));
@@ -162,7 +183,6 @@ test("setup refusals", () =>
   scenario({}, ({ repo, fx }) => {
     expectCode(() => newWorktree(repo, "main"), 2);
     expectCode(() => setup(repo, { branch: "feat-b", from: "no-such-ref", busy: NO_BUSY }), 2);
-    expectCode(() => setup(repo, { branch: "feat-c", task: "7", busy: NO_BUSY }), 2);
 
     newWorktree(repo, "feat-a");
     expectCode(() => newWorktree(repo, "feat-a"), 3);
@@ -183,7 +203,7 @@ test("setup refusals", () =>
     // all ports registered
     withRegistry(repo, (r) => {
       for (let p = P0; p <= P9; p++) {
-        r.worktrees[`fill-${p}`] = { path: "/nowhere", port: p, task: null, mode: "github", createdAt: "t" };
+        r.worktrees[`fill-${p}`] = { path: "/nowhere", port: p, mode: "github", createdAt: "t" };
       }
     });
     expectCode(() => newWorktree(repo, "feat-z"), 69);
@@ -548,9 +568,22 @@ test("the removed run subcommand is unknown and help does not list it", () =>
     assert.equal(bad.code, 2);
     const help = await runWt(wt, ["help"], { cwd: fx.main });
     assert.doesNotMatch(help.stdout, /run view/);
-    assert.match(help.stdout, /--brief-file/);
+    assert.doesNotMatch(help.stdout, /--brief|--task|--slug|\btasks?\b|reserv/i);
     assert.match(help.stdout, /issues \[--json\]/);
     assert.match(help.stdout, /spawn --issue <n>/);
+  }));
+
+test("the removed tasks command and setup --task are refused", () =>
+  scenario({ withBin: true }, async ({ fx, repo }) => {
+    const wt = join(fx.main, "bin", "wt");
+    const tasks = await runWt(wt, ["tasks"], { cwd: fx.main });
+    assert.equal(tasks.code, 2);
+    assert.match(tasks.stderr, /Unknown subcommand/);
+    const setup = await runWt(wt, ["setup", "some-new-branch", "--task", "1"], { cwd: fx.main });
+    assert.equal(setup.code, 2);
+    assert.match(setup.stderr, /Unknown option/);
+    assert.deepEqual(readRegistry(repo).worktrees, {});
+    assert.equal(gitIn(fx.main, "branch", "--list", "some-new-branch"), "");
   }));
 
 test("list and gc output carry no control character from outside", () => {
@@ -558,7 +591,6 @@ test("list and gc output carry no control character from outside", () => {
     {
       branch: "a\u0085b",
       path: "/p",
-      task: null,
       port: 1,
       mode: "github" as const,
       ahead: null,
@@ -610,7 +642,7 @@ test("writeWtFiles refuses a symlinked .wt and writes nothing through it", () =>
     mkdirSync(dir);
     mkdirSync(target);
     symlinkSync(target, join(dir, ".wt"));
-    const entry = { path: dir, port: P0, task: null, mode: "github" as const, createdAt: "x" };
+    const entry = { path: dir, port: P0, mode: "github" as const, createdAt: "x" };
     assert.throws(() => writeWtFiles(entry, "b"));
     assert.deepEqual(readdirSync(target), []);
     // a symlinked file inside a real .wt is refused as well

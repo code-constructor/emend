@@ -42,17 +42,7 @@ import {
   refExists,
 } from "./repo.ts";
 import { hasTerminal, readTerminalLine } from "./terminal.ts";
-import {
-  branchName,
-  commitSha,
-  issueNumber,
-  parseFlags,
-  refName,
-  requireIssueBranch,
-  taskFromBranch,
-  taskNumber,
-  WtError,
-} from "./validate.ts";
+import { branchName, commitSha, issueNumber, parseFlags, refName, requireIssueBranch, WtError } from "./validate.ts";
 
 // ---------------------------------------------------------------------------------------------
 // Output and terminal access. Tests may replace the terminal.
@@ -86,7 +76,6 @@ export function worktreeDirName(branch: string): string {
 export interface SetupOptions {
   branch: string;
   from?: string;
-  task?: string;
   /** A number is approved here; spawn supplies its freshly approved issue to share the same snapshot. */
   issue?: number | PickedIssue;
   mode?: "github" | "local";
@@ -142,7 +131,7 @@ export function writeWtFiles(entry: WorktreeEntry, branch: string): string {
   ensureRealDir(emendHome, 0o700);
   // .wt holds this checkout's private state; ignore it even where the repository's .gitignore does not.
   createNew(join(wt, ".gitignore"), "*\n", 0o600);
-  const info = { branch, port: entry.port, emendHome, task: entry.task, issue: entry.issue, mode: entry.mode };
+  const info = { branch, port: entry.port, emendHome, issue: entry.issue, mode: entry.mode };
   createNew(join(wt, "worktree.json"), `${JSON.stringify(info, null, 2)}\n`, 0o600);
   return emendHome;
 }
@@ -292,8 +281,6 @@ export function setup(repo: Repo, o: SetupOptions): SetupResult {
   const prepared = typeof o.issue === "object" && o.issue !== null ? o.issue : undefined;
   const issue = o.issue === undefined ? undefined : issueNumber(String(prepared?.number ?? o.issue));
   requireIssueBranch(branch, issue);
-  if (issue !== undefined && o.task !== undefined) throw new WtError(2, "Give a task or an issue, not both.");
-  const task = issue !== undefined ? null : o.task === undefined ? taskFromBranch(branch) : taskNumber(o.task);
   const mode = o.mode ?? "github";
   if (issue !== undefined && mode === "local")
     throw new WtError(2, "A local landing does not close the issue; use the github mode.");
@@ -375,7 +362,7 @@ export function setup(repo: Repo, o: SetupOptions): SetupResult {
       git(repo, ["branch", "--quiet", `--set-upstream-to=origin/${branch}`, branch]);
     }
 
-    const entry: WorktreeEntry = { path, port, task, issue, mode, createdAt: new Date().toISOString() };
+    const entry: WorktreeEntry = { path, port, issue, mode, createdAt: new Date().toISOString() };
     r.worktrees[branch] = entry;
     try {
       const emendHome = writeWtFiles(entry, branch);
@@ -402,7 +389,6 @@ export function setup(repo: Repo, o: SetupOptions): SetupResult {
 export interface ListRow {
   branch: string;
   path: string;
-  task: string | null;
   issue?: number;
   port: number;
   mode: "github" | "local";
@@ -500,7 +486,6 @@ export function list(repo: Repo): ListRow[] {
     rows.push({
       branch,
       path: entry.path,
-      task: entry.task ?? (entry.issue === undefined ? taskFromBranch(branch) : null),
       issue: entry.issue,
       port: entry.port,
       mode: entry.mode,
@@ -517,13 +502,13 @@ export function list(repo: Repo): ListRow[] {
 
 export function formatList(rows: ListRow[]): string {
   if (rows.length === 0) return "No worktrees.";
-  const head = ["BRANCH", "TASK/ISSUE", "PORT", "AHEAD/BEHIND", "DIRTY", "PR", "AGENT"];
+  const head = ["BRANCH", "ISSUE", "PORT", "AHEAD/BEHIND", "DIRTY", "PR", "AGENT"];
   // Branch names, the PR state and the agent status come from outside: no control character (C0, DEL, C1) shows.
   const safe = (s: string) => s.replace(/\p{Cc}/gu, "?");
   const body = rows.map((r) =>
     [
       r.missing ? `${r.branch} (missing)` : r.branch,
-      r.issue === undefined ? (r.task ?? "-") : `#${r.issue}`,
+      r.issue === undefined ? "-" : `#${r.issue}`,
       String(r.port),
       r.ahead === null || r.behind === null ? "-" : `+${r.ahead}/-${r.behind}`,
       r.dirty === null ? "-" : r.dirty ? "yes" : "no",
@@ -786,7 +771,7 @@ export function cleanup(repo: Repo, o: { target: string; closeWorkspace: boolean
 // gc
 
 export interface GcItem {
-  kind: "missing-directory" | "orphan-directory" | "stale-reservation" | "merged-branch";
+  kind: "missing-directory" | "orphan-directory" | "merged-branch";
   name: string;
   /**
    * found: reported only. removed/kept: after --prune. locked: a locked worktree, never touched.
@@ -800,8 +785,6 @@ export interface GcReport {
   items: GcItem[];
 }
 
-const RESERVATION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
-
 let beforeBranchDelete: ((branch: string) => void) | null = null;
 
 /** Test seam: runs between gc's scan and its locked re-check of a merged branch, to simulate a concurrent setup. */
@@ -811,8 +794,7 @@ export function setBeforeBranchDeleteHookForTests(hook: ((branch: string) => voi
 
 /**
  * Reports registry entries without a directory, directories under .claude/worktrees without an entry
- * (Claude Code's own `worktree-*` branches excluded), reservations older than 24 hours whose branch does not
- * exist, and local branches merged into origin/main. With `prune` it removes them, running the safety guard
+ * (Claude Code's own `worktree-*` branches excluded), and local branches merged into origin/main. With `prune` it removes them, running the safety guard
  * first wherever a worktree directory is involved. A locked worktree is reported and never touched.
  */
 export function gc(repo: Repo, prune: boolean): GcReport {
@@ -865,31 +847,12 @@ export function gc(repo: Repo, prune: boolean): GcReport {
     item.why = wt ? "not registered; remove it by hand" : "not registered and not a worktree; remove it by hand";
   }
 
-  // 3. Reservations older than 24 hours with no branch.
-  const branchKnown = (b: string): boolean =>
-    refExists(repo, `refs/heads/${b}`) ||
-    refExists(repo, `refs/remotes/origin/${b}`) ||
-    Object.hasOwn(reg.worktrees, b);
-  for (const [number, res] of Object.entries(reg.reservations)) {
-    const age = Date.now() - Date.parse(res.reservedAt);
-    if (!(age > RESERVATION_MAX_AGE_MS) || branchKnown(res.branch)) continue;
-    const item: GcItem = { kind: "stale-reservation", name: number, state: "found" };
-    items.push(item);
-    if (prune) {
-      withRegistry(repo, (r) => {
-        if (r.reservations[number]?.reservedAt === res.reservedAt) delete r.reservations[number];
-      });
-      item.state = "removed";
-    }
-  }
-
-  // 4. Local branches merged into origin/main, unless something still uses them.
+  // 3. Local branches merged into origin/main, unless something still uses them.
   const merged = gitTry(repo, ["branch", "--merged", "refs/remotes/origin/main", "--format=%(refname:short)"]);
   if (merged.code === 0) {
     const inUse = new Set<string>(["main"]);
     for (const w of gitWts) if (w.branch) inUse.add(w.branch);
     for (const b of Object.keys(reg.worktrees)) inUse.add(b);
-    for (const res of Object.values(reg.reservations)) inUse.add(res.branch);
     if (repo.callerBranch) inUse.add(repo.callerBranch);
     for (const b of merged.stdout.split("\n")) {
       if (b === "" || inUse.has(b) || b.startsWith("worktree-")) continue;
@@ -904,11 +867,9 @@ export function gc(repo: Repo, prune: boolean): GcReport {
       if (!prune) continue;
       beforeBranchDelete?.(b);
       // The lists above are a moment old. Under the registry lock, look again before deleting: a setup or
-      // spawn that started since may have registered, reserved or checked out this branch.
+      // spawn that started since may have registered or checked out this branch.
       const outcome = withRegistry(repo, (r) => {
-        if (Object.hasOwn(r.worktrees, b) || Object.values(r.reservations).some((res) => res.branch === b)) {
-          return "in-use";
-        }
+        if (Object.hasOwn(r.worktrees, b)) return "in-use";
         if (b === repo.callerBranch || listGitWorktrees(repo).some((w) => w.branch === b)) return "in-use";
         const stillMerged = gitTry(repo, [
           "merge-base",
@@ -962,19 +923,19 @@ async function loadInteractive(): Promise<InteractiveModule | null> {
 }
 
 const setupCommand: Command = async ({ repo, args }) => {
-  const { flags, positionals } = parseFlags(args, { from: "string", task: "string", issue: "string" }, 1);
+  const { flags, positionals } = parseFlags(args, { from: "string", issue: "string" }, 1);
   let branch = positionals[0];
   let from = flags.from as string | undefined;
   if (branch === undefined) {
     const picked = (await loadInteractive())?.setupWizard?.(repo) ?? null;
-    if (!picked) throw new WtError(2, "Usage: bin/wt setup <branch> [--from <ref>] [--task <NNN> | --issue <n>]");
+    if (!picked) throw new WtError(2, "Usage: bin/wt setup <branch> [--from <ref>] [--issue <n>]");
     branch = picked.branch;
     from = picked.from ?? from;
   }
   const issue = typeof flags.issue === "string" ? issueNumber(flags.issue) : undefined;
   requireIssueBranch(branchName(branch), issue);
   const busy = await busyPorts();
-  const r = setup(repo, { branch, from, task: flags.task as string | undefined, issue, busy });
+  const r = setup(repo, { branch, from, issue, busy });
   say(`worktree: ${r.path}`);
   say(`branch: ${r.branch}`);
   say(`port: ${r.port}`);

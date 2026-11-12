@@ -421,7 +421,22 @@ test("render failure rolls back a writeup, doc failure degrades, placement timeo
   ).toHaveLength(1);
 });
 
-test("a thread created during computation retries with cached rendering and transferred IDs", async () => {
+test("render failure spends no diff counting work", async () => {
+  const hash = await blobs.put(f.ownerId, Buffer.from("changed\n"), "text/plain");
+  const body: PublishRequest = {
+    ...input(),
+    files: [{ path: "source.txt", role: "diff", oldPath: null, oldBlob: null, newBlob: hash, flag: null }],
+  };
+  const executor = vi.fn<Executor>(async (work) => {
+    if (work.kind === "writeup") throw new Error("synthetic render failure");
+    return executeWork(work);
+  });
+  await expect(publish(body, f.instanceId, f.ownerId, executor)).rejects.toMatchObject({ code: "invalid_request" });
+  expect(executor.mock.calls.some(([work]) => work.kind === "writeup")).toBe(true);
+  expect(executor.mock.calls.filter(([work]) => work.kind === "diff-counts")).toHaveLength(0);
+});
+
+test("a thread created during computation retries with cached rendering, counts and transferred IDs", async () => {
   const worker = workerExecutor();
   try {
     const first = await publish(input());
@@ -429,9 +444,11 @@ test("a thread created during computation retries with cached rendering and tran
     if (!revision) throw new Error("missing revision");
     let computations = 0;
     let docComputations = 0;
+    let countComputations = 0;
     const hash = await blobs.put(f.ownerId, Buffer.from("# Cached doc"), "text/markdown");
     const executor: Executor = async (work) => {
       if (work.kind === "doc") docComputations++;
+      if (work.kind === "diff-counts") countComputations++;
       if (work.kind === "writeup" && ++computations === 1)
         await f.db.query((q) =>
           q.insert(threads).values({
@@ -447,7 +464,18 @@ test("a thread created during computation retries with cached rendering and tran
       await publish(
         {
           ...input(),
-          files: [{ path: "cached.md", role: "doc", oldPath: null, oldBlob: null, newBlob: hash, flag: null }],
+          files: [
+            { path: "cached.md", role: "doc", oldPath: null, oldBlob: null, newBlob: hash, flag: null },
+            {
+              path: "cached.txt",
+              role: "diff",
+              status: "added",
+              oldPath: null,
+              oldBlob: null,
+              newBlob: hash,
+              flag: null,
+            },
+          ],
         },
         f.instanceId,
         f.ownerId,
@@ -456,6 +484,15 @@ test("a thread created during computation retries with cached rendering and tran
     ).toMatchObject({ revision: 2, placed: 1 });
     expect(computations).toBe(1);
     expect(docComputations).toBe(1);
+    expect(countComputations).toBe(1);
+    const counted = await f.db.read((q) =>
+      q
+        .select()
+        .from(files)
+        .where(and(eq(files.ownerId, f.ownerId), eq(files.role, "diff")))
+        .get(),
+    );
+    expect(counted).toMatchObject({ additions: 1, deletions: 0 });
     const rows = await f.db.query((q) => q.select().from(changedBlocks).where(eq(changedBlocks.ownerId, f.ownerId)));
     expect(rows.some((row) => row.blockId.startsWith("doc-"))).toBe(true);
   } finally {
@@ -691,7 +728,12 @@ test("placement reads only targeted sides and deduplicates their shared hashes",
     ),
   );
   const get = vi.spyOn(blobs, "get");
-  expect(await publish(body)).toMatchObject({ placed: 2, unplaced: 0 });
+  const result = await publish(body, f.instanceId, f.ownerId, async (work) => {
+    // Counting needs both sides; measure placement reads after that preparation finishes.
+    if (work.kind === "writeup") get.mockClear();
+    return executeWork(work);
+  });
+  expect(result).toMatchObject({ placed: 2, unplaced: 0 });
   expect(get.mock.calls.filter(([, hash]) => hash === wanted)).toHaveLength(1);
   expect(get.mock.calls.filter(([, hash]) => hash === unused)).toHaveLength(0);
 });

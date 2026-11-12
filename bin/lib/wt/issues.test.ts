@@ -88,7 +88,6 @@ test("issues detect local, registered, live origin, and PR heads with an exact i
       r.worktrees["emend-8-registered"] = {
         path: join(repo.worktreesDir, "missing"),
         port: 1,
-        task: null,
         issue: 8,
         mode: "github",
         createdAt: "t",
@@ -487,7 +486,6 @@ test("issue check accepts only its own claims and unchanged approved content", (
       r.worktrees["emend-another-name"] = {
         path: join(repo.worktreesDir, "other"),
         port: 2,
-        task: null,
         issue: 42,
         mode: "github",
         createdAt: "t",
@@ -506,7 +504,6 @@ for (const claim of ["registry", "local", "remote"] as const) {
           r.worktrees["emend-different-name"] = {
             path: join(repo.worktreesDir, "other"),
             port: 1,
-            task: null,
             issue: 42,
             mode: "github",
             createdAt: "t",

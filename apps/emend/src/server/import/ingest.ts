@@ -167,6 +167,7 @@ export async function importReview(principal: Principal, bundle: ImportBundle, d
           approvedRevision: null,
           approvedAt: null,
           movedToUrl: null,
+          binnedAt: nullableAt(bundle.review.binnedAt ?? null),
           importedAt: deps.now(),
           createdAt: at(bundle.review.createdAt),
           updatedAt: at(bundle.review.updatedAt),
@@ -211,6 +212,7 @@ export async function importReview(principal: Principal, bundle: ImportBundle, d
                     ?.[docViewOf(r) === "source" ? "sourceMetadata" : "metadata"].get(r.path)?.headings ?? null)
                 : null,
             mediaType: fileMediaType(r),
+            ...(r.role === "diff" ? prepared.counted.get(r.revisionId)?.get(r.path) : {}),
             renderedBlob:
               r.role === "doc"
                 ? (prepared.rendered

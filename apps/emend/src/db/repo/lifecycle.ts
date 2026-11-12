@@ -1,5 +1,13 @@
-import { MAX_SNOOZE_DAYS, type RetireRequest, type SnoozeRequest } from "@emend/contract";
-import { and, count, eq, inArray, isNull, notExists, notInArray, sql } from "drizzle-orm";
+import { createHash } from "node:crypto";
+import {
+  type BinQuery,
+  BinView,
+  LIMITS,
+  MAX_SNOOZE_DAYS,
+  type RetireRequest,
+  type SnoozeRequest,
+} from "@emend/contract";
+import { and, asc, count, desc, eq, inArray, isNotNull, isNull, notExists, notInArray, sql } from "drizzle-orm";
 import { ApiError } from "../../server/http/errors.ts";
 import type { Db, Queries } from "../client.ts";
 import {
@@ -10,6 +18,7 @@ import {
   deliveries,
   docAssets,
   files,
+  instances,
   placements,
   repos,
   reviews,
@@ -118,10 +127,74 @@ export function reopenReview(ownerId: string, db: Db, reviewId: string, now: num
   });
 }
 
-/** Delete one review and everything under it in one transaction; return the blobs it may have freed. */
-export function deleteReview(ownerId: string, db: Db, reviewId: string, now: number) {
+/** Move a review to the bin. Only binned_at changes: nothing else of the review is touched. */
+export function binReview(ownerId: string, db: Db, reviewId: string, now: number) {
   return db.transaction(async (q) => {
-    const review = await requireReview(ownerId, q, reviewId);
+    // requireReview answers review_in_bin for a review that is already binned.
+    await requireReview(ownerId, q, reviewId);
+    await touch(ownerId, q, reviewId, { binnedAt: now });
+    return (await newestRevision(ownerId, q, reviewId)).seq;
+  });
+}
+
+/** Take a review out of the bin. Only binned_at changes, so it returns to the list and place it had. */
+export function restoreReview(ownerId: string, db: Db, reviewId: string) {
+  return db.transaction(async (q) => {
+    const review = await requireReview(ownerId, q, reviewId, undefined, true, false, true);
+    if (review.binnedAt === null) throw new ApiError("invalid_state");
+    await touch(ownerId, q, reviewId, { binnedAt: null });
+    return (await newestRevision(ownerId, q, reviewId)).seq;
+  });
+}
+
+/** One page of the owner's live binned reviews, newest first (ties by id); total counts them all. */
+export function listBin(ownerId: string, db: Db, cursor: BinQuery = {}): Promise<BinView> {
+  return db.read(async (q) => {
+    const { rows, version } = await binSnapshot(ownerId, q);
+    let page = rows;
+    if (cursor.beforeAt && cursor.beforeId) {
+      const beforeAt = Date.parse(cursor.beforeAt);
+      const beforeId = cursor.beforeId;
+      page = rows.filter(
+        (row) => (row.binnedAt as number) < beforeAt || (row.binnedAt === beforeAt && row.id > beforeId),
+      );
+    }
+    return BinView.parse({
+      version,
+      items: page.slice(0, LIMITS.binItems).map((row) => ({
+        id: row.id,
+        title: row.title,
+        machine: row.machine,
+        binnedAt: new Date(row.binnedAt as number).toISOString(),
+      })),
+      total: rows.length,
+      more: page.length > LIMITS.binItems,
+    });
+  });
+}
+
+/** One statement gives listing and deletion the same bin snapshot, even with external writers. */
+export async function binSnapshot(ownerId: string, q: Queries) {
+  const rows = await q
+    .select({ id: reviews.id, title: reviews.title, machine: instances.name, binnedAt: reviews.binnedAt })
+    .from(reviews)
+    .innerJoin(instances, eq(instances.id, reviews.originInstanceId))
+    .where(and(eq(reviews.ownerId, ownerId), isNotNull(reviews.binnedAt), isNull(reviews.movedToUrl)))
+    .orderBy(desc(reviews.binnedAt), asc(reviews.id))
+    .all();
+  const ids = rows.map((row) => row.id).sort();
+  return { rows, ids, version: createHash("sha256").update(ids.join("\n")).digest("hex") };
+}
+
+/**
+ * Delete one review and everything under it in one transaction; return the blobs it may have freed.
+ * A binned review can be deleted. With `onlyBinned`, a review that is not (or no longer) in the bin
+ * stays, and the call answers null.
+ */
+export function deleteReview(ownerId: string, db: Db, reviewId: string, now: number, onlyBinned = false) {
+  return db.transaction(async (q) => {
+    const review = await requireReview(ownerId, q, reviewId, undefined, true, false, true);
+    if (onlyBinned && review.binnedAt === null) return null;
     const revision = (await newestRevision(ownerId, q, reviewId)).seq;
     const revisionIds = q
       .select({ id: revisions.id })

@@ -1,11 +1,16 @@
 import { expect, test } from "vitest";
 import {
   APPROVED_ACTIVE_HOURS,
+  BinItem,
+  BinQuery,
+  BinView,
+  EmptyBinRequest,
   ERROR_STATUS,
   ImportResult,
   InboxItem,
   InboxList,
   LIMITS,
+  REVIEW_BIN_FEATURE,
   RetireRequest,
   ReviewEvent,
   ReviewEventName,
@@ -118,7 +123,7 @@ test("the inbox cap applies per list", () => {
 });
 
 test("lifecycle events carry ids and a revision only", () => {
-  for (const type of ["snooze", "unsnooze", "retire", "reopen", "delete"] as const) {
+  for (const type of ["snooze", "unsnooze", "retire", "reopen", "delete", "bin", "restore"] as const) {
     expect(ReviewEventName.options).toContain(type);
     expect(ReviewEvent.parse({ type, reviewId: id, revision: 3, body: "dropped" })).toEqual({
       type,
@@ -133,4 +138,62 @@ test("the new refusals are 409 and an import can report a deleted review", () =>
   expect(ERROR_STATUS.invalid_state).toBe(409);
   expect(ImportResult.parse({ skipped: true, deleted: true })).toEqual({ skipped: true, deleted: true });
   expect(ImportResult.parse({ skipped: false })).toEqual({ skipped: false });
+});
+
+test("the bin view lists items with an ISO binnedAt and is capped", () => {
+  const binned = { id, title: "Synthetic", machine: "Synthetic machine", binnedAt: "2026-11-04T10:00:00.000Z" };
+  const version = "0123456789abcdef".repeat(4);
+  expect(BinItem.parse({ ...binned, extra: 1 })).toEqual(binned);
+  const view = { items: [binned], total: 1, more: false, version };
+  expect(BinView.parse(view)).toEqual(view);
+  expect(BinItem.safeParse({ ...binned, binnedAt: "yesterday" }).success).toBe(false);
+  for (const invalid of [{ total: -1 }, { more: undefined }, { version: undefined }, { version: "invalid" }])
+    expect(BinView.safeParse({ ...view, ...invalid }).success).toBe(false);
+  expect(
+    BinView.safeParse({ ...view, items: Array.from({ length: LIMITS.binItems + 1 }, () => binned), total: 201 })
+      .success,
+  ).toBe(false);
+  expect(ERROR_STATUS.review_in_bin).toBe(409);
+  expect(REVIEW_BIN_FEATURE).toBe("review-bin");
+});
+
+test("empty bin requires a strict lowercase SHA-256 version", () => {
+  const version = "0123456789abcdef".repeat(4);
+  expect(EmptyBinRequest.parse({ version })).toEqual({ version });
+  for (const value of [
+    undefined,
+    null,
+    {},
+    { version, extra: true },
+    { version, total: 1 },
+    { version, upTo: "2026-11-04T10:00:00.000Z" },
+    { upTo: "2026-11-04T10:00:00.000Z", total: 1 },
+  ])
+    expect(EmptyBinRequest.safeParse(value).success).toBe(false);
+  for (const invalid of [
+    undefined,
+    null,
+    1,
+    "",
+    "a".repeat(63),
+    "a".repeat(65),
+    "g".repeat(64),
+    version.toUpperCase(),
+  ]) {
+    expect(EmptyBinRequest.safeParse({ version: invalid }).success).toBe(false);
+    expect(BinView.safeParse({ version: invalid, items: [], total: 0, more: false }).success).toBe(false);
+  }
+});
+
+test("bin cursors require both fields", () => {
+  const beforeAt = "2026-11-04T10:00:00.000Z";
+  expect(BinQuery.parse({})).toEqual({});
+  expect(BinQuery.parse({ beforeAt, beforeId: id })).toEqual({ beforeAt, beforeId: id });
+  for (const value of [
+    { beforeAt },
+    { beforeId: id },
+    { beforeAt: "yesterday", beforeId: id },
+    { beforeAt, beforeId: "invalid" },
+  ])
+    expect(BinQuery.safeParse(value).success).toBe(false);
 });

@@ -4,8 +4,9 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-// Codex silently truncates the AGENTS.md chain at 32 KiB; this leaves room for the user's global file.
-const AGENTS_MAX_BYTES = 12288;
+// Codex silently truncates the AGENTS.md chain at 32 KiB; 16 KiB leaves room for the user's global
+// file (about 11 KiB today).
+const AGENTS_MAX_BYTES = 16384;
 const CLAUDE_MAX_BYTES = 1024;
 const RULE_MAX_BYTES = 6144;
 

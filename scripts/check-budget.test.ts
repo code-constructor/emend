@@ -41,19 +41,19 @@ function makeTree(options: TreeOptions = {}): string {
 test("a valid tree passes", () => {
   const { errors, summary } = checkBudget(makeTree());
   assert.deepEqual(errors, []);
-  assert.match(summary, /^check:budget ok: AGENTS\.md \d+\/12288 bytes, 1 rules, 1 agents$/);
+  assert.match(summary, /^check:budget ok: AGENTS\.md \d+\/16384 bytes, 1 rules, 1 agents$/);
 });
 
 test("an AGENTS.md over the limit fails", () => {
   const body = "# Rules\n`.claude/rules/cli.md`\n";
-  const { errors } = checkBudget(makeTree({ agents: body + "x".repeat(12289 - body.length) }));
+  const { errors } = checkBudget(makeTree({ agents: body + "x".repeat(16385 - body.length) }));
   assert.equal(errors.length, 1);
-  assert.match(errors[0], /AGENTS\.md is 12289 bytes/);
+  assert.match(errors[0], /AGENTS\.md is 16385 bytes/);
 });
 
 test("an AGENTS.md of exactly the limit passes", () => {
   const body = "# Rules\n`.claude/rules/cli.md`\n";
-  const { errors } = checkBudget(makeTree({ agents: body + "x".repeat(12288 - body.length) }));
+  const { errors } = checkBudget(makeTree({ agents: body + "x".repeat(16384 - body.length) }));
   assert.deepEqual(errors, []);
 });
 

@@ -9,15 +9,17 @@ it is not. `docs/architecture.md` describes how it is built.
   "plan task 1.6" refer to the plan. Work in its order and record calls in its build log.
 - Sibling repo: [hunk-review-skill](https://github.com/vendis-ai/hunk-review-skill), the project
   emend grew out of. Its local path is in `.sync-counterpart-path` (gitignored).
+- Not a maintainer (see `.github/CODEOWNERS`)? Follow `CONTRIBUTING.md`, keep the non-negotiables,
+  and skip the rules on `bin/wt`, the `e-*` skills and `.private-terms`: push with `git push`.
 
 ## What to do next
 
 New work comes as GitHub issues. `bin/wt issues` prints the queue in pick order: bugs first, then
 `P0`, `P1`, `P2`, then the oldest. Only an issue the owner labelled `ready`, with no open blocker, is
 picked up. A bare `/loop` or `/loop /e-loop` in the main checkout works the queue
-(`.claude/loop.md`); `/e-issue` files new issues. Older work stays in `tasks/`: when asked "what
-now?", "what's next?" or similar, give the next pickable issue, then follow `tasks/README.md` for
-open task files. Keep each task file's status current as work lands.
+(`.claude/loop.md`); `/e-issue` files new issues. When asked "what now?", "what's next?" or
+similar, give the next pickable issue. When none is pickable, say so and point to the plan; do not
+invent work.
 
 ## Layout
 
@@ -32,8 +34,7 @@ open task files. Keep each task file's status current as work lands.
   Markdown parser; bin/wt itself stays dependency-free.
 - `plugin/`: the Claude Code plugin. `plugin/skills/` holds the review skills, their only copy;
   `plugin/` holds nothing else but `.claude-plugin/plugin.json`. `docs/api.md`: the v1 contract.
-  `sync/`: surfaces shared with hunk-review-skill, and synthetic fixtures. `tasks/`: the older
-  work queue; new work is GitHub issues.
+  `sync/`: surfaces shared with hunk-review-skill, and synthetic fixtures.
 
 ## Commands
 
@@ -78,8 +79,8 @@ Each line prevents a real failure. "Before you touch" names the rule file with t
    first. The API is versioned under `/api/v1`. Additive fields are fine; breaking changes need
    `/api/v2`.
 7. **Never edit or delete a committed migration.** Add a new one.
-8. **The CLI runs no code from the repo under review.** No repo scripts, no package manager, git
-   only for allowlisted read-only lookups. Config never comes from that repo.
+8. **The CLI runs no code from the repo under review.** No repo scripts, no package manager but
+   `emend update`'s, git only for allowlisted read-only lookups. Config never comes from that repo.
 9. **Fixtures are synthetic, and client content never enters the repo.** Real reviews, state
    files and text from reviewed repos never become fixtures, tests or commit messages.
 10. **Never read secrets.** No tokens or `.env` values in output, code or commits. Check a
@@ -90,26 +91,25 @@ Each line prevents a real failure. "Before you touch" names the rule file with t
 
 - Feature work happens on a branch in a `bin/wt` worktree under `.claude/worktrees/`. Claude Code
   sessions start at the root of the main checkout or of such a worktree. Branch names start with
-  `emend-`: `emend-<n>-<slug>` for issue `<n>`, `emend-task-<NNN>-<slug>` for a task file.
+  `emend-`: `emend-<n>-<slug>` for issue `<n>`.
 - On its own feature branch an agent commits with plain `git commit` (the git config signs it) and
   pushes that branch. One logical change per commit; the body names the plan task.
 - A merge happens only through `/e-pr-merge` (squash, pinned to the head the owner approved in
-  emend) or `/e-merge-local`, after the owner approved that head in emend. Outside those skills,
-  never run `gh pr merge`.
+  emend), `/e-merge-local`, or `/e-outside` for a fork PR, after the owner approved that head in
+  emend. Outside those skills, never run `gh pr merge`.
 - Agents never push `main` or tags, and never force-push without a lease. Direct commits to `main`
   happen only when the owner asks. The Release workflow publishes to npm from `main`; agents never
   start or re-run it.
 - The lifecycle skills: `/e-spawn`, `/e-work`, `/e-pr`, `/e-pr-finalize`, `/e-pr-merge`, `/e-rebase`,
-  `/e-merge-local`.
+  `/e-merge-local`, `/e-outside` (an outside contributor's issue and fork PR). Fork code never
+  runs on this machine.
 - `/e-issue` turns an idea, an improvement or a bug into a GitHub issue. Issues are public. Only the
   owner's command sets the `ready` label.
 - A hook guards Bash and Monitor: issue and label writes ask in main and are refused in worktrees;
   secret reads and guard, settings or git metadata edits are denied. It runs from main, so
   fast-forward main to a hook change before rebasing worktrees onto it.
-- A bare `/loop` in the main checkout runs the work loop in `.claude/loop.md`: it keeps up to
-  three workers on pickable issues that do not collide and steers them to finish. `/loop /e-loop`
-  runs the same file. Each worker merges only after the owner approved its head in emend, and the
-  merge closes its issue.
+- The work loop (`.claude/loop.md`) keeps up to three workers on pickable issues that do not
+  collide. Each merges only after the owner approved its head in emend; the merge closes its issue.
 - Tests never touch emend's real state directory, which holds client diffs: the Vitest setup
   sets a temporary `EMEND_HOME`, and every test that needs state uses its own.
 - Changing `.claude/settings.json`, `.claude/hooks/` or `.codex/` needs the owner's approval
@@ -153,10 +153,9 @@ Codex reads only this file. Open the matching rule file before you edit these pa
 
 ## Sync with hunk-review-skill
 
-hunk-review-skill is not being retired: both projects stay maintained. Every improvement made here
-is checked against hunk-review-skill and applied there in its own way when it fits, and every
-improvement there is checked against emend. That covers contract and CLI changes, review wording
-and review insights alike.
+Both projects stay maintained. Every improvement here is checked against hunk-review-skill and
+applied there in its own way when it fits, and the reverse: contract and CLI changes, review
+wording and review insights alike.
 
 `sync/manifest.json` lists the shared surfaces. Each surface's `self` globs are this repo's paths.
 

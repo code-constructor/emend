@@ -1,6 +1,6 @@
 ---
 name: e-issue
-description: Turn an idea, an improvement or a bug, given as text and screenshots, into a GitHub issue a worker agent can start from, after asking the owner what is unclear. Also refines an existing issue and sets `ready` on the owner's command. Use when the owner types /e-issue, or asks to file, refine or groom an issue.
+description: Turn an idea, an improvement or a bug, given as text and screenshots, into a GitHub issue a worker agent can start from, after asking the owner what is unclear. Also refines an existing issue and sets `ready` on the owner's command. Use when the owner types /e-issue, or asks to file, refine or groom an issue. For an issue or PR from an outside contributor, tell the owner to run /e-outside first.
 ---
 
 # /e-issue
@@ -137,9 +137,6 @@ Answer what the repository can answer yourself. Ask the owner only what it canno
    `gh issue list --repo github.com/<owner>/<name> --state open --limit 200 --json number,title,labels --jq '.[] | "#\(.number) \(.title) [\([.labels[].name] | join(","))]"'`.
    Find the open issues this one must wait for (blocked-by) and the ones that must wait for it
    (blocking).
-   Run `'<main>/bin/wt' tasks` too, where `<main>` is the parent of
-   `git rev-parse --path-format=absolute --git-common-dir`. Task files still hold older open work.
-   If the command fails, say so and go on without it.
 3. **Fit.** For a feature, read `VISION.md`. A request that falls under its non-goals goes back to
    the owner with that line before any draft.
 4. **Code.** Find the parts the change touches. Read `docs/architecture.md` and the rule file that

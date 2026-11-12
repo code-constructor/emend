@@ -5,18 +5,16 @@ import { commands as issueCommands } from "./issues.ts";
 import { run } from "./proc.ts";
 import { readRegistry } from "./registry.ts";
 import { gitTry, type Repo } from "./repo.ts";
-import { commands as taskCommands } from "./tasks.ts";
 import { branchName } from "./validate.ts";
 import { terminal, commands as worktreeCommands } from "./worktree.ts";
 
-export type MenuAction = "setup" | "list" | "cleanup" | "issues" | "tasks" | "gc";
+export type MenuAction = "setup" | "list" | "cleanup" | "issues" | "gc";
 
 const ACTIONS: ReadonlyArray<[MenuAction, string]> = [
   ["setup", "create a worktree"],
   ["list", "show the worktrees"],
   ["cleanup", "remove a finished worktree"],
   ["issues", "show the ready issue queue"],
-  ["tasks", "show the task queue"],
   ["gc", "report orphans (no changes)"],
 ];
 
@@ -172,8 +170,7 @@ const menuCommand: Command = async ({ repo }) => {
   if (!canInteract()) return await list({ repo, args: [] });
   const choice = menu(repo);
   if (!choice) return 0;
-  const table: CommandTable =
-    choice === "issues" ? issueCommands : choice === "tasks" ? taskCommands : worktreeCommands;
+  const table: CommandTable = choice === "issues" ? issueCommands : worktreeCommands;
   return await (table[choice] as Command)({ repo, args: [] });
 };
 

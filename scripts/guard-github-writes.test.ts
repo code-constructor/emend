@@ -150,7 +150,6 @@ const reads = [
   "rg curl updateIssue",
   'git commit -m "fix: addComment and updateIssue handling"',
   "git commit -F - <<'EOF'\nfix: addComment and updateIssue handling\nEOF",
-  'gh pr comment 5 --body "also addComment"',
   "cat <<'EOF'\nmutation { removeSubIssue(input: {issueId: \"I\"}) { clientMutationId } }\nEOF",
   "gh api repos/o/n/pulls; rg updateIssue bin",
   "gh api repos/o/n/pulls; git commit -F - <<'EOF'\nfix: updateIssue\nEOF",
@@ -181,7 +180,6 @@ const reads = [
   "gh api -X GET search/issues -f q=x",
   "gh api --method=GET search/issues --raw-field=q=x",
   "gh api -XHEAD repos/o/n/issues --input body.json",
-  "gh pr comment 3 --body-file f",
   'gh api graphql -f \'query=mutation { addPullRequestReviewThreadReply(input: {pullRequestReviewThreadId: "T", body: "reply"}) { comment { id } } }\'',
   "gh api graphql -f 'query=mutation Resolve($id: ID!) { resolveReviewThread(input: {threadId: $id}) { thread { isResolved } } }' -f id=T",
   'gh api graphql -f \'query=mutation { a: resolveReviewThread(input: {threadId: "T"}) { thread { id } } b: addPullRequestReviewThreadReply(input: {pullRequestReviewThreadId: "T", body: "a { brace }"}) { comment { id } } }\'',
@@ -196,7 +194,6 @@ const reads = [
   "gh auth status",
   "env A=1 command /usr/bin/gh issue view 4",
   'bash -lc "gh issue list --label ready"',
-  "gh pr create --title title --body-file body.md",
 ];
 for (const command of reads) {
   test(`no decision: ${command}`, () => {
@@ -545,6 +542,123 @@ test("Monitor's command field receives the same gate", () => {
   assert.equal(decision(worker, "gh pr view 3", "Monitor"), undefined);
 });
 
+test("workers never run hc or herdr; the main checkout gets no decision", () => {
+  for (const command of [
+    "hc send t1 hello",
+    "hc keys t1 enter",
+    "hc read t1",
+    "hc attach t1",
+    "hc interrupt t1",
+    "herdr agent prompt w1 hi",
+    "herdr agent list",
+    "/usr/local/bin/hc keys t1 y",
+    "./herdr agent prompt x y",
+    "env hc keys t1 enter",
+    "command hc send t1 x",
+    "timeout 5 hc keys t1 enter",
+    "nohup hc keys t1 enter",
+    "exec hc keys t1 y",
+    "sh -c 'hc keys t1 enter'",
+    'bash -c "herdr agent prompt w1 hi"',
+    "echo $(hc read t1)",
+    "echo `hc read t1`",
+    "echo x | hc send t1",
+    "true && hc keys t1 enter",
+    "xargs hc keys t1 < /dev/null",
+  ]) {
+    assert.equal(decision(worker, command), "deny", command);
+    assert.equal(decision(main, command), undefined, command);
+  }
+  const result = run(worker, call("hc send t1 x", worker));
+  assert.match(
+    JSON.parse(result.stdout).hookSpecificOutput.permissionDecisionReason,
+    /^Workers never drive herdr or herdr desktop; bin\/wt does that\. Typing into another terminal is denied in worktrees\.$/,
+  );
+});
+
+test("hc and herdr look-alikes make no decision anywhere", () => {
+  for (const command of [
+    "echo hc keys",
+    "grep -r herdr .",
+    "hcx send t1",
+    "cat hc",
+    "node bin/wt agents --json",
+    "bin/wt agents --json",
+  ]) {
+    assert.equal(decision(worker, command), undefined, command);
+    assert.equal(decision(main, command), undefined, command);
+  }
+});
+
+test("an hc command never weakens a stronger finding", () => {
+  for (const suffix of ["hc send t1 x", "herdr agent list"]) {
+    assert.equal(decision(main, `gh issue edit 1 --add-label ready; ${suffix}`), "ask", suffix);
+    assert.equal(decision(main, `${suffix}; gh issue edit 1 --add-label ready`), "ask", suffix);
+    assert.equal(decision(worker, `${suffix}; gh issue edit 1 --add-label ready`), "deny", suffix);
+    assert.equal(decision(main, `${suffix}; gh auth token`), "deny", suffix);
+    assert.equal(decision(main, `gh auth token; ${suffix}`), "deny", suffix);
+  }
+});
+
+test("gh pr writes ask in the main checkout and make no decision in a worker", () => {
+  for (const command of [
+    "gh pr merge 83 --squash --match-head-commit abc",
+    'gh pr comment 5 --body "also addComment"',
+    "gh pr comment 3 --body 'Blocked gh issue edit.'",
+    "gh pr comment 3 --body-file f",
+    "gh pr create --title title --body-file body.md",
+    "gh pr review 83 --approve --body-file /tmp/a.md",
+    "gh pr review 83 --comment -b x",
+    "gh pr comment 83 --body-file /tmp/c.md",
+    "gh pr close 83",
+    "gh pr edit 83 --title x",
+    "gh pr checkout 83",
+    "gh pr ready 83",
+    "gh -R o/n pr merge 1",
+    "gh pr --repo o/n merge 1",
+    "/usr/bin/gh pr merge 1",
+    "env gh pr review 1 --approve",
+    "sh -c 'gh pr comment 1 -b x'",
+    "echo $(gh pr merge 1)",
+  ]) {
+    assert.equal(decision(main, command), "ask", command);
+    assert.equal(decision(worker, command), undefined, command);
+  }
+  const result = run(main, call("gh pr merge 1", main));
+  assert.match(
+    JSON.parse(result.stdout).hookSpecificOutput.permissionDecisionReason,
+    /^This command writes to a GitHub pull request with the owner's login\. Confirm: gh pr merge 1$/,
+  );
+});
+
+test("gh pr reads make no decision anywhere", () => {
+  for (const command of [
+    "gh pr view 83 --json state",
+    "gh pr checks 83 --json name,bucket",
+    "gh pr list",
+    "gh pr diff 83",
+    "gh pr status",
+    "gh pr --help",
+  ]) {
+    assert.equal(decision(main, command), undefined, command);
+    assert.equal(decision(worker, command), undefined, command);
+  }
+});
+
+test("pr-write, terminal and write findings combine per location", () => {
+  for (const command of [
+    "hc send t1 x; gh pr merge 1",
+    "gh pr merge 1; hc send t1 x",
+    "gh pr comment 1 -b x; gh issue edit 1 --add-label ready",
+    "gh issue edit 1 --add-label ready; hc send t1 x; gh pr merge 1",
+  ]) {
+    assert.equal(decision(main, command), "ask", command);
+    assert.equal(decision(worker, command), "deny", command);
+  }
+  assert.equal(decision(main, "gh pr merge 1; gh auth token"), "deny");
+  assert.equal(decision(worker, "gh pr merge 1; gh auth token"), "deny");
+});
+
 test("failed git lookup denies a write", () => {
   assert.equal(decision(noRepo, "gh issue edit 1 --add-label ready"), "deny");
   const result = run(main, call("gh issue edit 1 --add-label ready"), { PATH: noRepo });
@@ -695,8 +809,12 @@ function classifier(source = hookSource): (command: string, locations?: TestLoca
     readFileSync: forbiddenIO,
     process: new Proxy({}, { get: forbiddenIO }),
   });
-  return (command, locations = classifierLocations) =>
-    inspect(command, 0, { bindings: new Map(), dotglob: false, locations });
+  // The frozen corpus pins token, tamper, complex and write findings. gh pr writes (pr-write)
+  // and terminal commands are pinned by their own decision() tests, so they fold away here.
+  return (command, locations = classifierLocations) => {
+    const finding = inspect(command, 0, { bindings: new Map(), dotglob: false, locations });
+    return finding === "pr-write" ? undefined : finding === "terminal-pr" ? "terminal" : finding;
+  };
 }
 const classify = classifier();
 
@@ -2819,7 +2937,6 @@ test("R6 decisions in main and worker checkouts", () => {
     ["cat script.txt | bash", "ask"],
     ["echo 'gh auth token' | bash", "deny"],
     ['p=.private-; q=terms; cat "$p$q"', "deny"],
-    ["gh pr comment 3 --body 'Blocked gh issue edit.'", undefined],
   ] as const) {
     assert.equal(decision(main, command), expected);
     assert.equal(decision(worker, command), expected === "ask" ? "deny" : expected);

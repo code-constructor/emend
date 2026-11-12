@@ -117,6 +117,8 @@ export const reviews = sqliteTable(
     // The last time a take returned closed, so emend ended an agent's wait.
     releasedAt: integer("released_at"),
     releasedReason: text("released_reason", { enum: ["snoozed", "retired"] }),
+    // A review is in the bin while binned_at is set. Nothing purges it; restore clears it.
+    binnedAt: integer("binned_at"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -241,6 +243,8 @@ export const files = sqliteTable(
     oldBlob: text("old_blob"),
     newBlob: text("new_blob"),
     renderedBlob: text("rendered_blob"),
+    additions: integer("additions"),
+    deletions: integer("deletions"),
     title: text("title"),
     headings: text("headings", { mode: "json" }).$type<DocHeading[]>(),
     flag: text("flag", { enum: enumValues(FileFlag.options) }),

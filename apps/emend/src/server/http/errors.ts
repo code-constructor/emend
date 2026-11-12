@@ -20,6 +20,7 @@ const MESSAGES: Record<ErrorCode, string> = {
   unsent_comments: "Unsent comments remain.",
   instance_attached: "This machine is already attached. Revoke it in the hub's devices, or run emend detach on it.",
   review_moved: "The review has moved.",
+  review_in_bin: "The review is in the bin.",
   review_closed: "This review was retired or snoozed. Update emend to receive that result.",
   invalid_state: "The review is not in a state that allows this.",
   publish_conflict: "The review changed during publish. Try again.",
@@ -28,6 +29,7 @@ const MESSAGES: Record<ErrorCode, string> = {
   rate_limited: "Code entry is temporarily locked.",
 };
 const DETAILS = {
+  bin_changed: { code: "invalid_state", message: "The bin changed. Check it and try again." },
   import_aborted: { code: "invalid_request", message: "The import was cancelled." },
   import_busy: { code: "rate_limited", message: "The server is busy importing; try again." },
   waiting_takes: { code: "rate_limited", message: "Too many waiting takes." },
