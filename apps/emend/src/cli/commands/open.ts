@@ -41,8 +41,8 @@ export async function openBrowser(url: string, env = process.env, timeoutMs = 5_
     }
   });
 }
-export async function openCommand(stateDir: string, io: Io) {
-  const config = await readConfig(stateDir);
+export async function openCommand(stateDir: string, configDir: string, io: Io, cwd: string) {
+  const config = await readConfig(stateDir, configDir, { cwd, warn: io.stderr });
   const openUrl = io.openUrl ?? ((url: string) => openBrowser(url, io.env));
   const attachment = await readAttachment(stateDir);
   if (attachment) {
@@ -61,7 +61,7 @@ export async function openCommand(stateDir: string, io: Io) {
   }
   let url: string;
   try {
-    ({ url } = await ensureServer(stateDir));
+    ({ url } = await ensureServer(stateDir, { env: io.env }));
   } catch {
     throw new CliError("Could not start the emend server.");
   }

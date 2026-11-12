@@ -4,6 +4,7 @@ import {
   type RetireRequest,
   type ReviewView,
   type RevisionView,
+  type SettingsView,
   type SnoozeRequest,
   type ViewedRequest,
 } from "@emend/contract";
@@ -120,11 +121,28 @@ type Accepted = { kind: "send" | "approve"; revision?: number };
 
 /** Shows an accepted Send or Approve in the cached review, inbox and revisions before the refetch lands. */
 function applyAccepted(client: QueryClient, reviewId: string, { kind, revision }: Accepted) {
-  const estimate = serverNow(client.getQueryData<InboxData>(["inbox"]));
-  const activeUntil = new Date(estimate + APPROVED_ACTIVE_HOURS * 3_600_000).toISOString();
+  const inbox = client.getQueryData<InboxData>(["inbox"]);
+  const settings = client.getQueryData<SettingsView>(["settings"]);
+  const estimate = serverNow(inbox);
+  // The server's clock tells which answer is newer; cache write times do not, as optimistic writes bump them.
+  const settingsTime = settings ? Date.parse(settings.serverTime) : Number.NaN;
+  const inboxTime = inbox ? Date.parse(inbox.serverTime) : Number.NaN;
+  const settingsHours = settings?.approvedActiveHours.value;
+  const inboxHours = inbox?.approvedActiveHours;
+  const useSettings = settingsHours !== undefined && (inboxHours === undefined || !(settingsTime < inboxTime));
+  const approvedActiveHours = (useSettings ? settingsHours : inboxHours) ?? APPROVED_ACTIVE_HOURS;
+  const activeUntil =
+    approvedActiveHours === 0 ? null : new Date(estimate + approvedActiveHours * 3_600_000).toISOString();
   const change = <T extends InboxItem>(item: T): T =>
     kind === "approve"
-      ? { ...item, state: "approved", list: "active", snoozed: false, snoozedUntil: null, activeUntil }
+      ? {
+          ...item,
+          state: "approved",
+          list: activeUntil === null ? "done" : "active",
+          snoozed: false,
+          snoozedUntil: null,
+          activeUntil,
+        }
       : { ...item, unsentCount: 0, pendingSend: true };
   // Only a loaded item changes; anything else in the cache is left to the refetch.
   client.setQueryData<ReviewView>(["review", reviewId], (view) => (view?.id === reviewId ? change(view) : view));

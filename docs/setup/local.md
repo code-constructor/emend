@@ -216,6 +216,8 @@ be asked. The command says so, and you stop it yourself: see
 
 The service starts emend with the Node.js it was installed with. After you upgrade Node.js, for
 example with `brew upgrade node`, run `emend service install` again.
+If `XDG_CONFIG_HOME` is absolute, the install records it in the service.
+Reinstall the service after changing that variable.
 
 On Linux:
 
@@ -281,7 +283,7 @@ To publish docs that live elsewhere, allow their folder. Run this yourself, once
 emend config add docRoots <folder>
 ```
 
-`emend config` lists the settings. `emend config remove docRoots <folder>` takes a folder back.
+`emend config` lists the global configuration. `emend config remove docRoots <folder>` takes a folder back.
 emend refuses the filesystem root, your home folder, any folder that holds your home folder, and
 emend's own state folder. A subfolder of your home folder is fine.
 
@@ -344,9 +346,10 @@ Remove what this page set up, in this order. Skip a line for a part you did not 
    want no review back.
    - Linux: `~/.local/share/emend`, or `$XDG_DATA_HOME/emend` when that variable is set.
    - macOS: `~/Library/Application Support/emend`.
-   - `EMEND_HOME` overrides both when it is set.
-   - Your `docRoots` folders and the `openBrowser` setting live there too. To drop only those,
-     run `emend config remove docRoots <folder>` and `emend config set openBrowser false`.
+   - `EMEND_HOME` overrides both state locations. It does not move the global config.
+     Set `XDG_CONFIG_HOME` too to keep a separate config.
+   - `docRoots` and `openBrowser` live in the global config file, outside the state folder.
+     To clear them, run `emend config remove docRoots <folder>` and `emend config set openBrowser false`.
 6. The check folder: `rm -r ~/emend-check`.
 
 ## When something goes wrong

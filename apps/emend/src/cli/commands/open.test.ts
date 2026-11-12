@@ -1,6 +1,7 @@
-import { access, chmod, mkdir, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, expect, onTestFinished, test, vi } from "vitest";
 import { testDb } from "../../db/test-support.ts";
 import { run } from "../../main.ts";
 import { writeSecretFile } from "../../state/files.ts";
@@ -23,9 +24,16 @@ afterEach(() => {
 const updateUrl = "https://github.com/shllg/emend/blob/release/docs/setup/update.md";
 const localUrl = "http://127.0.0.1:3636";
 
+async function openFixture() {
+  const fixture = await testDb();
+  const configHome = await mkdtemp(join(tmpdir(), "emend-config-"));
+  onTestFinished(() => rm(configHome, { recursive: true, force: true }));
+  return { ...fixture, configHome, configDir: join(configHome, "emend") };
+}
+
 async function versionFixture(version: string) {
   const f = await commandFixture();
-  writeSecretFile(join(f.dir, "config.json"), JSON.stringify({ openBrowser: false }));
+  writeSecretFile(join(f.configDir, "config.json"), JSON.stringify({ openBrowser: false }));
   f.io.service = { platform: "linux", home: f.dir, uid: 501 };
   const proof = provenTestServer(f.dir);
   f.fetcher.mockImplementation(async (url, init) => {
@@ -75,7 +83,7 @@ test.each(["matching", "failed-query", "missing-tool"])(
   "bare emend checks service ownership (%s) before advising a restart",
   async (kind) => {
     const f = await versionFixture("0.0.9");
-    const directory = join(f.dir, ".config/systemd/user");
+    const directory = join(f.io.env.XDG_CONFIG_HOME as string, "systemd", "user");
     await mkdir(directory, { recursive: true });
     await writeFile(join(directory, "emend.service"), "# written by emend\n");
     await writeFile(join(f.dir, "systemctl"), "synthetic executable\n", { mode: 0o755 });
@@ -150,7 +158,7 @@ test.each(["unreachable", "timeout", "invalid-json"])("attached emend ignores a 
 test("attached emend opens the browser while the version probe is pending", async () => {
   const f = await versionFixture("0.0.9");
   const url = await attach(f);
-  writeSecretFile(join(f.dir, "config.json"), JSON.stringify({ openBrowser: true }));
+  writeSecretFile(join(f.configDir, "config.json"), JSON.stringify({ openBrowser: true }));
   const opened = Promise.withResolvers<void>();
   f.fetcher.mockImplementation(async () => {
     await opened.promise;
@@ -250,9 +258,10 @@ test.each(
 )(
   "no arguments with isTTY=$isTTY, openBrowser=$openBrowser and opener result $opened",
   async ({ isTTY, openBrowser, opened }) => {
-    const fixture = await testDb();
+    const fixture = await openFixture();
     try {
-      if (openBrowser !== undefined) writeSecretFile(join(fixture.dir, "config.json"), JSON.stringify({ openBrowser }));
+      if (openBrowser !== undefined)
+        writeSecretFile(join(fixture.configDir, "config.json"), JSON.stringify({ openBrowser }));
       writeSecretFile(join(fixture.dir, "admin.token"), `em_${"a".repeat(43)}`);
       const url = `http://127.0.0.1:3636/pair#emp_${"b".repeat(43)}`;
       const proof = provenTestServer(fixture.dir);
@@ -281,12 +290,14 @@ test.each(
         isTTY,
         stdout: (s) => stdout.push(s),
         stderr: (s) => stderr.push(s),
-        env: { EMEND_HOME: fixture.dir },
+        env: { EMEND_HOME: fixture.dir, XDG_CONFIG_HOME: fixture.configHome },
         openUrl,
       });
       expect(code).toBe(0);
       expect(stderr).toEqual([]);
-      expect(ensureServer).toHaveBeenCalledWith(fixture.dir);
+      expect(ensureServer).toHaveBeenCalledWith(fixture.dir, {
+        env: expect.objectContaining({ XDG_CONFIG_HOME: fixture.configHome }),
+      });
       expect(pairings).toHaveBeenCalledTimes(openBrowser || isTTY ? 1 : 0);
       if (openBrowser) expect(openUrl).toHaveBeenCalledExactlyOnceWith(url);
       else expect(openUrl).not.toHaveBeenCalled();
@@ -304,7 +315,7 @@ test.each(
 );
 
 test("an HTTP failure is one stderr line, no stdout and exit 1", async () => {
-  const fixture = await testDb();
+  const fixture = await openFixture();
   try {
     writeSecretFile(join(fixture.dir, "admin.token"), `em_${"a".repeat(43)}`);
     const proof = provenTestServer(fixture.dir);
@@ -323,7 +334,7 @@ test("an HTTP failure is one stderr line, no stdout and exit 1", async () => {
         isTTY: true,
         stdout: (s) => stdout.push(s),
         stderr: (s) => stderr.push(s),
-        env: { EMEND_HOME: fixture.dir },
+        env: { EMEND_HOME: fixture.dir, XDG_CONFIG_HOME: fixture.configHome },
         openUrl: async () => true,
       }),
     ).toBe(1);
@@ -335,9 +346,9 @@ test("an HTTP failure is one stderr line, no stdout and exit 1", async () => {
 });
 
 test("bare emend rewrites a public pairing link to the discovered loopback origin", async () => {
-  const fixture = await testDb();
+  const fixture = await openFixture();
   try {
-    writeSecretFile(join(fixture.dir, "config.json"), JSON.stringify({ openBrowser: true }));
+    writeSecretFile(join(fixture.configDir, "config.json"), JSON.stringify({ openBrowser: true }));
     writeSecretFile(join(fixture.dir, "admin.token"), `em_${"a".repeat(43)}`);
     const secret = `emp_${"c".repeat(43)}`;
     const proof = provenTestServer(fixture.dir);
@@ -354,7 +365,14 @@ test("bare emend rewrites a public pairing link to the discovered loopback origi
       ),
     );
     const openUrl = vi.fn(async () => true);
-    expect(await run([], { stdout: () => {}, stderr: () => {}, env: { EMEND_HOME: fixture.dir }, openUrl })).toBe(0);
+    expect(
+      await run([], {
+        stdout: () => {},
+        stderr: () => {},
+        env: { EMEND_HOME: fixture.dir, XDG_CONFIG_HOME: fixture.configHome },
+        openUrl,
+      }),
+    ).toBe(0);
     expect(openUrl).toHaveBeenCalledWith(`http://127.0.0.1:3636/pair#${secret}`);
   } finally {
     await fixture.cleanup();
@@ -382,7 +400,7 @@ test.each(
         hubUrl,
       }),
     );
-    if (openBrowser !== undefined) writeSecretFile(join(f.dir, "config.json"), JSON.stringify({ openBrowser }));
+    if (openBrowser !== undefined) writeSecretFile(join(f.configDir, "config.json"), JSON.stringify({ openBrowser }));
     const openUrl = vi.fn(async () => {
       if (opened === "throws") throw new Error("opener failed");
       return opened === true;
@@ -401,11 +419,11 @@ test.each(
 
 test("invalid configuration fails before starting a server or opening a browser", async () => {
   const f = await commandFixture();
-  writeSecretFile(join(f.dir, "config.json"), JSON.stringify({ openBrowser: "true" }));
+  writeSecretFile(join(f.configDir, "config.json"), JSON.stringify({ openBrowser: "true" }));
   const openUrl = vi.fn(async () => true);
   expect(await run([], { ...f.io, isTTY: true, openUrl })).toBe(1);
   expect(f.stdout).toEqual([]);
-  expect(f.stderr).toEqual(["emend: invalid emend configuration\n"]);
+  expect(f.stderr).toEqual([`emend: invalid emend configuration in ${join(f.configDir, "config.json")}\n`]);
   expect(ensureServer).not.toHaveBeenCalled();
   expect(openUrl).not.toHaveBeenCalled();
   expect(f.fetcher).not.toHaveBeenCalled();
@@ -415,7 +433,7 @@ test.each([false, undefined])(
   "no terminal (%s) needs no admin credential when browser opening is disabled",
   async (isTTY) => {
     const f = await commandFixture();
-    writeSecretFile(join(f.dir, "config.json"), JSON.stringify({ openBrowser: false }));
+    writeSecretFile(join(f.configDir, "config.json"), JSON.stringify({ openBrowser: false }));
     await expect(access(join(f.dir, "admin.token"))).rejects.toMatchObject({ code: "ENOENT" });
     const readCredential = vi.spyOn(credentials, "readTokenFile");
     const openUrl = vi.fn(async () => true);
@@ -424,7 +442,7 @@ test.each([false, undefined])(
       "emend is running at http://127.0.0.1:3636. Run emend in a terminal to get a sign-in link.\n",
     ]);
     expect(f.stderr).toEqual([]);
-    expect(ensureServer).toHaveBeenCalledWith(f.dir);
+    expect(ensureServer).toHaveBeenCalledWith(f.dir, { env: f.io.env });
     expect(readCredential).not.toHaveBeenCalled();
     expect(f.fetcher).toHaveBeenCalledOnce();
     expect(f.fetcher.mock.calls[0]?.[0]).toBe(`${localUrl}/api/v1/capabilities`);
@@ -448,7 +466,7 @@ test.each(
   "browser opt-in with no terminal ($isTTY) and no available opener on $platform: $env",
   async ({ isTTY, platform, env }) => {
     const f = await commandFixture();
-    writeSecretFile(join(f.dir, "config.json"), JSON.stringify({ openBrowser: true }));
+    writeSecretFile(join(f.configDir, "config.json"), JSON.stringify({ openBrowser: true }));
     vi.spyOn(process, "platform", "get").mockReturnValue(platform);
     const readCredential = vi.spyOn(credentials, "readTokenFile");
     expect(await run([], { ...f.io, isTTY, env: { ...f.io.env, ...env } })).toBe(0);
@@ -456,10 +474,54 @@ test.each(
       "emend is running at http://127.0.0.1:3636. Run emend in a terminal to get a sign-in link.\n",
     ]);
     expect(f.stderr).toEqual([]);
-    expect(ensureServer).toHaveBeenCalledWith(f.dir);
+    expect(ensureServer).toHaveBeenCalledWith(f.dir, { env: { ...f.io.env, ...env } });
     expect(readCredential).not.toHaveBeenCalled();
     expect(f.fetcher).toHaveBeenCalledOnce();
     expect(f.fetcher.mock.calls[0]?.[0]).toBe(`${localUrl}/api/v1/capabilities`);
     expect(new Headers(f.fetcher.mock.calls[0]?.[1]?.headers).has("Authorization")).toBe(false);
   },
 );
+
+test("bare emend ignores a repository's browser opt-in and warns once", async () => {
+  const f = await commandFixture();
+  const repo = join(f.dir, "repo");
+  await mkdir(join(repo, ".git"), { recursive: true });
+  await writeFile(join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+  const configHome = join(repo, ".config"),
+    configFile = join(configHome, "emend", "config.json");
+  await mkdir(join(configHome, "emend"), { recursive: true });
+  await writeFile(configFile, '{"openBrowser":true}');
+  vi.spyOn(process, "cwd").mockReturnValue(repo);
+  const openUrl = vi.fn(async () => true);
+  expect(await run([], { ...f.io, env: { ...f.io.env, XDG_CONFIG_HOME: configHome }, openUrl })).toBe(0);
+  expect(f.stderr).toEqual([`emend: ignoring ${configFile}: it sits inside the repository at ${repo}\n`]);
+  expect(openUrl).not.toHaveBeenCalled();
+  expect(f.stdout).toEqual([
+    "emend is running at http://127.0.0.1:3636. Run emend in a terminal to get a sign-in link.\n",
+  ]);
+});
+
+test.each([false, true])("bare emend ignores repository state config (linked=%s)", async (linked) => {
+  const f = await commandFixture();
+  await mkdir(join(f.dir, ".git"));
+  await writeFile(join(f.dir, ".git", "HEAD"), "ref: refs/heads/main\n");
+  const old = join(f.dir, "config.json");
+  const target = linked ? join(f.configDir, "legacy.json") : old;
+  if (linked) {
+    await mkdir(f.configDir);
+    await symlink(target, old);
+  }
+  const content = '{"docRoots":["/synthetic/docs"],"openBrowser":true}';
+  await writeFile(target, content);
+  vi.spyOn(process, "cwd").mockReturnValue(f.dir);
+  const openUrl = vi.fn(async () => true);
+  expect(await run([], { ...f.io, openUrl })).toBe(0);
+  expect(f.stderr).toEqual([]);
+  expect(openUrl).not.toHaveBeenCalled();
+  expect(f.stdout).toEqual([
+    "emend is running at http://127.0.0.1:3636. Run emend in a terminal to get a sign-in link.\n",
+  ]);
+  expect(await readFile(old, "utf8")).toBe(content);
+  await expect(access(`${old}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(access(join(f.configDir, "config.json"))).rejects.toMatchObject({ code: "ENOENT" });
+});

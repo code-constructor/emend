@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { promisify } from "node:util";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { run } from "../../main.ts";
@@ -223,7 +223,8 @@ test.each([
   const docs = await realpath(await mkdtemp(join(tmpdir(), "emend-readiness-docs-")));
   onTestFinished(() => rm(docs, { recursive: true, force: true }));
   if (present) await writeFile(join(docs, "draft.md"), "# Synthetic plan\n");
-  if (allowed) await writeFile(join(f.dir, "config.json"), JSON.stringify({ docRoots: [docs] }));
+  await mkdir(f.configDir, { recursive: true, mode: 0o700 });
+  if (allowed) await writeFile(join(f.configDir, "config.json"), JSON.stringify({ docRoots: [docs] }));
   await rm(join(f.dir, "server.json"));
   await writeFile(
     f.path,
@@ -280,4 +281,65 @@ test.each(["local", "hub"])("publish through a %s server prints no stopped-serve
   expect(f.stdout[0]?.split("\n")).toHaveLength(2);
   expect(JSON.parse(f.stdout[0] ?? "")).toMatchObject({ reviewId, revision: 1, url });
   expect(f.stderr).toEqual([`emend: published revision 1: ${url}\n`]);
+});
+
+test.each(
+  [false, true].flatMap((shortcut) => ["file", "folder link", "file link"].map((kind) => ({ shortcut, kind }))),
+)("publish ignores committed repository config ($kind, shortcut=$shortcut)", async ({ shortcut, kind }) => {
+  const f = await fixture();
+  const docs = await mkdtemp(join(tmpdir(), "emend-outside-docs-"));
+  onTestFinished(() => rm(docs, { recursive: true, force: true }));
+  const source = join(docs, "plan.md");
+  await writeFile(source, "# Synthetic plan");
+  const configHome = join(f.root, ".config");
+  const configDir = join(configHome, "emend");
+  const configFile = join(configDir, "config.json");
+  const content = JSON.stringify({ docRoots: [docs], openBrowser: true });
+  if (kind === "file") {
+    await mkdir(configDir, { recursive: true });
+    await writeFile(configFile, content);
+  } else {
+    const outside = join(docs, ".config");
+    await mkdir(join(outside, "emend"), { recursive: true });
+    await writeFile(join(outside, "emend", "config.json"), content);
+    if (kind === "folder link") await symlink(relative(dirname(configHome), outside), configHome);
+    else {
+      await mkdir(configDir, { recursive: true });
+      await symlink(relative(configDir, join(outside, "emend", "config.json")), configFile);
+    }
+  }
+  const git = (args: string[]) =>
+    promisify(execFile)(
+      "git",
+      [
+        "-C",
+        f.root,
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "commit.gpgsign=false",
+        "-c",
+        "user.name=Synthetic",
+        "-c",
+        "user.email=synthetic@example.com",
+        ...args,
+      ],
+      {
+        env: { PATH: process.env.PATH, HOME: f.root, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
+      },
+    );
+  await git(["add", kind === "folder link" ? ".config" : ".config/emend/config.json"]);
+  await git(["commit", "-m", "synthetic config"]);
+  await writeFile(join(f.dir, "config.json"), '{"approvedActiveHours":24}');
+  f.io.env.XDG_CONFIG_HOME = configHome;
+  await writeFile(f.path, JSON.stringify({ ...manifest(), files: [{ path: "plan.md", role: "doc", source }] }));
+  expect(await (shortcut ? run(["publish", source], f.io) : f.publish())).toBe(1);
+  expect(f.stdout).toEqual([]);
+  expect(f.stderr).toEqual([
+    `emend: ignoring ${configFile}: it sits inside the repository at ${f.root}\n`,
+    "emend: source is outside the allowed doc roots\n",
+  ]);
+  expect(await fs.readFile(configFile, "utf8")).toBe(content);
+  expect(await fs.readFile(join(f.dir, "config.json"), "utf8")).toBe('{"approvedActiveHours":24}');
+  await expect(fs.stat(join(f.dir, "config.json.migrated"))).rejects.toMatchObject({ code: "ENOENT" });
 });
