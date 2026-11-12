@@ -16,6 +16,8 @@ If you are not a maintainer (see `.github/CODEOWNERS`), most of this file is for
 own agents; `CONTRIBUTING.md` is your guide. In short:
 
 - Your issue is your brief. No task files, no plan numbers, no special branch names.
+- `bin/wt`, the `e-*` skills and `.private-terms` are the maintainers' tools; skip the rules about
+  them. Push with plain `git push` and open the PR with `gh pr create` or on GitHub.
 - Work on any branch of your fork. Put `Closes #<n>` first in the PR body.
 - Keep the non-negotiables below, run `pnpm verify` before you open the PR, and leave `.github/`
   alone unless the issue is about CI.
