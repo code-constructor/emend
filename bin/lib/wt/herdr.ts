@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { accessSync, closeSync, constants, lstatSync, mkdirSync, openSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, closeSync, constants, lstatSync, openSync, statSync, writeFileSync } from "node:fs";
 import { basename, delimiter, isAbsolute, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { stripVTControlCharacters } from "node:util";
@@ -7,20 +7,16 @@ import type { Command, CommandTable } from "./command.ts";
 import { issueSlug, issueSnapshot, issueSnapshotText, type PickedIssue, pickIssue } from "./issues.ts";
 import { run } from "./proc.ts";
 import { allocatePort, busyPorts, readRegistry, type WorktreeEntry, withRegistry } from "./registry.ts";
-import { fetchOrigin, gitTry, listGitWorktrees, type Repo, refExists } from "./repo.ts";
-import { releaseReservation, reserveTask } from "./tasks.ts";
+import { gitTry, listGitWorktrees, type Repo, refExists } from "./repo.ts";
 import {
   BRANCH_PREFIX,
   branchName,
-  slug as checkSlug,
   type Exit,
   hcAddress,
   issueNumber,
   parseFlags,
   readFileBytes,
   requireIssueBranch,
-  TASK_BRANCH_PREFIX,
-  textArg,
   WtError,
 } from "./validate.ts";
 import { isInside, type SetupResult, setup, worktreeDirName } from "./worktree.ts";
@@ -585,7 +581,8 @@ export type SpawnOptions = {
   mode: "github" | "local";
   model?: string;
   effort?: string;
-} & ({ brief: string; slug: string; issue?: never } | { issue: number; brief?: never; slug?: never });
+  issue: number;
+};
 
 export interface SpawnResult {
   backend: "herdr" | "hc";
@@ -596,8 +593,7 @@ export interface SpawnResult {
   path: string;
   port: number;
   emendHome: string;
-  taskFile: string;
-  issue?: { number: number; url: string };
+  issue: { number: number; url: string };
   workspaceId: string;
   workspaceLabel: string;
   /** What herdr reported after the prompt: the agent works or waits for an answer. */
@@ -678,9 +674,9 @@ export function agentName(branch: string): string {
   return name;
 }
 
-export function spawnPrompt(taskFile: string, mode: "github" | "local"): string {
+export function spawnPrompt(issueRef: string, mode: "github" | "local"): string {
   const answer = mode === "local" ? "Land locally after an emend review." : "Open a ready PR and finalize it.";
-  return `/loop /e-work ${taskFile} Closing answer from /e-spawn: ${answer}`;
+  return `/loop /e-work ${issueRef} Closing answer from /e-spawn: ${answer}`;
 }
 
 /** Quotes a word for a shell command line shown to the owner; plain words stay as they are. */
@@ -688,13 +684,6 @@ function quote(s: string): string {
   if (/^[A-Za-z0-9_/.:@%+=,-]+$/.test(s)) return s;
   return `'${s.replaceAll("'", "'\\''")}'`;
 }
-
-/** Fills `id: NNN` and the `# NNN — ` heading of the brief with the reserved number. */
-function fillBrief(text: string, number: string): string {
-  return text.replace(/^id:[ \t]*NNN[ \t]*$/m, `id: ${number}`).replace(/^# NNN — /m, `# ${number} — `);
-}
-
-const ID_LINE_RE = /^id:[ \t]*NNN[ \t]*$/m;
 
 /** Creates `dir/name` exclusively, never following a symlink. `dir` must be a real directory. */
 function writeNew(dir: string, name: string, text: string, mode: number): void {
@@ -714,14 +703,6 @@ function writeNew(dir: string, name: string, text: string, mode: number): void {
 export function writeIssueSnapshot(dir: string, issue: PickedIssue): void {
   writeNew(dir, "issue.md", issueSnapshotText(issue), 0o600);
   writeNew(dir, "issue.json", `${JSON.stringify(issueSnapshot(issue), null, 2)}\n`, 0o600);
-}
-
-function ensureDir(dir: string): void {
-  try {
-    mkdirSync(dir, { mode: 0o755 });
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
-  }
 }
 
 function nothingCreated(e: unknown): WtError {
@@ -746,30 +727,31 @@ function claudeExecutable(): string {
   throw new WtError(69, "Claude is unavailable on PATH.");
 }
 
-type Stage = "task-files" | "opening" | "already_open" | "starting" | "not_ready" | "mismatch" | "prompting";
+type Stage = "brief" | "opening" | "already_open" | "starting" | "not_ready" | "mismatch" | "prompting";
 
 /**
- * Starts a Claude session on a task or ready issue. Tasks reserve a number and write a task file;
- * issues write an approved title and body snapshot plus their URL to the brief. Both set up from local main,
- * open a workspace, wait for its shell, start the agent and send the prompt.
- * Before setup a failure releases the reservation. After setup a failure prints what exists and the cleanup
- * command and changes nothing else: no cleanup, no release, no retry, and a prompt is never sent twice.
+ * Starts a Claude session on a ready issue. It writes the issue URL to the brief, sets up from local main,
+ * opens a workspace, waits for its shell, starts the agent and sends the prompt.
+ * After setup a failure prints what exists and the cleanup command and changes nothing else: no cleanup,
+ * no retry, and a prompt is never sent twice.
  * The worktree's EMEND_HOME and port are returned and printed but never given to the started session.
  */
 export async function spawn(repo: Repo, o: SpawnOptions, clock: SpawnClock = spawnClock): Promise<SpawnResult> {
   // ---- preflight: nothing exists yet
   let briefText = "";
-  let issue: PickedIssue | undefined;
+  let issue: PickedIssue;
   let busy: Set<number>;
   let agents: AgentInfo[];
   let slugValue: string;
   let claudePath = "";
   const backend = detectedBackend();
   try {
-    if (o.issue !== undefined && (o.brief !== undefined || o.slug !== undefined))
-      throw new WtError(2, "Give an issue or a brief and slug, not both.");
-    if (o.issue !== undefined && o.mode === "local")
-      throw new WtError(2, "A local landing does not close the issue; use the github mode.");
+    if (o.issue === undefined)
+      throw new WtError(
+        2,
+        "A description becomes an issue first (the /e-spawn skill creates it); spawn needs --issue.",
+      );
+    if (o.mode === "local") throw new WtError(2, "A local landing does not close the issue; use the github mode.");
     if (o.mode !== "github" && o.mode !== "local") throw new WtError(2, "Invalid mode.");
     if (o.model !== undefined && !MODEL_RE.test(o.model)) throw new WtError(2, "Invalid model.");
     if (o.effort !== undefined && !EFFORTS.has(o.effort)) throw new WtError(2, "Invalid effort.");
@@ -781,15 +763,9 @@ export async function spawn(repo: Repo, o: SpawnOptions, clock: SpawnClock = spa
         "Both herdr and herdr desktop are detected; run spawn from one of them. Nothing was created.",
       );
     if (repo.callerTop !== repo.mainRoot) throw new WtError(2, "Run spawn from the main checkout.");
-    if (o.issue !== undefined) {
-      issue = pickIssue(repo, o.issue);
-      slugValue = issueSlug(issue.titleOwned ? issue.title : "issue", issue.number);
-      briefText = `${issue.url}\n`;
-    } else {
-      slugValue = checkSlug(o.slug);
-      briefText = o.brief;
-      if (!ID_LINE_RE.test(briefText)) throw new WtError(2, "The brief needs the line 'id: NNN'.");
-    }
+    issue = pickIssue(repo, o.issue);
+    slugValue = issueSlug(issue.titleOwned ? issue.title : "issue", issue.number);
+    briefText = `${issue.url}\n`;
     if (backend === "hc") {
       const listed = hcLocatedListing();
       if (!Array.isArray(listed)) throw new WtError(69, "herdr desktop (hc) did not list its terminals.");
@@ -801,40 +777,26 @@ export async function spawn(repo: Repo, o: SpawnOptions, clock: SpawnClock = spa
       const hc = hcLocatedListing();
       agents = [...listed, ...(Array.isArray(hc) ? hc : [])];
     }
-    if (!issue) fetchOrigin(repo);
     busy = await busyPorts();
     allocatePort(readRegistry(repo), busy);
   } catch (e) {
     throw nothingCreated(e);
   }
 
-  // ---- reserve, then check the names the number decides
-  let number: string;
-  try {
-    number = issue
-      ? String(issue.number)
-      : reserveTask(repo, slugValue, (n) => `${TASK_BRANCH_PREFIX}${n}-${slugValue}`);
-  } catch (e) {
-    throw nothingCreated(e);
-  }
-  const branch = `${issue ? BRANCH_PREFIX : TASK_BRANCH_PREFIX}${number}-${slugValue}`;
-  const taskFile = issue ? "" : `tasks/${number}-${slugValue}.md`;
-  const release = () => {
-    if (!issue) releaseQuietly(repo, number);
-  };
+  // ---- check the names the issue number decides
+  const number = String(issue.number);
+  const branch = `${BRANCH_PREFIX}${number}-${slugValue}`;
   const agent = (() => {
     try {
-      requireIssueBranch(branch, issue?.number);
+      requireIssueBranch(branch, issue.number);
       return agentName(branch);
     } catch (e) {
-      release();
       throw nothingCreated(e);
     }
   })();
   try {
     if (
       refExists(repo, `refs/heads/${branch}`) ||
-      (!issue && refExists(repo, `refs/remotes/origin/${branch}`)) ||
       Object.hasOwn(readRegistry(repo).worktrees, branch) ||
       listGitWorktrees(repo).some((w) => w.branch === branch)
     ) {
@@ -851,41 +813,35 @@ export async function spawn(repo: Repo, o: SpawnOptions, clock: SpawnClock = spa
           : "A herdr or herdr desktop agent with that name already exists.",
       );
   } catch (e) {
-    release();
     throw nothingCreated(e);
   }
 
   // Refresh after all asynchronous preflight work, immediately before setup. No issue comments are read.
-  if (issue) {
-    try {
-      issue = pickIssue(repo, issue.number);
-      briefText = `${issue.url}\n`;
-    } catch (e) {
-      throw nothingCreated(e);
-    }
+  try {
+    issue = pickIssue(repo, issue.number);
+    briefText = `${issue.url}\n`;
+  } catch (e) {
+    throw nothingCreated(e);
   }
 
   // ---- setup: from here on something may exist
   let wt: SetupResult;
   try {
-    wt = setup(repo, { branch, task: issue ? undefined : number, issue, mode: o.mode, busy });
+    wt = setup(repo, { branch, issue, mode: o.mode, busy });
   } catch (e) {
     const exists =
       Object.hasOwn(readRegistry(repo).worktrees, branch) ||
       refExists(repo, `refs/heads/${branch}`) ||
       listGitWorktrees(repo).some((w) => w.branch === branch);
-    if (!exists) {
-      release();
-      throw nothingCreated(e);
-    }
+    if (!exists) throw nothingCreated(e);
     throw new WtError(
       e instanceof WtError ? e.code : 1,
-      `${e instanceof WtError ? e.message : "Setup failed unexpectedly."}\n${existsReport(repo, branch, join(repo.worktreesDir, worktreeDirName(branch)), issue ? null : number)}`,
+      `${e instanceof WtError ? e.message : "Setup failed unexpectedly."}\n${existsReport(repo, branch, join(repo.worktreesDir, worktreeDirName(branch)))}`,
     );
   }
 
-  const prompt = spawnPrompt(issue ? `#${issue.number}` : taskFile, o.mode);
-  let stage: Stage = "task-files";
+  const prompt = spawnPrompt(`#${issue.number}`, o.mode);
+  let stage: Stage = "brief";
   let workspaceId = "";
   let workspaceLabel = "";
   let agentStatus = "unknown";
@@ -896,8 +852,8 @@ export async function spawn(repo: Repo, o: SpawnOptions, clock: SpawnClock = spa
     const why = cause instanceof WtError ? cause.message : "Unexpected failure.";
     if (backend === "hc") {
       const lines = [tidy(why, 1000)];
-      if (stage === "task-files") {
-        lines.push("Setup succeeded, but the task files could not be written. No herdr desktop terminal was opened.");
+      if (stage === "brief") {
+        lines.push("Setup succeeded, but the brief could not be written. No herdr desktop terminal was opened.");
       } else {
         lines.push(
           workspaceId === ""
@@ -908,15 +864,15 @@ export async function spawn(repo: Repo, o: SpawnOptions, clock: SpawnClock = spa
           "The initial prompt may have been delivered. Do not resend the prompt. To stop the agent, exit Claude (/exit) in its terminal.",
         );
       }
-      lines.push(existsReport(repo, branch, wt.path, issue ? null : number));
+      lines.push(existsReport(repo, branch, wt.path));
       return new WtError(code, lines.join("\n"));
     }
     const where = `herdr workspace ${workspaceLabel} (${workspaceId})`;
     const promptCmd = `${quote(herdrBin())} agent prompt ${quote(agent)} ${quote(prompt)} --wait --until working --until blocked`;
     let lines: string[];
     switch (stage) {
-      case "task-files":
-        lines = [`Setup succeeded, but the task files could not be written (${why}). No herdr workspace was opened.`];
+      case "brief":
+        lines = [`Setup succeeded, but the brief could not be written (${why}). No herdr workspace was opened.`];
         break;
       case "opening":
         lines = [`${why}`, "No herdr workspace was confirmed by this run."];
@@ -974,21 +930,16 @@ export async function spawn(repo: Repo, o: SpawnOptions, clock: SpawnClock = spa
         }
         break;
     }
-    if (stage !== "task-files" && stage !== "opening") {
+    if (stage !== "brief" && stage !== "opening") {
       lines.push("To stop the agent, open that workspace and exit Claude (/exit) before any teardown.");
     }
-    lines.push(existsReport(repo, branch, wt.path, issue ? null : number));
+    lines.push(existsReport(repo, branch, wt.path));
     return new WtError(code, lines.join("\n"));
   };
 
-  // ---- task file and brief
+  // ---- brief
   try {
-    if (!issue) {
-      const tasksDir = join(wt.path, "tasks");
-      ensureDir(tasksDir);
-      writeNew(tasksDir, `${number}-${slugValue}.md`, fillBrief(briefText, number), 0o644);
-    }
-    writeNew(join(wt.path, ".wt"), "brief.md", issue ? briefText : fillBrief(briefText, number), 0o600);
+    writeNew(join(wt.path, ".wt"), "brief.md", briefText, 0o600);
   } catch (e) {
     throw failure(e instanceof WtError ? e : new WtError(1, e instanceof Error ? e.message : "write failed"));
   }
@@ -1002,8 +953,7 @@ export async function spawn(repo: Repo, o: SpawnOptions, clock: SpawnClock = spa
     path: wt.path,
     port: wt.port,
     emendHome: wt.emendHome,
-    taskFile,
-    issue: issue ? { number: issue.number, url: issue.url } : undefined,
+    issue: { number: issue.number, url: issue.url },
     workspaceId,
     workspaceLabel,
     state,
@@ -1030,7 +980,7 @@ export async function spawn(repo: Repo, o: SpawnOptions, clock: SpawnClock = spa
         "--label",
         `emend.branch=${branch}`,
       ];
-      if (issue) args.push("--label", `emend.issue=${issue.number}`);
+      args.push("--label", `emend.issue=${issue.number}`);
       // One launch. Claude receives its initial prompt as argv, never via a second send.
       const started = hcCall([...args, "--", claudePath, ...claudeArgs, prompt]);
       const address = hcAddress(started.address);
@@ -1125,18 +1075,10 @@ export async function spawn(repo: Repo, o: SpawnOptions, clock: SpawnClock = spa
   return result(state);
 }
 
-function releaseQuietly(repo: Repo, number: string): void {
-  try {
-    releaseReservation(repo, number);
-  } catch {
-    // keep the original failure
-  }
-}
-
 /** What exists after setup and the one command that removes it. Never run automatically. */
-function existsReport(repo: Repo, branch: string, path: string, number: string | null): string {
+function existsReport(repo: Repo, branch: string, path: string): string {
   return [
-    `Branch ${branch} and its worktree ${path} exist${number === null ? "" : `; task number ${number} stays reserved`}. No automatic cleanup was performed.`,
+    `Branch ${branch} and its worktree ${path} exist. No automatic cleanup was performed.`,
     `Optional teardown: ${quote(join(repo.mainRoot, "bin", "wt"))} cleanup ${branch}`,
     "This does not end the herdr workspace or terminal.",
   ].join("\n");
@@ -1146,43 +1088,22 @@ function existsReport(repo: Repo, branch: string, path: string, number: string |
 // Commands
 
 const spawnCommand: Command = async ({ repo, args }) => {
-  const { flags } = parseFlags(args, {
-    brief: "string",
-    "brief-file": "string",
-    slug: "string",
-    issue: "string",
-    mode: "string",
-    model: "string",
-    effort: "string",
-  });
-  const usage =
-    "Usage: bin/wt spawn (--issue <n> | (--brief <text> | --brief-file <path>) --slug <slug>) [--mode github|local] [--model <m>] [--effort <e>] (--mode local requires a brief)";
-  let source: { issue: number } | { brief: string; slug: string };
-  if (typeof flags.issue === "string") {
-    if (flags.brief !== undefined || flags["brief-file"] !== undefined || flags.slug !== undefined) {
-      throw new WtError(2, "--issue is mutually exclusive with --brief, --brief-file and --slug. Nothing was created.");
-    }
-    source = { issue: issueNumber(flags.issue) };
-  } else {
-    if (typeof flags.slug !== "string") throw new WtError(2, usage);
-    const brief = textArg(
-      typeof flags.brief === "string" ? flags.brief : undefined,
-      typeof flags["brief-file"] === "string" ? flags["brief-file"] : undefined,
-      "brief",
-      true,
+  const { flags } = parseFlags(args, { issue: "string", mode: "string", model: "string", effort: "string" });
+  if (typeof flags.issue !== "string")
+    throw new WtError(
+      2,
+      "Usage: bin/wt spawn --issue <n> [--mode github] [--model <m>] [--effort <e>]. A description becomes an issue first (the /e-spawn skill creates it). Nothing was created.",
     );
-    if (brief === null) throw new WtError(2, usage);
-    source = { brief, slug: flags.slug };
-  }
+  const issue = issueNumber(flags.issue);
   const mode = flags.mode ?? "github";
   if (mode !== "github" && mode !== "local") throw new WtError(2, "Invalid mode. Nothing was created.");
   const r = await spawn(repo, {
-    ...source,
+    issue,
     mode,
     model: typeof flags.model === "string" ? flags.model : undefined,
     effort: typeof flags.effort === "string" ? flags.effort : undefined,
   });
-  say(r.issue ? `Issue: #${r.issue.number} ${r.issue.url}` : `Task: ${r.taskFile}`);
+  say(`Issue: #${r.issue.number} ${r.issue.url}`);
   say(`Branch: ${r.branch}`);
   say(`Port: ${r.port}`);
   say(`Worktree: ${r.path}`);

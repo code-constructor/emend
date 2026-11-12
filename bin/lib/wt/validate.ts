@@ -4,7 +4,6 @@ import { join } from "node:path";
 export type Exit = 0 | 1 | 2 | 3 | 69 | 124;
 
 export const BRANCH_PREFIX = "emend-";
-export const TASK_BRANCH_PREFIX = "emend-task-";
 
 /** A failure with an exit code. The message never contains a refused argument. */
 export class WtError extends Error {
@@ -20,7 +19,6 @@ const BRANCH_RE = /^[a-z0-9][a-z0-9._/-]{0,62}$/;
 const SLUG_RE = /^[a-z0-9]+(-[a-z0-9]+){1,4}$/;
 const PR_RE = /^[1-9][0-9]{0,6}$/;
 const SHA_RE = /^[0-9a-f]{40}$/;
-const TASK_RE = /^[0-9]{3}$/;
 const REF_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,100}$/;
 
 /** Local hc addresses, never options, names or remote-machine selectors. */
@@ -64,27 +62,8 @@ export function issueNumber(s: string): number {
   return Number(s);
 }
 
-/** Explicit task namespace plus legacy task branches; unpadded issue numbers never match. */
-export function taskFromBranch(branch: string): string | null {
-  const name = branch.startsWith(TASK_BRANCH_PREFIX)
-    ? branch.slice(TASK_BRANCH_PREFIX.length)
-    : branch.startsWith(BRANCH_PREFIX)
-      ? branch.slice(BRANCH_PREFIX.length)
-      : branch;
-  const number = /^(0\d{2})-[a-z0-9][a-z0-9._-]*$/.exec(name)?.[1];
-  return number && Number(number) > 0 && Number(number) < 99 ? number : null;
-}
-
 export function commitSha(s: string): string {
   if (typeof s !== "string" || !SHA_RE.test(s)) invalid("commit id");
-  return s;
-}
-
-/** A three-digit task number, 001 to 098. */
-export function taskNumber(s: string): string {
-  if (typeof s !== "string" || !TASK_RE.test(s)) invalid("task number");
-  const n = Number(s);
-  if (n < 1 || n > 98) invalid("task number");
   return s;
 }
 
@@ -149,7 +128,7 @@ export function issueFromBranch(branch: string): number | null {
 /** Numeric emend names are reserved for explicitly registered issues, including padded numbers. */
 export function requireIssueBranch(branch: string, issue?: number): void {
   if (/^emend-[0-9]+-/u.test(branch) && issue === undefined)
-    throw new WtError(2, "Numeric emend branch names require --issue; use emend-task- names for tasks.");
+    throw new WtError(2, "Numeric emend branch names require --issue.");
   if (issue !== undefined && issueFromBranch(branch) !== issue)
     throw new WtError(2, "The branch number must match --issue.");
 }

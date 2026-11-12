@@ -13,10 +13,8 @@ import {
   parseFlags,
   prNumber,
   refName,
+  requireIssueBranch,
   slug,
-  TASK_BRANCH_PREFIX,
-  taskFromBranch,
-  taskNumber,
   textArg,
   WtError,
 } from "./validate.ts";
@@ -52,7 +50,6 @@ test("validators refuse without echoing", () => {
   for (const bad of ["a", "a-b-c-d-e-f", "A-b", "a_b", "-a-b"]) refuses(() => slug(bad), bad);
   for (const bad of ["0", "01", "12345678", "1a", "-1"]) refuses(() => prNumber(bad), bad);
   for (const bad of ["abc", "g".repeat(40), "A".repeat(40), "a".repeat(39)]) refuses(() => commitSha(bad), bad);
-  for (const bad of ["000", "099", "12", "1234", "abc"]) refuses(() => taskNumber(bad), bad);
   for (const bad of ["-x", "a..b", "a b", "$X"]) refuses(() => refName(bad), bad);
 });
 
@@ -63,27 +60,11 @@ test("validators accept the documented forms", () => {
   assert.equal(slug("parallel-work"), "parallel-work");
   assert.equal(prNumber("1234567"), 1234567);
   assert.equal(commitSha("a".repeat(40)), "a".repeat(40));
-  assert.equal(taskNumber("001"), "001");
-  assert.equal(taskNumber("098"), "098");
   assert.equal(refName("origin/main"), "origin/main");
 });
 
-test("task branch parsing accepts the task namespace and legacy prefixes without confusing issue numbers", () => {
+test("issue numbers parse strictly", () => {
   assert.equal(BRANCH_PREFIX, "emend-");
-  assert.equal(TASK_BRANCH_PREFIX, "emend-task-");
-  for (const prefix of ["", BRANCH_PREFIX, TASK_BRANCH_PREFIX]) {
-    for (const n of ["001", "014", "098"]) assert.equal(taskFromBranch(`${prefix}${n}-some-task`), n);
-  }
-  for (const branch of [
-    "emend-14-some-issue",
-    "emend-100-some-issue",
-    "emend-099-some-issue",
-    "emend-000-no-task",
-    "other-014-task",
-    "emend-014-",
-    "emend-014-x/y",
-  ])
-    assert.equal(taskFromBranch(branch), null);
   assert.equal(issueNumber("42"), 42);
   for (const s of ["0", "042", "1.2", "-1", "1x", ""]) refuses(() => issueNumber(s), s || "<empty>");
 });
@@ -190,5 +171,16 @@ test("issue branch parsing treats an unrepresentable number as no inferred issue
   assert.equal(issueFromBranch("emend-42-x"), 42);
   assert.equal(issueFromBranch("emend-9007199254740991-x"), Number.MAX_SAFE_INTEGER);
   assert.equal(issueFromBranch("emend-042-x"), null);
-  assert.equal(issueFromBranch("emend-task-042-x"), null);
+  assert.equal(issueFromBranch("emend-feature-042-x"), null);
+});
+
+test("requireIssueBranch asks for --issue on numeric emend names and checks the number", () => {
+  assert.throws(
+    () => requireIssueBranch("emend-042-x"),
+    (e: unknown) => e instanceof WtError && e.code === 2 && e.message === "Numeric emend branch names require --issue.",
+  );
+  assert.throws(() => requireIssueBranch("emend-42-x", 43), /must match --issue/);
+  requireIssueBranch("emend-42-x", 42);
+  requireIssueBranch("emend-task-042-x");
+  requireIssueBranch("feat-a");
 });

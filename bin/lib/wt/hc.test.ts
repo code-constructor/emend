@@ -53,6 +53,7 @@ async function scenario(
     const fx = makeFixture(env, { withBin });
     fakeGithubOrigin(env, fx);
     installFake(env, "claude", []);
+    installFake(env, "gh", issueRules([readyIssue(42)]));
     await fn({ env, fx, repo: resolveRepo(fx.main) });
   } finally {
     env.cleanup();
@@ -80,9 +81,8 @@ const failure = (code: number, pattern?: RegExp) => (e: unknown) => {
   return true;
 };
 const json = JSON.stringify;
-const brief = "---\nid: NNN\ntitle: Thing\nstatus: open\n---\n# NNN — Thing\nDo it.\n";
-const options = { brief, slug: "add-thing", mode: "github" as const };
-const branch = "emend-task-001-add-thing";
+const options = { issue: 42, mode: "github" as const };
+const branch = "emend-42-fix-the-review-pane";
 const name = agentName(branch);
 const herdrList = (agents: Record<string, unknown>[] = []): FakeRule => ({
   match: ["agent", "list"],
@@ -356,6 +356,8 @@ for (const state of ["working", "blocked"] as const)
           "emend.loop=t1k",
           "--label",
           `emend.branch=${branch}`,
+          "--label",
+          "emend.issue=42",
           "--",
           join(env.fakeBin, "claude"),
           "--permission-mode",
@@ -366,12 +368,12 @@ for (const state of ["working", "blocked"] as const)
           "opus",
           "--effort",
           "high",
-          spawnPrompt(result.taskFile, "github"),
+          spawnPrompt("#42", "github"),
         ],
         ["get", "t1m", "--json"],
         ["get", "t1m", "--json"],
       ]);
-      assert.match(readFileSync(join(result.path, result.taskFile), "utf8"), /id: 001/);
+      assert.equal(readFileSync(join(result.path, ".wt/brief.md"), "utf8"), "https://example.invalid/test/issues/42\n");
     }));
 
 test("hc issue spawn adds the issue label and fixed initial issue prompt", () =>
@@ -418,7 +420,6 @@ test("hc spawn deadline is 124, preserves setup, polls every 500ms and never rel
       assert.ok(e instanceof WtError);
       assert.match(e.message, /hc read t1m/);
       assert.match(e.message, /Do not resend/);
-      assert.match(e.message, /task number 001 stays reserved/);
       assert.match(e.message, /This does not end the herdr workspace or terminal/);
       return true;
     });
@@ -472,7 +473,6 @@ test("spawn preflight refuses both backends and unavailable hc before creating a
       await assert.rejects(spawn(repo, options, fakeClock()), failure(69, /Nothing was created/));
     }
     assert.deepEqual(readRegistry(repo).worktrees, {});
-    assert.deepEqual(readRegistry(repo).reservations, {});
   }));
 
 for (const caller of ["hc", "herdr"])
@@ -483,7 +483,6 @@ for (const caller of ["hc", "herdr"])
       installFake(env, "herdr", [herdrList(caller === "hc" ? [{ name, cwd: "/somewhere" }] : [])]);
       installFake(env, "hc", caller === "hc" ? launchRules() : [hcList([terminal({ name })]), get({ name })]);
       await assert.rejects(spawn(repo, options, fakeClock()), failure(3, /name already exists/));
-      assert.deepEqual(readRegistry(repo).reservations, {});
       assert.deepEqual(readRegistry(repo).worktrees, {});
       assert.ok(!fakeCalls(env, "hc").some((c) => c[0] === "run"));
     }));
@@ -810,12 +809,15 @@ test("hc prompt refuses editors and REPLs without a reported agent status", () =
 test("hc spawn CLI uses desktop terminal wording", () =>
   scenario(async ({ env, fx }) => {
     installFake(env, "hc", launchRules("blocked"));
-    const result = await runWt(join(fx.main, "bin/wt"), ["spawn", "--brief", brief, "--slug", options.slug], {
+    const result = await runWt(join(fx.main, "bin/wt"), ["spawn", "--issue", "42"], {
       cwd: fx.main,
       env: { HC_TERMINAL_ID: "t2" },
     });
     assert.equal(result.code, 0, result.stderr);
-    assert.match(result.stdout, /waiting for an answer in herdr desktop terminal wt-emend-task-001-add-thing \(t1m\)/);
+    assert.match(
+      result.stdout,
+      /waiting for an answer in herdr desktop terminal wt-emend-42-fix-the-review-pane \(t1m\)/,
+    );
   }, true));
 
 test("required backend failures close the guard and agents command, while list remains optional", () =>
@@ -1128,7 +1130,6 @@ test("hc spawn refuses a missing executable before setup and never launches a te
     installFake(env, "hc", launchRules());
     await assert.rejects(spawn(repo, options, fakeClock()), failure(69, /Claude is unavailable.*Nothing was created/));
     assert.deepEqual(readRegistry(repo).worktrees, {});
-    assert.deepEqual(readRegistry(repo).reservations, {});
     assert.deepEqual(fakeCalls(env, "hc"), [["ls", "--json"]]);
   }));
 
