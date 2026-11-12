@@ -94,7 +94,7 @@ a machine token reaches only reviews from its own instance.
 | POST | `/api/v1/publish` | Agent | Create a review or add a revision. |
 | POST | `/api/v1/import` | Agent | Copy one `ImportBundle`; return `ImportResult` (201, or 200 when skipped); machine tokens only. |
 | GET | `/api/v1/reviews` | Reviewer | List reviews in the inbox. |
-| GET | `/api/v1/agent/reviews` | Agent | List the token's own instance's reviews, newest first, as `AgentReviewList`. |
+| GET | `/api/v1/agent/reviews` | Agent | List the token's own instance's reviews, newest first, as `AgentReviewList`; `?head=<sha>` keeps those whose approved or newest revision has that head. |
 | GET | `/api/v1/reviews/:id` | Reviewer | Read a review. |
 | GET | `/api/v1/reviews/:id/revisions/:seq` | Reviewer | Read one revision. |
 | PUT | `/api/v1/reviews/:id/viewed` | Reviewer | Mark or unmark diff files as viewed; return 204. |
@@ -492,7 +492,12 @@ Every query is owner-scoped. Missing/foreign reviews return `404 unknown_review`
 invalid sequences of an owned review return `404 not_found`. Agent tokens receive `403 forbidden`.
 
 `GET /api/v1/agent/reviews` returns `AgentReviewList = { items: AgentReviewItem[] }` with
-`AgentReviewItem = { id, title, state: ReviewState, updatedAt, url }`. It needs the agent `publish`
+`AgentReviewItem = { id, title, branch, state: ReviewState, newest, approved, updatedAt, url }`.
+`branch` is the review's stored branch, `null` when the publish named none. `newest` is
+`{ revision, head }` for the review's newest revision (highest `seq`), or `null` for a review that
+has no revision. `approved` is `null` while no revision is approved, else `{ revision, head }` of the
+revision the approval points at. `head` is the revision's stored head, unchanged: a full commit
+id (40 or 64 lowercase hex characters), `"worktree"` or `null`. It needs the agent `publish`
 scope and lists only the principal owner's reviews whose origin is the token's own instance, so a
 machine token never sees another instance's or another owner's reviews. Items run newest
 `updatedAt` first, review id as the stable tie breaker, at most `agentReviews` (100) rows, with no
@@ -500,6 +505,22 @@ pagination. The list has no inbox filter: snoozed, approved and retired reviews 
 stored `state` (`open`, `approved` or `settled`). `updatedAt` is an ISO 8601 UTC string. `url` is
 the review's address on this server. The list carries no comment bodies,
 writeup text, doc content, tokens or other ids. A reviewer session receives `403 forbidden`.
+
+The optional query `?head=<sha>` (`AgentReviewQuery = { head?: commit }`) keeps only reviews whose
+approved revision's head equals `<sha>` or whose newest revision's head equals `<sha>`. The match
+is exact and case-sensitive on the stored value; an older, superseded revision's head does not
+match. `<sha>` is a full object id of exactly 40 or 64 lowercase hex characters: no prefix and no
+`worktree`. The filter runs before the owner, origin-instance, ordering and 100-row rules are
+applied to the result, so the cap counts matches. A malformed or repeated `head` is
+`400 invalid_request`. To learn whether an approval covers a commit, a caller checks
+`approved?.head === sha` on the returned items; `newest.head === sha` with `approved: null` means
+the commit is published but not approved.
+
+This stays on the agent `publish` scope; it adds no scope. The new fields are metadata the same
+instance's agent published itself (branch, head, revision number) plus the approval pointer, which
+the agent already learns through the `approve` result of `wait`. The response still carries no
+comments, writeups or docs, keeps the owner and origin-instance filter, and the call is a
+read-only GET: it takes and confirms no delivery and writes no row.
 
 Read-view bounds follow the write-side validators and rendering budgets; no history is truncated
 to make a read fit a per-Send or per-revision limit. The limits below apply to the schemas above.
@@ -509,6 +530,9 @@ to make a read fit a per-Send or per-revision limit. The limits below apply to t
 | `InboxList.items` | `inboxItems` (200), the inbox query limit |
 | `AgentReviewList.items` | `agentReviews` (100), the agent list query limit |
 | `AgentReviewItem.title` | `titleChars` (200), as in `InboxItem.title` |
+| `AgentReviewItem.branch` | As `InboxItem.branch`: the stored branch or `null` |
+| `AgentReviewItem.newest`, `.approved` | `{ revision, head }`: `revision` a positive integer, `head` a full commit id, `"worktree"` or `null` (as `RevisionView.head`); `newest` is `null` without any revision, `approved` while nothing is approved |
+| `AgentReviewQuery.head` | Optional; exactly 40 or 64 lowercase hex characters, else `400 invalid_request` |
 | `AgentReviewItem.updatedAt` | ISO 8601 UTC datetime string (`z.iso.datetime()`) |
 | `AgentReviewItem.url` | HTTP(S) URL of at most `pathChars` (4096) characters |
 | `InboxItem.title` | `titleChars` (200), including publish's nonblank requirement |
