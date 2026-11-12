@@ -510,11 +510,18 @@ The optional query `?head=<sha>` (`AgentReviewQuery = { head?: commit }`) keeps 
 approved revision's head equals `<sha>` or whose newest revision's head equals `<sha>`. The match
 is exact and case-sensitive on the stored value; an older, superseded revision's head does not
 match. `<sha>` is a full object id of exactly 40 or 64 lowercase hex characters: no prefix and no
-`worktree`. The filter runs before the owner, origin-instance, ordering and 100-row rules are
-applied to the result, so the cap counts matches. A malformed or repeated `head` is
-`400 invalid_request`. To learn whether an approval covers a commit, a caller checks
-`approved?.head === sha` on the returned items; `newest.head === sha` with `approved: null` means
-the commit is published but not approved.
+`worktree`. The filter is applied together with the owner and origin-instance conditions, before the
+ordering and the 100-row cap, so the cap counts matches. A malformed or repeated `head` is
+`400 invalid_request`.
+
+`head` and `branch` are the values the publisher sent; the server stores them unverified, and a
+review without code files (docs or a plan only) shows the reviewer no diff of that commit. So
+`approved.head === sha` means the reviewer approved a revision that its publisher labelled with that
+commit, not that emend verified the commit's content was shown. A caller that gates on an approval
+should require all of: `approved` is not null, `approved.head === sha`,
+`approved.revision === newest.revision` (an import can carry an approval for an older revision) and
+the expected `branch`; it should also make sure itself that the approved review carried the commit's
+diff. `newest.head === sha` with `approved: null` means the commit is published but not approved.
 
 This stays on the agent `publish` scope; it adds no scope. The new fields are metadata the same
 instance's agent published itself (branch, head, revision number) plus the approval pointer, which

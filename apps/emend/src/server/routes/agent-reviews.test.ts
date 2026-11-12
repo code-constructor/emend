@@ -8,6 +8,7 @@ import {
   comments,
   deliveries,
   instances,
+  repos,
   reviews,
   revisions,
   sends,
@@ -319,6 +320,8 @@ test("listing, with and without a head, changes no row and takes or confirms no 
       agentWaiters: await q.select().from(agentWaiters).all(),
       // A bearer request writes nothing to tokens (only a reviewer session renewal does), so no column is excluded.
       tokens: await q.select().from(tokens).all(),
+      instances: await q.select().from(instances).all(),
+      repos: await q.select().from(repos).all(),
     }));
   const before = await snapshot();
   for (const query of ["", `?head=${shaA}`, `?head=${shaB}`, `?head=${shaC}`, ""]) await items(query);
