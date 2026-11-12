@@ -70,7 +70,7 @@ test("issue numbers parse strictly", () => {
 });
 
 test("parseFlags handles the three flag forms and refuses the rest, naming the option but not the value", () => {
-  const spec = { json: "boolean", from: "string", body: "string", brief: "string", title: "string" } as const;
+  const spec = { json: "boolean", from: "string", body: "string", subject: "string", title: "string" } as const;
   const ok = parseFlags(["--json", "--from", "origin/x", "br"], spec, 1);
   assert.deepEqual(ok.flags, { json: true, from: "origin/x" });
   assert.deepEqual(ok.positionals, ["br"]);
@@ -97,13 +97,18 @@ test("parseFlags handles the three flag forms and refuses the rest, naming the o
 });
 
 test("free-text flags take a value that starts with a dash verbatim", () => {
-  const spec = { body: "string", brief: "string", title: "string", subject: "string", from: "string" } as const;
+  const spec = { body: "string", title: "string", subject: "string", from: "string" } as const;
   assert.equal(parseFlags(["--body", "- a\n- b"], spec).flags.body, "- a\n- b");
-  const brief = "---\nid: 012\ntitle: x\n---\n";
-  assert.equal(parseFlags(["--brief", brief], spec).flags.brief, brief);
+  const body = "---\nid: 012\ntitle: x\n---\n";
+  assert.equal(parseFlags(["--body", body], spec).flags.body, body);
   assert.equal(parseFlags(["--title", "-x"], spec).flags.title, "-x");
   assert.equal(parseFlags(["--subject", "--odd"], spec).flags.subject, "--odd");
   refuses(() => parseFlags(["--from", "---"], spec), "xyz");
+  assert.throws(() => parseFlags(["--brief", "---"], { brief: "string" }), {
+    name: "WtError",
+    code: 2,
+    message: "Option --brief needs a value.",
+  });
 });
 
 test("oneLine accepts one printable line of 1 to 72 characters and refuses control characters", () => {

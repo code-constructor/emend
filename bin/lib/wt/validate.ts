@@ -164,7 +164,7 @@ export interface ParsedFlags {
 }
 
 /** Flags whose value is free text: the next argument is taken verbatim, even when it starts with `-`. */
-const VERBATIM_FLAGS = new Set(["title", "subject", "body", "brief"]);
+const VERBATIM_FLAGS = new Set(["title", "subject", "body"]);
 
 /** One line of 1 to 72 characters, without control characters. A single final newline is dropped. */
 export function oneLine(text: string, what: string): string {
@@ -181,7 +181,7 @@ export function oneLine(text: string, what: string): string {
 /**
  * Parses `--name`, `--name value` and `--name=value`. Anything else that starts with `-` is refused,
  * as is a repeated flag, a missing value, a value that looks like a flag and too many positionals.
- * The free-text flags (`--title`, `--subject`, `--body`, `--brief`) take the next argument verbatim.
+ * The free-text flags (`--title`, `--subject`, `--body`) take the next argument verbatim.
  * A refusal names the option, never its value.
  */
 export function parseFlags(args: string[], spec: FlagSpec, maxPositionals = 0): ParsedFlags {
