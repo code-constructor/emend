@@ -1,10 +1,10 @@
 ---
 id: 026
 title: Serve emend on a chosen Tailscale port instead of always 443
-status: in-progress
+status: done
 owner: agent + your approval
 depends_on: []
-done_on:
+done_on: 2026-11-12
 ---
 
 # 026 — Serve emend on a chosen Tailscale port instead of always 443
@@ -20,17 +20,17 @@ change goes to the upstream maintainer as a pull request and must follow every u
 
 ## Steps
 
-- [ ] `emend serve --tailscale` and `emend service install --tailscale` accept a port (for example
+- [x] `emend serve --tailscale` and `emend service install --tailscale` accept a port (for example
       `--tailscale-port 13636`); without it, behaviour stays exactly as today on 443.
-- [ ] emend sets up Tailscale Serve on that HTTPS port to its loopback listener and uses
+- [x] emend sets up Tailscale Serve on that HTTPS port to its loopback listener and uses
       `https://` + Tailscale name + `:port` as public origin: host guard, app origins, secure cookie
       host, pairing link and QR code.
-- [ ] The service remembers the port like `--tailscale`; a plain `emend service install` keeps it.
-- [ ] The existing 443 checks apply to the chosen port: a foreign route there is reported as
+- [x] The service remembers the port like `--tailscale`; a plain `emend service install` keeps it.
+- [x] The existing 443 checks apply to the chosen port: a foreign route there is reported as
       occupied and left alone, a root-made route to the same target is used, stopping removes only
       a route emend created. A port change cleans up emend's route on the old port.
-- [ ] The server keeps listening on loopback only (AGENTS.md rule 2).
-- [ ] Docs: `docs/setup/hub-tailscale.md`, CLI help, and `docs/api.md` if anything there changes.
+- [x] The server keeps listening on loopback only (AGENTS.md rule 2).
+- [x] Docs: `docs/setup/hub-tailscale.md`, CLI help, and `docs/api.md` if anything there changes.
 
 ## Done when
 
@@ -59,3 +59,8 @@ emend's own route, behaviour without the option is unchanged, `emend-security-re
   in the fork, do not merge, do not delete the branch, do not land locally. Report the branch, the
   head commit and a proposed PR title and body (repo template `.github/pull_request_template.md`,
   referencing shllg/emend#81, no attribution) back to the main session, which opens the upstream PR.
+- 2026-11-12: built as `--tailscale-port <n>`; the route record keeps a port other than 443.
+  `pnpm verify` passes and `emend-security-reviewer` signed off. Codex was not reachable, so a
+  Sonnet sub-agent wrote the code and a second Sonnet read stood in for the Codex review. Still
+  open for the owner: one check on a real tailnet that the app answers and a phone pairs on the
+  chosen port; the tests use a fake `tailscale`.
